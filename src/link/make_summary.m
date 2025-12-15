@@ -1,5 +1,5 @@
 function s = make_summary(results)
-%MAKE_SUMMARY  Produce a compact summary for console display.
+%MAKE_SUMMARY  生成用于控制台显示的紧凑摘要。
 
 s = struct();
 s.methods = results.methods;

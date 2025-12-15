@@ -1,95 +1,95 @@
 function p = default_params()
-%DEFAULT_PARAMS  Default parameter set for Track 1 baseline link.
+%DEFAULT_PARAMS  赛道一基准链路的默认参数集。
 
 p = struct();
 
 p.rngSeed = 1;
 
-% Source (image)
+% 图像源
 p.source = struct();
 p.source.useBuiltinImage = true;
-p.source.imagePath = ""; % used when useBuiltinImage=false
-p.source.resizeTo = [128 128]; % [rows cols], [] to keep original
+p.source.imagePath = ""; % useBuiltinImage=false时使用
+p.source.resizeTo = [128 128]; % [行 列]，[]保持原始尺寸
 p.source.grayscale = true;
 
-% Payload format (raw bytes from image)
+% 载荷格式（图像的原始字节）
 p.payload = struct();
 p.payload.bitsPerPixel = 8;
 
-% Preamble / frame
+% 前导/帧
 p.frame = struct();
-p.frame.preambleLength = 127; % bits (BPSK), PN sequence
+p.frame.preambleLength = 127; % 比特（BPSK），PN序列
 p.frame.magic16 = hex2dec('A55A');
 
-% Scrambling (acts as whitening/encryption-lite)
+% 扰码（用作白化/轻量加密）
 p.scramble = struct();
 p.scramble.enable = true;
 p.scramble.pnPolynomial = [1 0 0 1 1]; % x^4 + x + 1
-p.scramble.pnInit = [0 0 0 1];         % nonzero init
+p.scramble.pnInit = [0 0 0 1];         % 非零初始值
 
-% Channel coding (convolutional, rate 1/2)
+% 信道编码（卷积码，码率1/2）
 p.fec = struct();
 p.fec.trellis = poly2trellis(7, [171 133]);
 p.fec.tracebackDepth = 34;
-p.fec.opmode = 'trunc'; % 'trunc' for simplicity
+p.fec.opmode = 'trunc'; % 'trunc'简化处理
 p.fec.decisionType = 'soft'; % 'hard' | 'soft'
-p.fec.softBits = 3; % nsdec in vitdec (1..13), used when decisionType='soft'
+p.fec.softBits = 3; % vitdec中的nsdec(1..13)，decisionType='soft'时使用
 
-% Interleaving (block interleaver)
+% 交织（块交织器）
 p.interleaver = struct();
 p.interleaver.enable = true;
 p.interleaver.nRows = 64;
 
-% Modulation
+% 调制
 p.mod = struct();
 p.mod.type = 'BPSK';
 
-% Channel: AWGN + Bernoulli-Gaussian impulsive noise
+% 信道：AWGN + 伯努利-高斯脉冲噪声
 p.channel = struct();
-p.channel.maxDelaySymbols = 200; % random leading zeros to test frame sync
-p.channel.impulseProb = 0.01;    % probability of impulse on each symbol
-p.channel.impulseToBgRatio = 50; % impulse variance = ratio * background variance
+p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
+p.channel.impulseProb = 0.01;    % 每个符号产生脉冲的概率
+p.channel.impulseToBgRatio = 50; % 脉冲方差 = 比值 * 背景方差
 
-% Impulse mitigation
+% 脉冲抑制
 p.mitigation = struct();
-p.mitigation.methods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru"]; % run & compare
+p.mitigation.methods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru"]; % 运行并比较
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
 p.mitigation.thresholdAlpha = 4.0; % T = alpha * median(abs(r))
-p.mitigation.thresholdFixed = 3.0; % used when thresholdStrategy="fixed"
-p.mitigation.ml = ml_impulse_lr_model();      % Legacy LR model
-p.mitigation.mlCnn = ml_cnn_impulse_model();  % 1D CNN model (untrained default)
-p.mitigation.mlGru = ml_gru_impulse_model();  % GRU model (untrained default)
+p.mitigation.thresholdFixed = 3.0; % thresholdStrategy="fixed"时使用
+p.mitigation.ml = ml_impulse_lr_model();      % 传统逻辑回归模型
+p.mitigation.mlCnn = ml_cnn_impulse_model();  % 1D CNN模型（默认未训练）
+p.mitigation.mlGru = ml_gru_impulse_model();  % GRU模型（默认未训练）
 
-% Soft metric quantization (for vitdec 'soft')
+% 软量化（用于vitdec 'soft'）
 p.softMetric = struct();
-p.softMetric.clipA = 4.0; % clip real(symbol) to [-A, A] before quantization
+p.softMetric.clipA = 4.0; % 量化前将real(symbol)裁剪到[-A, A]
 
-% Simulation
+% 仿真
 p.sim = struct();
 p.sim.ebN0dBList = 0:2:10;
 p.sim.nFramesPerPoint = 1;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
 
-% Eavesdropper / interceptor (Eve)
+% 窃听者/截获者（Eve）
 p.eve = struct();
 p.eve.enable = true;
-% Eve Eb/N0 = Bob Eb/N0 + offset (dB). Negative => Eve has worse channel.
+% Eve Eb/N0 = Bob Eb/N0 + 偏移(dB)。负值表示Eve信道更差。
 p.eve.ebN0dBOffset = -6;
-% Eve receiver knowledge model:
-%   "known"     : knows scrambling key (best-case intercept)
-%   "none"      : ignores scrambling (no descrambling)
-%   "wrong_key" : uses a wrong scrambling key (shows garbled image)
+% Eve接收机知识模型：
+%   "known"     : 知道扰码密钥（最佳截获情况）
+%   "none"      : 忽略扰码（不解扰）
+%   "wrong_key" : 使用错误的扰码密钥（显示乱码图像）
 p.eve.scrambleAssumption = "wrong_key";
 
-% Covert / LPD support (warden detection)
+% 隐蔽/低截获概率支持（监视者检测）
 p.covert = struct();
 p.covert.enable = true;
 p.covert.warden = struct();
 p.covert.warden.enable = true;
-% Energy detector (radiometer) settings at the adversary
+% 敌方的能量检测器（辐射计）设置
 p.covert.warden.pfaTarget = 0.01;
-p.covert.warden.nObs = 4096;   % observation window (symbols)
-p.covert.warden.nTrials = 200; % Monte Carlo trials for Pd/Pfa estimate
+p.covert.warden.nObs = 4096;   % 观测窗口（符号数）
+p.covert.warden.nTrials = 200; % 蒙特卡洛试验次数用于估计Pd/Pfa
 
 end

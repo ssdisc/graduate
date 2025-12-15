@@ -1,7 +1,7 @@
 function [model, report] = ml_train_gru_impulse(p, opts)
-%ML_TRAIN_GRU_IMPULSE  Train GRU impulse detector with soft outputs.
+%ML_TRAIN_GRU_IMPULSE  训练带软输出的GRU脉冲检测器。
 %
-% Example:
+% 示例:
 %   addpath(genpath('src'));
 %   p = default_params();
 %   [model, report] = ml_train_gru_impulse(p);
@@ -20,9 +20,9 @@ arguments
     opts.verbose (1,1) logical = true
 end
 
-%% Generate training data
+%% 生成训练数据
 if opts.verbose
-    fprintf("Generating training data for GRU...\n");
+    fprintf("正在为GRU生成训练数据...\n");
 end
 
 [~, modInfo] = modulate_bits(uint8([0; 1]), p.mod);
@@ -33,7 +33,7 @@ Es = 1.0;
 nBlocks = opts.nBlocks;
 L = opts.blockLen;
 
-% Store sequences
+% 存储序列
 allSeqX = cell(nBlocks, 1);
 allSeqY = cell(nBlocks, 1);
 allSeqTx = cell(nBlocks, 1);
@@ -57,28 +57,28 @@ for b = 1:nBlocks
     allSeqRx{b} = rxSym;
 end
 
-%% Compute normalization
+%% 计算归一化
 allX = cell2mat(allSeqX);
 inputMean = mean(allX, 1);
 inputStd = std(allX, 0, 1);
 inputStd(inputStd < 1e-6) = 1;
 
-% Normalize sequences
+% 归一化序列
 for b = 1:nBlocks
     allSeqX{b} = (allSeqX{b} - inputMean) ./ inputStd;
 end
 
-%% Initialize model
+%% 初始化模型
 model = ml_gru_impulse_model();
 model.inputMean = inputMean;
 model.inputStd = inputStd;
 
-%% Training
+%% 训练
 if opts.verbose
     allY = cell2mat(allSeqY);
     posRate = mean(allY);
-    fprintf("Training data: %d sequences, %.2f%% impulses\n", nBlocks, 100*posRate);
-    fprintf("Starting GRU training for %d epochs...\n", opts.epochs);
+    fprintf("训练数据：%d序列，%.2f%%脉冲\n", nBlocks, 100*posRate);
+    fprintf("开始GRU训练%d轮...\n", opts.epochs);
 end
 
 lr = opts.lr;
@@ -95,13 +95,13 @@ for epoch = 1:opts.epochs
         txSym = allSeqTx{b};
         N = size(X, 1);
 
-        % Forward pass with BPTT
+        % 带BPTT的前向传播
         [loss, grads] = gru_forward_backward(X, Y, txSym, model);
 
-        % Gradient clipping
+        % 梯度裁剪
         grads = clip_gradients(grads, opts.clipGrad);
 
-        % Update weights
+        % 更新权重
         model.Wr = model.Wr - lr * grads.dWr;
         model.Ur = model.Ur - lr * grads.dUr;
         model.br = model.br - lr * grads.dbr;
@@ -125,7 +125,7 @@ for epoch = 1:opts.epochs
     lr = lr * opts.lrDecay;
 
     if opts.verbose && (epoch == 1 || mod(epoch, 5) == 0 || epoch == opts.epochs)
-        % Evaluate
+        % 评估
         allPred = [];
         allTrue = [];
         for b = 1:nBlocks
@@ -137,11 +137,11 @@ for epoch = 1:opts.epochs
         pred = allPred >= 0.5;
         tpr = mean(pred(allTrue));
         fpr = mean(pred(~allTrue));
-        fprintf("Epoch %d/%d: loss=%.4f, TPR=%.3f, FPR=%.3f\n", epoch, opts.epochs, epochLoss, tpr, fpr);
+        fprintf("第%d/%d轮：loss=%.4f, TPR=%.3f, FPR=%.3f\n", epoch, opts.epochs, epochLoss, tpr, fpr);
     end
 end
 
-%% Find optimal threshold
+%% 寻找最优阈值
 allPred = [];
 allTrue = [];
 for b = 1:nBlocks
@@ -161,7 +161,7 @@ pdEst = mean(allPred(allTrue) >= model.threshold);
 
 model.trained = true;
 
-%% Report
+%% 报告
 report = struct();
 report.nBlocks = nBlocks;
 report.blockLen = L;
@@ -174,22 +174,22 @@ report.pdEst = pdEst;
 report.threshold = model.threshold;
 
 if opts.verbose
-    fprintf("\nGRU training complete. Pd=%.3f, Pfa=%.3f\n", pdEst, pfaEst);
+    fprintf("\nGRU训练完成。Pd=%.3f, Pfa=%.3f\n", pdEst, pfaEst);
 end
 
 end
 
 function [loss, grads] = gru_forward_backward(X, Y, txSym, model)
-%GRU_FORWARD_BACKWARD  BPTT for GRU.
+%GRU_FORWARD_BACKWARD  GRU的BPTT。
 
 N = size(X, 1);
 hs = model.hiddenSize;
 
-% Forward pass - store all states
-H = zeros(N+1, hs);  % h[0] to h[N]
-R = zeros(N, hs);    % reset gates
-Z = zeros(N, hs);    % update gates
-Htilde = zeros(N, hs);  % candidate states
+% 前向传播 - 存储所有状态
+H = zeros(N+1, hs);  % h[0]到h[N]
+R = zeros(N, hs);    % 重置门
+Z = zeros(N, hs);    % 更新门
+Htilde = zeros(N, hs);  % 候选状态
 outputs = zeros(N, 4);
 
 for t = 1:N
@@ -204,7 +204,7 @@ for t = 1:N
     outputs(t, :) = H(t+1, :) * model.Wo + model.bo;
 end
 
-% Compute loss
+% 计算损失
 pImpulse = sigmoid(outputs(:, 1));
 reliability = sigmoid(outputs(:, 2));
 cleanReal = outputs(:, 3);
@@ -216,13 +216,13 @@ relLoss = (reliability - relTarget).^2;
 
 loss = mean(bce) + 0.5 * mean(mse) + 0.3 * mean(relLoss);
 
-% Backward pass
+% 反向传播
 dout = zeros(N, 4);
 dout(:, 1) = (pImpulse - Y) / N;
 dout(:, 2) = 0.3 * 2 * (reliability - relTarget) .* reliability .* (1 - reliability) / N;
 dout(:, 3) = 0.5 * 2 * (cleanReal - real(txSym)) / N;
 
-% Output layer gradients
+% 输出层梯度
 grads.dWo = H(2:end, :)' * dout;
 grads.dbo = sum(dout, 1);
 
@@ -247,12 +247,12 @@ for t = N:-1:1
 
     dh = dout(t, :) * model.Wo' + dh_next;
 
-    % Gradient through h = (1-z)*h_prev + z*h_tilde
+    % 通过 h = (1-z)*h_prev + z*h_tilde 的梯度
     dh_tilde = dh .* zt;
     dz = dh .* (ht - h_prev);
     dh_prev = dh .* (1 - zt);
 
-    % Gradient through h_tilde = tanh(...)
+    % 通过 h_tilde = tanh(...) 的梯度
     dh_tilde_pre = dh_tilde .* (1 - ht.^2);
     grads.dWh = grads.dWh + xt' * dh_tilde_pre;
     grads.dUh = grads.dUh + (rt .* h_prev)' * dh_tilde_pre;
@@ -261,14 +261,14 @@ for t = N:-1:1
     dr_from_h = dh_tilde_pre * model.Uh' .* h_prev;
     dh_prev = dh_prev + dh_tilde_pre * model.Uh' .* rt;
 
-    % Gradient through z = sigmoid(...)
+    % 通过 z = sigmoid(...) 的梯度
     dz_pre = dz .* zt .* (1 - zt);
     grads.dWz = grads.dWz + xt' * dz_pre;
     grads.dUz = grads.dUz + h_prev' * dz_pre;
     grads.dbz = grads.dbz + dz_pre;
     dh_prev = dh_prev + dz_pre * model.Uz';
 
-    % Gradient through r = sigmoid(...)
+    % 通过 r = sigmoid(...) 的梯度
     dr_pre = dr_from_h .* rt .* (1 - rt);
     grads.dWr = grads.dWr + xt' * dr_pre;
     grads.dUr = grads.dUr + h_prev' * dr_pre;
@@ -281,7 +281,7 @@ end
 end
 
 function grads = clip_gradients(grads, maxNorm)
-%CLIP_GRADIENTS  Clip gradients by global norm.
+%CLIP_GRADIENTS  按全局范数裁剪梯度。
 fields = fieldnames(grads);
 totalNorm = 0;
 for i = 1:numel(fields)

@@ -1,55 +1,55 @@
 %% demo_ml_impulse_mitigation.m
-% Demo script showing ML-based impulse mitigation with soft decoding.
+% 演示脚本：展示基于ML的脉冲抑制与软判决译码。
 %
-% This demonstrates:
-%   1. Training CNN/GRU impulse detectors
-%   2. Comparing different mitigation methods
-%   3. Soft reliability weighting for Viterbi decoder
+% 本脚本演示：
+%   1. 训练CNN/GRU脉冲检测器
+%   2. 比较不同抑制方法
+%   3. 软可靠性加权用于Viterbi译码器
 
 clear; clc; close all;
 addpath(genpath('src'));
 
 fprintf('==============================================\n');
-fprintf('ML-Based Impulse Mitigation Demo\n');
+fprintf('基于ML的脉冲抑制演示\n');
 fprintf('==============================================\n\n');
 
-%% Setup parameters
+%% 设置参数
 p = default_params();
 
-% Reduce simulation size for quick demo
+% 减小仿真规模以加快演示速度
 p.sim.ebN0dBList = 0:3:12;
 p.sim.nFramesPerPoint = 2;
-p.source.resizeTo = [64 64];  % Smaller image for speed
+p.source.resizeTo = [64 64];  % 使用较小图像以提高速度
 
-% Focus on comparing methods
+% 聚焦于比较不同方法
 p.mitigation.methods = ["none", "blanking", "ml_blanking", "ml_cnn", "ml_gru"];
 
-%% Quick training of ML models
-fprintf('Step 1: Training ML models (quick mode)...\n');
+%% 快速训练ML模型
+fprintf('步骤1：训练ML模型（快速模式）...\n');
 fprintf('----------------------------------------\n');
 
-% Train CNN (reduced for demo)
+% 训练CNN（演示用精简版）
 [p.mitigation.mlCnn, cnnReport] = ml_train_cnn_impulse(p, ...
     'nBlocks', 100, 'blockLen', 1024, 'epochs', 15, 'verbose', true);
 
 fprintf('\n');
 
-% Train GRU (reduced for demo)
+% 训练GRU（演示用精简版）
 [p.mitigation.mlGru, gruReport] = ml_train_gru_impulse(p, ...
     'nBlocks', 80, 'blockLen', 256, 'epochs', 10, 'verbose', true);
 
-%% Run simulation
+%% 运行仿真
 fprintf('\n');
-fprintf('Step 2: Running link simulation...\n');
+fprintf('步骤2：运行链路仿真...\n');
 fprintf('----------------------------------------\n');
 
 results = simulate(p);
 
-%% Display results
+%% 显示结果
 fprintf('\n');
-fprintf('Step 3: Results Summary\n');
+fprintf('步骤3：结果摘要\n');
 fprintf('----------------------------------------\n');
-fprintf('\nBit Error Rate (BER) at each Eb/N0:\n');
+fprintf('\n各Eb/N0下的误码率（BER）：\n');
 fprintf('%-12s', 'Eb/N0 (dB)');
 for m = 1:numel(results.methods)
     fprintf('%-15s', results.methods(m));
@@ -68,7 +68,7 @@ for ie = 1:numel(results.ebN0dB)
     fprintf('\n');
 end
 
-fprintf('\nPSNR (dB) at each Eb/N0:\n');
+fprintf('\n各Eb/N0下的PSNR（dB）：\n');
 fprintf('%-12s', 'Eb/N0 (dB)');
 for m = 1:numel(results.methods)
     fprintf('%-15s', results.methods(m));
@@ -87,10 +87,10 @@ for ie = 1:numel(results.ebN0dB)
     fprintf('\n');
 end
 
-%% Plot results
+%% 绘制结果
 figure('Position', [100, 100, 1200, 500]);
 
-% BER plot
+% BER曲线
 subplot(1, 2, 1);
 colors = lines(numel(results.methods));
 markers = {'o', 's', 'd', '^', 'v'};
@@ -102,12 +102,12 @@ for m = 1:numel(results.methods)
 end
 grid on;
 xlabel('Eb/N0 (dB)');
-ylabel('Bit Error Rate');
-title('BER Comparison');
+ylabel('误码率');
+title('BER比较');
 legend('Location', 'southwest');
 ylim([1e-5, 1]);
 
-% PSNR plot
+% PSNR曲线
 subplot(1, 2, 2);
 for m = 1:numel(results.methods)
     plot(results.ebN0dB, results.psnr(m, :), ...
@@ -118,14 +118,14 @@ end
 grid on;
 xlabel('Eb/N0 (dB)');
 ylabel('PSNR (dB)');
-title('Image Quality Comparison');
+title('图像质量比较');
 legend('Location', 'southeast');
 
-sgtitle('ML-Based Impulse Mitigation Performance');
+sgtitle('基于ML的脉冲抑制性能');
 
 fprintf('\n');
-fprintf('Demo complete! Check the figure for BER and PSNR comparison.\n');
-fprintf('\nKey observations:\n');
-fprintf('  - ML methods (CNN, GRU) should outperform simple blanking\n');
-fprintf('  - Soft reliability weighting improves decoder performance\n');
-fprintf('  - CNN is faster, GRU captures temporal patterns better\n');
+fprintf('演示完成！请查看图形以比较BER和PSNR。\n');
+fprintf('\n主要观察结果：\n');
+fprintf('  - ML方法（CNN、GRU）应优于简单置零\n');
+fprintf('  - 软可靠性加权改善译码器性能\n');
+fprintf('  - CNN更快，GRU更好地捕捉时序模式\n');

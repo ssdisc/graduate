@@ -1,35 +1,35 @@
 function [mask, reliability, cleanSym, pImpulse] = ml_cnn_impulse_detect(rIn, model)
-%ML_CNN_IMPULSE_DETECT  Detect impulses using 1D CNN and output soft info.
+%ML_CNN_IMPULSE_DETECT  使用1D CNN检测脉冲并输出软信息。
 %
-% Inputs:
-%   rIn   - Complex received symbols (N x 1)
-%   model - Trained CNN model from ml_train_cnn_impulse
+% 输入:
+%   rIn   - 复数接收符号 (N x 1)
+%   model - 来自ml_train_cnn_impulse的已训练CNN模型
 %
-% Outputs:
-%   mask       - Binary impulse mask (logical, N x 1)
-%   reliability- Soft reliability weights for decoder (0-1, N x 1)
-%   cleanSym   - Denoised symbol estimates (complex, N x 1)
-%   pImpulse   - Raw impulse probability (N x 1)
+% 输出:
+%   mask       - 二值脉冲掩码（逻辑型，N x 1）
+%   reliability- 译码器的软可靠性权重（0-1，N x 1）
+%   cleanSym   - 去噪符号估计（复数，N x 1）
+%   pImpulse   - 原始脉冲概率（N x 1）
 
 r = rIn(:);
 N = numel(r);
 
-% Extract input features
+% 提取输入特征
 X = ml_cnn_features(r);  % [N x inputChannels]
 
-% Normalize
+% 归一化
 Xn = (X - model.inputMean) ./ (model.inputStd + 1e-8);
 
-% Calculate padding to maintain output size after convolutions
+% 计算填充以保持卷积后的输出大小
 K1 = model.conv1KernelSize;
 K2 = model.conv2KernelSize;
 totalKernelLoss = (K1 - 1) + (K2 - 1);
 padLen = ceil(totalKernelLoss / 2) + model.halfWin;
 
-% Pad input
+% 填充输入
 Xpad = [repmat(Xn(1,:), padLen, 1); Xn; repmat(Xn(end,:), padLen, 1)];
 
-% Forward pass
+% 前向传播
 % Conv1 + ReLU
 h1 = conv1d_forward(Xpad, model.W1, model.b1);
 h1 = max(h1, 0);  % ReLU
@@ -38,27 +38,27 @@ h1 = max(h1, 0);  % ReLU
 h2 = conv1d_forward(h1, model.W2, model.b2);
 h2 = max(h2, 0);  % ReLU
 
-% Trim to original length
+% 裁剪到原始长度
 h2Len = size(h2, 1);
 trimStart = max(1, floor((h2Len - N) / 2) + 1);
 trimEnd = min(h2Len, trimStart + N - 1);
 h2 = h2(trimStart:trimEnd, :);
 
-% Handle length mismatch
+% 处理长度不匹配
 actualN = size(h2, 1);
 
-% Output layer (dense)
+% 输出层（全连接）
 out = h2 * model.Wo + model.bo;  % [actualN x 4]
 
-% Parse outputs
-pImpulse = sigmoid(out(:, 1));           % Impulse probability
-reliability = sigmoid(out(:, 2));         % Reliability weight (0-1)
-cleanReal = out(:, 3);                    % Cleaned real part
-cleanImag = out(:, 4);                    % Cleaned imaginary part
+% 解析输出
+pImpulse = sigmoid(out(:, 1));           % 脉冲概率
+reliability = sigmoid(out(:, 2));         % 可靠性权重（0-1）
+cleanReal = out(:, 3);                    % 清洁实部
+cleanImag = out(:, 4);                    % 清洁虚部
 
-% Pad or trim outputs to match input length
+% 填充或裁剪输出以匹配输入长度
 if actualN < N
-    % Pad with default values
+    % 用默认值填充
     pImpulse = [pImpulse; 0.5 * ones(N - actualN, 1)];
     reliability = [reliability; ones(N - actualN, 1)];
     cleanReal = [cleanReal; zeros(N - actualN, 1)];
@@ -70,19 +70,19 @@ elseif actualN > N
     cleanImag = cleanImag(1:N);
 end
 
-% Apply threshold for hard mask
+% 应用阈值生成硬掩码
 mask = pImpulse >= model.threshold;
 
-% Construct cleaned symbols
+% 构造清洁符号
 cleanSym = complex(cleanReal, cleanImag);
 
-% For samples detected as impulses, reduce reliability
+% 对检测为脉冲的样本降低可靠性
 reliability(mask) = reliability(mask) .* (1 - pImpulse(mask));
 
 end
 
 function y = conv1d_forward(x, W, b)
-%CONV1D_FORWARD  1D convolution (valid mode).
+%CONV1D_FORWARD  1D卷积（valid模式）。
 % x: [T x Cin], W: [K x Cin x Cout], b: [1 x Cout]
 % y: [T-K+1 x Cout]
 
@@ -94,7 +94,7 @@ y = zeros(Tout, Cout);
 for co = 1:Cout
     for ci = 1:Cin
         kernel = W(:, ci, co);
-        % Flip kernel for convolution (not correlation)
+        % 翻转卷积核（卷积而非相关）
         y(:, co) = y(:, co) + conv(x(:, ci), flipud(kernel), 'valid');
     end
     y(:, co) = y(:, co) + b(co);

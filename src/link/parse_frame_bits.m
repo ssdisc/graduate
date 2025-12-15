@@ -1,5 +1,5 @@
 function [payloadBits, meta, ok] = parse_frame_bits(rxBits, magic16)
-%PARSE_FRAME_BITS  Parse header and return payload bits and metadata.
+%PARSE_FRAME_BITS  解析帧头并返回载荷比特和元数据。
 
 rxBits = uint8(rxBits(:) ~= 0);
 
@@ -26,7 +26,7 @@ channels = bits_to_uint(rxBits(idx:idx+7), 'uint8'); idx = idx + 8;
 bpp = bits_to_uint(rxBits(idx:idx+7), 'uint8'); idx = idx + 8;
 payloadBytes = bits_to_uint(rxBits(idx:idx+31), 'uint32'); idx = idx + 32;
 
-% Basic sanity checks to avoid catastrophic reshape on corrupted headers
+% 基本合理性检查以避免损坏帧头时的灾难性reshape
 if rows == 0 || cols == 0 || rows > 2048 || cols > 2048
     payloadBits = uint8([]);
     meta = struct();

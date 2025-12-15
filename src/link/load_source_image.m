@@ -1,11 +1,11 @@
 function img = load_source_image(s)
-%LOAD_SOURCE_IMAGE  Load and pre-process the source image.
+%LOAD_SOURCE_IMAGE  加载并预处理源图像。
 
 if isfield(s, "useBuiltinImage") && s.useBuiltinImage
     img = imread("cameraman.tif");
 else
     if strlength(string(s.imagePath)) == 0
-        error("source.imagePath is empty while useBuiltinImage=false.");
+        error("source.imagePath为空而useBuiltinImage=false。");
     end
     img = imread(s.imagePath);
 end

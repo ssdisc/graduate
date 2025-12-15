@@ -1,5 +1,5 @@
 function idx = frame_sync(r, preambleSym)
-%FRAME_SYNC  Coarse frame sync by correlation with known preamble.
+%FRAME_SYNC  通过与已知前导的相关实现粗帧同步。
 
 r = r(:);
 p = preambleSym(:);

@@ -1,5 +1,5 @@
 function img = payload_bits_to_image(bits, meta)
-%PAYLOAD_BITS_TO_IMAGE  Convert payload bitstream back to image.
+%PAYLOAD_BITS_TO_IMAGE  将载荷比特流转换回图像。
 
 bytes = bits_to_uint(bits, 'uint8vec');
 needBytes = double(meta.rows) * double(meta.cols) * double(meta.channels);

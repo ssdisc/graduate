@@ -1,5 +1,5 @@
 function [y, state] = interleave_bits(x, inter)
-%INTERLEAVE_BITS  Simple block interleaver.
+%INTERLEAVE_BITS  简单块交织器。
 
 if ~inter.enable
     y = x(:);

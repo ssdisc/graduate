@@ -1,5 +1,5 @@
 function [headerBits, header] = build_header_bits(meta, magic16)
-%BUILD_HEADER_BITS  Build fixed-length header bitstream.
+%BUILD_HEADER_BITS  构建固定长度帧头比特流。
 
 header = struct();
 header.magic = uint16(magic16);

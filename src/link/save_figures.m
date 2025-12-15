@@ -1,5 +1,5 @@
 function save_figures(outDir, imgTx, results)
-%SAVE_FIGURES  Save standard figures (BER/PSNR/PSD/images) to disk.
+%SAVE_FIGURES  将标准图形（BER/PSNR/PSD/图像）保存到磁盘。
 
 methods = results.methods;
 EbN0dB = results.ebN0dB;

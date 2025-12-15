@@ -1,5 +1,5 @@
 function [mask, p] = ml_impulse_detect(rIn, model)
-%ML_IMPULSE_DETECT  Predict impulsive samples using a small ML model.
+%ML_IMPULSE_DETECT  使用小型ML模型预测脉冲样本。
 
 r = rIn(:);
 X = ml_impulse_features(r);

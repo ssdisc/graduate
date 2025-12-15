@@ -1,14 +1,14 @@
 function m = warden_energy_detector(txBurst, N0, ch, maxDelaySymbols, det)
-%WARDEN_ENERGY_DETECTOR  Radiometer (energy detector) Pd/Pfa estimate.
+%WARDEN_ENERGY_DETECTOR  辐射计（能量检测器）Pd/Pfa估计。
 %
-% txBurst: transmitted symbols (no leading delay), column vector.
-% N0: noise spectral density used by channel_bg_impulsive().
-% ch: channel config used by channel_bg_impulsive().
-% maxDelaySymbols: random leading-zero delay range [0, maxDelaySymbols].
-% det: struct with fields:
+% txBurst: 发送符号（无前导延迟），列向量。
+% N0: channel_bg_impulsive()使用的噪声功率谱密度。
+% ch: channel_bg_impulsive()使用的信道配置。
+% maxDelaySymbols: 随机前导零延迟范围[0, maxDelaySymbols]。
+% det: 结构体，包含字段：
 %   - pfaTarget (0..1)
-%   - nObs (observation window length in symbols)
-%   - nTrials (Monte Carlo trials)
+%   - nObs（观测窗口长度，符号数）
+%   - nTrials（蒙特卡洛试验次数）
 
 arguments
     txBurst (:,1) double
@@ -27,13 +27,13 @@ nObs = double(det.nObs);
 nTrials = double(det.nTrials);
 
 if ~(pfaTarget > 0 && pfaTarget < 1)
-    error("pfaTarget must be in (0,1).");
+    error("pfaTarget必须在(0,1)范围内。");
 end
 if ~(nObs >= 16)
-    error("nObs must be >= 16.");
+    error("nObs必须 >= 16。");
 end
 if ~(nTrials >= 10)
-    error("nTrials must be >= 10.");
+    error("nTrials必须 >= 10。");
 end
 
 txBurst = txBurst(:);

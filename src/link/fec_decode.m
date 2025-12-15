@@ -1,5 +1,5 @@
 function bits = fec_decode(metrics, fec)
-%FEC_DECODE  Viterbi decoding (hard/soft).
+%FEC_DECODE  Viterbi译码（硬判决/软判决）。
 
 if strcmpi(fec.decisionType, "hard")
     hardBits = uint8(metrics(:) ~= 0);

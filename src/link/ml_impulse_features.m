@@ -1,5 +1,5 @@
 function X = ml_impulse_features(rIn)
-%ML_IMPULSE_FEATURES  Feature extraction for ML-based impulse detection.
+%ML_IMPULSE_FEATURES  ML脉冲检测的特征提取。
 
 r = rIn(:);
 a = abs(r);

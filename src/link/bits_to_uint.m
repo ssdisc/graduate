@@ -1,11 +1,11 @@
 function x = bits_to_uint(bits, type)
-%BITS_TO_UINT  Convert MSB-first bit vector to unsigned integer.
+%BITS_TO_UINT  将MSB在前的比特向量转换为无符号整数。
 %
-% Usage:
-%   x = bits_to_uint(bits, 'uint8')     - 8 bits to uint8 scalar
-%   x = bits_to_uint(bits, 'uint16')    - 16 bits to uint16 scalar
-%   x = bits_to_uint(bits, 'uint32')    - 32 bits to uint32 scalar
-%   x = bits_to_uint(bits, 'uint8vec')  - bit vector to uint8 vector
+% 用法:
+%   x = bits_to_uint(bits, 'uint8')     - 8比特转uint8标量
+%   x = bits_to_uint(bits, 'uint16')    - 16比特转uint16标量
+%   x = bits_to_uint(bits, 'uint32')    - 32比特转uint32标量
+%   x = bits_to_uint(bits, 'uint8vec')  - 比特向量转uint8向量
 
 if nargin < 2
     type = 'uint8';
@@ -49,6 +49,6 @@ switch lower(type)
         end
 
     otherwise
-        error('Unknown type: %s. Use uint8, uint16, uint32, or uint8vec.', type);
+        error('未知类型: %s。请使用uint8, uint16, uint32或uint8vec。', type);
 end
 end

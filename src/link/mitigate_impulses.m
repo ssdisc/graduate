@@ -1,15 +1,15 @@
 function [rOut, reliability] = mitigate_impulses(rIn, method, mit)
-%MITIGATE_IMPULSES  Impulse mitigation with optional soft reliability output.
+%MITIGATE_IMPULSES  脉冲抑制，可选软可靠性输出。
 %
-% Outputs:
-%   rOut       - Mitigated symbols (same size as rIn)
-%   reliability- Soft reliability weights (0-1), for weighting soft decoder input
-%                Default is all ones (fully reliable) for traditional methods.
+% 输出:
+%   rOut       - 抑制后的符号（与rIn大小相同）
+%   reliability- 软可靠性权重（0-1），用于加权软译码器输入
+%                传统方法默认全为1（完全可靠）。
 
 r = rIn(:);
 N = numel(r);
 
-% Default reliability: all samples fully reliable
+% 默认可靠性：所有样本完全可靠
 reliability = ones(N, 1);
 
 switch string(mit.thresholdStrategy)
@@ -18,7 +18,7 @@ switch string(mit.thresholdStrategy)
     case "fixed"
         T = mit.thresholdFixed;
     otherwise
-        error("Unknown thresholdStrategy: %s", mit.thresholdStrategy);
+        error("未知的阈值策略: %s", mit.thresholdStrategy);
 end
 
 switch lower(string(method))
@@ -29,7 +29,7 @@ switch lower(string(method))
         rOut = r;
         mask = abs(r) > T;
         rOut(mask) = 0;
-        % Blanked samples have zero reliability
+        % 置零样本可靠性为零
         reliability(mask) = 0;
 
     case "clipping"
@@ -38,11 +38,11 @@ switch lower(string(method))
         over = mag > T;
         scale(over) = T ./ mag(over);
         rOut = r .* scale;
-        % Clipped samples have reduced reliability proportional to clipping
+        % 削波样本的可靠性与削波程度成比例降低
         reliability(over) = scale(over);
 
     case "ml_blanking"
-        % Legacy logistic regression blanking
+        % 传统逻辑回归置零
         if isfield(mit, "ml") && ~isempty(mit.ml)
             model = mit.ml;
         else
@@ -51,12 +51,12 @@ switch lower(string(method))
         [mask, p] = ml_impulse_detect(r, model);
         rOut = r;
         rOut(mask) = 0;
-        % Reliability = 1 - p(impulse)
+        % 可靠性 = 1 - p(脉冲)
         reliability = 1 - p;
         reliability(mask) = 0;
 
     case "ml_cnn"
-        % 1D CNN with soft outputs
+        % 1D CNN带软输出
         if isfield(mit, "mlCnn") && ~isempty(mit.mlCnn)
             model = mit.mlCnn;
         else
@@ -64,19 +64,19 @@ switch lower(string(method))
         end
         [mask, rel, cleanSym, pImp] = ml_cnn_impulse_detect(r, model);
 
-        % Use cleaned symbols for detected impulses, original otherwise
+        % 对检测到的脉冲使用清洁符号，否则使用原始符号
         rOut = r;
         if model.trained
-            % Blend: use cleaned estimate weighted by impulse probability
+            % 混合：使用脉冲概率加权的清洁估计
             rOut = (1 - pImp) .* r + pImp .* cleanSym;
         else
-            % Untrained: fall back to blanking
+            % 未训练：退回到置零
             rOut(mask) = 0;
         end
         reliability = rel;
 
     case "ml_cnn_hard"
-        % 1D CNN with hard blanking (for comparison)
+        % 1D CNN硬置零（用于比较）
         if isfield(mit, "mlCnn") && ~isempty(mit.mlCnn)
             model = mit.mlCnn;
         else
@@ -89,7 +89,7 @@ switch lower(string(method))
         reliability(mask) = 0;
 
     case "ml_gru"
-        % GRU with soft outputs
+        % GRU带软输出
         if isfield(mit, "mlGru") && ~isempty(mit.mlGru)
             model = mit.mlGru;
         else
@@ -106,7 +106,7 @@ switch lower(string(method))
         reliability = rel;
 
     case "ml_gru_hard"
-        % GRU with hard blanking
+        % GRU硬置零
         if isfield(mit, "mlGru") && ~isempty(mit.mlGru)
             model = mit.mlGru;
         else
@@ -119,6 +119,6 @@ switch lower(string(method))
         reliability(mask) = 0;
 
     otherwise
-        error("Unknown mitigation method: %s", method);
+        error("未知的抑制方法: %s", method);
 end
 end

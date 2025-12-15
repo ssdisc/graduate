@@ -1,5 +1,5 @@
 function [psnrVal, ssimVal] = image_quality(ref, test)
-%IMAGE_QUALITY  Compute PSNR/SSIM between reference and test images.
+%IMAGE_QUALITY  计算参考图像和测试图像之间的PSNR/SSIM。
 
 ref = im2uint8(ref);
 test = im2uint8(test);

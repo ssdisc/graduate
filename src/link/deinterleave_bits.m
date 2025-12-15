@@ -1,5 +1,5 @@
 function x = deinterleave_bits(y, state, inter)
-%DEINTERLEAVE_BITS  Inverse of interleave_bits.
+%DEINTERLEAVE_BITS  interleave_bits的逆操作。
 
 if ~inter.enable
     x = y(:);

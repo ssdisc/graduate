@@ -1,5 +1,5 @@
 function out = scramble_bits(bits, s)
-%SCRAMBLE_BITS  PN-xor scrambling (whitening / encryption-lite).
+%SCRAMBLE_BITS  PN异或扰码（白化/轻量加密）。
 
 if ~s.enable
     out = uint8(bits(:) ~= 0);

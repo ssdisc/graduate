@@ -1,5 +1,5 @@
 function [bits, meta] = image_to_payload_bits(img, payload)
-%IMAGE_TO_PAYLOAD_BITS  Convert uint8 image to payload bitstream.
+%IMAGE_TO_PAYLOAD_BITS  将uint8图像转换为载荷比特流。
 
 rows = size(img, 1);
 cols = size(img, 2);

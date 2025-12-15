@@ -1,11 +1,11 @@
 function [model, report] = ml_train_impulse_lr(p, opts)
-%ML_TRAIN_IMPULSE_LR  Train a lightweight impulse detector (logistic regression).
+%ML_TRAIN_IMPULSE_LR  训练轻量级脉冲检测器（逻辑回归）。
 %
-% This trains a tiny model for use with mitigate_impulses(..., "ml_blanking", ...).
-% It generates labeled data from the Bernoulli-Gaussian channel model, then fits
-% a logistic regression by gradient descent (no extra toolboxes required).
+% 训练一个小型模型用于mitigate_impulses(..., "ml_blanking", ...)。
+% 从伯努利-高斯信道模型生成标注数据，然后通过梯度下降拟合逻辑回归
+% （无需额外工具箱）。
 %
-% Example:
+% 示例:
 %   addpath(genpath('src'));
 %   p = default_params();
 %   [model, report] = ml_train_impulse_lr(p);

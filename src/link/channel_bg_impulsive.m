@@ -1,5 +1,5 @@
 function [y, impMask] = channel_bg_impulsive(x, N0, ch)
-%CHANNEL_BG_IMPULSIVE  AWGN + Bernoulli-Gaussian impulsive noise.
+%CHANNEL_BG_IMPULSIVE  AWGN + 伯努利-高斯脉冲噪声信道。
 
 x = x(:);
 nBg = sqrt(N0/2) * (randn(size(x)) + 1j*randn(size(x)));

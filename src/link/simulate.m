@@ -1,7 +1,7 @@
 function results = simulate(p)
-%SIMULATE  End-to-end link simulation with impulsive-noise mitigation.
+%SIMULATE  端到端链路仿真，包含脉冲噪声抑制。
 %
-% Returns a struct containing BER/PSNR/PSD results and saves figures when enabled.
+% 返回包含BER/PSNR/PSD结果的结构体，启用时保存图形。
 
 arguments
     p (1,1) struct
@@ -50,7 +50,7 @@ if eveEnabled
     scrambleEve = p.scramble;
     switch lower(string(p.eve.scrambleAssumption))
         case "known"
-            % Best-case intercept: Eve knows scrambling key.
+            % 最佳情况截获：Eve知道扰码密钥
         case "none"
             scrambleEve.enable = false;
         case "wrong_key"
@@ -279,7 +279,7 @@ for ie = 1:numel(EbN0dBList)
     end
 end
 
-% Waveform / spectrum (one burst, no channel)
+% 波形/频谱（单次突发，无信道）
 [psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum(txSym, modInfo);
 
 results = struct();
