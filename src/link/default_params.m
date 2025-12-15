@@ -44,6 +44,18 @@ p.interleaver.nRows = 64;
 p.mod = struct();
 p.mod.type = 'BPSK';
 
+% 跳频（Frequency Hopping）
+p.fh = struct();
+p.fh.enable = true;              % 是否启用跳频
+p.fh.nFreqs = 8;                 % 跳频频点数量
+p.fh.symbolsPerHop = 64;         % 每跳的符号数（跳频速率 = 符号率/symbolsPerHop）
+p.fh.sequenceType = 'pn';        % 'pn' | 'linear' | 'random'
+p.fh.pnPolynomial = [1 0 0 1 1]; % 跳频PN序列多项式 (x^4 + x + 1)
+p.fh.pnInit = [1 0 0 1];         % 跳频PN序列初始状态
+% 频率集合（归一化频率，相对于符号率）
+% 例如：8个频点均匀分布在 [-0.35, 0.35]
+p.fh.freqSet = linspace(-0.35, 0.35, p.fh.nFreqs);
+
 % 信道：AWGN + 伯努利-高斯脉冲噪声
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
@@ -81,6 +93,11 @@ p.eve.ebN0dBOffset = -6;
 %   "none"      : 忽略扰码（不解扰）
 %   "wrong_key" : 使用错误的扰码密钥（显示乱码图像）
 p.eve.scrambleAssumption = "wrong_key";
+% Eve对跳频序列的知识：
+%   "known"     : 知道跳频序列（能正确解跳）
+%   "none"      : 不知道跳频（不解跳，信号严重失真）
+%   "partial"   : 部分知道（使用错误的初始状态）
+p.eve.fhAssumption = "none";
 
 % 隐蔽/低截获概率支持（监视者检测）
 p.covert = struct();

@@ -23,6 +23,15 @@ codedBits = fec_encode(dataBitsTxScr, p.fec);
 [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
 
 [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);
+
+% 跳频调制（仅对数据符号，前导不跳频以便同步）
+fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
+if fhEnabled
+    [dataSymTx, hopInfo] = fh_modulate(dataSymTx, p.fh);
+else
+    hopInfo = struct('enable', false);
+end
+
 txSym = [preambleSym; dataSymTx];
 
 EbN0dBList = p.sim.ebN0dBList(:).';
@@ -61,6 +70,31 @@ if eveEnabled
             end
         otherwise
             error("Unknown eve.scrambleAssumption: %s", string(p.eve.scrambleAssumption));
+    end
+
+    % Eve对跳频的知识
+    if ~isfield(p.eve, 'fhAssumption'); p.eve.fhAssumption = "none"; end
+    switch lower(string(p.eve.fhAssumption))
+        case "known"
+            % Eve知道跳频序列，使用相同的hopInfo
+            hopInfoEve = hopInfo;
+        case "none"
+            % Eve不知道跳频，不解跳
+            hopInfoEve = struct('enable', false);
+        case "partial"
+            % Eve使用错误的跳频初始状态
+            if fhEnabled
+                fhEve = p.fh;
+                fhEve.pnInit = circshift(fhEve.pnInit, 2);
+                if all(fhEve.pnInit == 0)
+                    fhEve.pnInit(1) = 1;
+                end
+                [~, hopInfoEve] = fh_modulate(dataSymTx, fhEve);
+            else
+                hopInfoEve = struct('enable', false);
+            end
+        otherwise
+            error("Unknown eve.fhAssumption: %s", string(p.eve.fhAssumption));
     end
 end
 
@@ -140,6 +174,10 @@ for ie = 1:numel(EbN0dBList)
         end
         if bobOk
             rData = rx(dataStart:dataStop);
+            % 跳频解调（Bob知道跳频序列）
+            if fhEnabled
+                rData = fh_demodulate(rData, hopInfo);
+            end
         else
             nErr = nErr + numel(payloadBits);
             nTot = nTot + numel(payloadBits);
@@ -160,6 +198,10 @@ for ie = 1:numel(EbN0dBList)
             end
             if eveOk
                 rDataEve = rxEve(dataStartEve:dataStopEve);
+                % Eve的跳频解调（根据Eve的知识假设）
+                if fhEnabled
+                    rDataEve = fh_demodulate(rDataEve, hopInfoEve);
+                end
             else
                 nErrEve = nErrEve + numel(payloadBits);
                 nTotEve = nTotEve + numel(payloadBits);
