@@ -12,7 +12,7 @@ if numel(rxBits) < needHeaderBits
 end
 
 idx = 1;
-magic = bits_to_uint16(rxBits(idx:idx+15)); idx = idx + 16;
+magic = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
 if magic ~= uint16(magic16)
     payloadBits = uint8([]);
     meta = struct();
@@ -20,11 +20,11 @@ if magic ~= uint16(magic16)
     return;
 end
 
-rows = bits_to_uint16(rxBits(idx:idx+15)); idx = idx + 16;
-cols = bits_to_uint16(rxBits(idx:idx+15)); idx = idx + 16;
-channels = bits_to_uint8_scalar(rxBits(idx:idx+7)); idx = idx + 8;
-bpp = bits_to_uint8_scalar(rxBits(idx:idx+7)); idx = idx + 8;
-payloadBytes = bits_to_uint32(rxBits(idx:idx+31)); idx = idx + 32;
+rows = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+cols = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+channels = bits_to_uint(rxBits(idx:idx+7), 'uint8'); idx = idx + 8;
+bpp = bits_to_uint(rxBits(idx:idx+7), 'uint8'); idx = idx + 8;
+payloadBytes = bits_to_uint(rxBits(idx:idx+31), 'uint32'); idx = idx + 32;
 
 % Basic sanity checks to avoid catastrophic reshape on corrupted headers
 if rows == 0 || cols == 0 || rows > 2048 || cols > 2048

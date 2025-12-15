@@ -52,10 +52,13 @@ p.channel.impulseToBgRatio = 50; % impulse variance = ratio * background varianc
 
 % Impulse mitigation
 p.mitigation = struct();
-p.mitigation.methods = ["none" "blanking" "clipping"]; % run & compare
+p.mitigation.methods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru"]; % run & compare
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
 p.mitigation.thresholdAlpha = 4.0; % T = alpha * median(abs(r))
 p.mitigation.thresholdFixed = 3.0; % used when thresholdStrategy="fixed"
+p.mitigation.ml = ml_impulse_lr_model();      % Legacy LR model
+p.mitigation.mlCnn = ml_cnn_impulse_model();  % 1D CNN model (untrained default)
+p.mitigation.mlGru = ml_gru_impulse_model();  % GRU model (untrained default)
 
 % Soft metric quantization (for vitdec 'soft')
 p.softMetric = struct();

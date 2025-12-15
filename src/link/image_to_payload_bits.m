@@ -6,7 +6,7 @@ cols = size(img, 2);
 ch = size(img, 3);
 
 bytes = reshape(uint8(img), [], 1);
-bits = uint8vec_to_bits(bytes);
+bits = uint_to_bits(bytes, 'uint8vec');
 
 meta = struct();
 meta.rows = uint16(rows);

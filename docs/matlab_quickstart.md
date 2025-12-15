@@ -39,6 +39,7 @@ run_demo
 6. 调制：BPSK（基线稳）
 7. 信道：AWGN + Bernoulli-Gaussian 脉冲噪声
 8. 抗干扰：blanking / clipping（阈值可配）
+   - 可选：`ml_blanking`（轻量 ML 冲击检测 + blanking）
 9. 帧同步：用前导相关做粗同步，然后解码重建图像
 
 ---
@@ -50,6 +51,7 @@ run_demo
 - `p.sim.ebN0dBList`：横轴
 - `p.channel.impulseProb`、`p.channel.impulseToBgRatio`：随机脉冲强度/频度
 - `p.mitigation.methods`：对比哪些抗干扰策略
+- `p.mitigation.ml`：`ml_blanking` 使用的轻量 ML 模型（默认已内置）
 - `p.mitigation.thresholdAlpha`：阈值（越大越保守，越小越激进）
 - `p.interleaver.nRows`：交织深度（越深越抗突发，但时延/缓存增加）
 

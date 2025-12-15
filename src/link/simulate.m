@@ -168,9 +168,9 @@ for ie = 1:numel(EbN0dBList)
 
         for im = 1:numel(methods)
             if bobOk
-                rMit = mitigate_impulses(rData, methods(im), p.mitigation);
+                [rMit, reliability] = mitigate_impulses(rData, methods(im), p.mitigation);
 
-                demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric);
+                demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
                 demodDeint = deinterleave_bits(demodSoft, intState, p.interleaver);
 
                 dataBitsRxScr = fec_decode(demodDeint, p.fec);
@@ -190,7 +190,7 @@ for ie = 1:numel(EbN0dBList)
                     imgRx = payload_bits_to_image(payloadBitsRx, metaRx);
 
                     [psnrNow, ssimNow] = image_quality(imgTx, imgRx);
-                    if isfinite(psnrNow)
+                    if ~isnan(psnrNow)
                         psnrAcc(im) = psnrAcc(im) + psnrNow;
                         nPsnr(im) = nPsnr(im) + 1;
                     end
@@ -207,9 +207,9 @@ for ie = 1:numel(EbN0dBList)
             end
 
             if eveEnabled && eveOk
-                rMitEve = mitigate_impulses(rDataEve, methods(im), p.mitigation);
+                [rMitEve, reliabilityEve] = mitigate_impulses(rDataEve, methods(im), p.mitigation);
 
-                demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric);
+                demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
                 demodDeintEve = deinterleave_bits(demodSoftEve, intState, p.interleaver);
 
                 dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
@@ -236,7 +236,7 @@ for ie = 1:numel(EbN0dBList)
                 imgEve = payload_bits_to_image(payloadBitsEve, metaUse);
 
                 [psnrNowEve, ssimNowEve] = image_quality(imgTx, imgEve);
-                if isfinite(psnrNowEve)
+                if ~isnan(psnrNowEve)
                     psnrAccEve(im) = psnrAccEve(im) + psnrNowEve;
                     nPsnrEve(im) = nPsnrEve(im) + 1;
                 end
