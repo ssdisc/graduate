@@ -52,7 +52,16 @@ exportgraphics(fig3, fullfile(outDir, "psd.png"));
 close(fig3);
 
 fig4 = figure("Name", "Images");
-tiledlayout(1, numel(methods) + 1);
+nMethods = numel(methods);
+nTotal = nMethods + 1;  % +1 for TX image
+% 使用2行布局以获得更好的显示效果
+nCols = ceil(nTotal / 2);
+nRows = 2;
+if nTotal <= 4
+    nRows = 1;
+    nCols = nTotal;
+end
+tiledlayout(nRows, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
 nexttile;
 imshow(imgTx);
 title("TX");
@@ -67,12 +76,16 @@ for k = 1:numel(methods)
         title(sprintf("RX - %s", methods(k)));
     end
 end
-exportgraphics(fig4, fullfile(outDir, "images.png"));
+exportgraphics(fig4, fullfile(outDir, "images.png"), 'Resolution', 150);
 close(fig4);
 
 if isfield(results, "eve") && isfield(results.eve, "example")
     fig5 = figure("Name", "Intercept");
-    tiledlayout(2, numel(methods) + 1);
+    nCols = ceil((numel(methods) + 1) / 2);
+    if nCols < 3
+        nCols = numel(methods) + 1;
+    end
+    tiledlayout(2, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
 
     % Bob
     nexttile;
@@ -123,7 +136,7 @@ if isfield(results, "eve") && isfield(results.eve, "example")
             title(sprintf("Eve - %s", methods(k)));
         end
     end
-    exportgraphics(fig5, fullfile(outDir, "intercept.png"));
+    exportgraphics(fig5, fullfile(outDir, "intercept.png"), 'Resolution', 150);
     close(fig5);
 end
 
