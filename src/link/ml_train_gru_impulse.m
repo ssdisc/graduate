@@ -1,5 +1,5 @@
 function [model, report] = ml_train_gru_impulse(p, opts)
-%ML_TRAIN_GRU_IMPULSE  训练带软输出的GRU脉冲检测器。
+%ML_TRAIN_GRU_IMPULSE  使用Deep Learning Toolbox训练GRU脉冲检测器（支持GPU）。
 %
 % 示例:
 %   addpath(genpath('src'));
@@ -13,11 +13,24 @@ arguments
     opts.blockLen (1,1) double {mustBeInteger, mustBePositive} = 512
     opts.ebN0dBRange (1,2) double = [0 12]
     opts.epochs (1,1) double {mustBeInteger, mustBePositive} = 20
-    opts.lr (1,1) double {mustBePositive} = 0.005
-    opts.lrDecay (1,1) double = 0.95
-    opts.clipGrad (1,1) double = 5.0
+    opts.batchSize (1,1) double {mustBeInteger, mustBePositive} = 32
+    opts.lr (1,1) double {mustBePositive} = 0.001
     opts.pfaTarget (1,1) double = 0.01
+    opts.useGpu (1,1) logical = true
     opts.verbose (1,1) logical = true
+end
+
+%% 检查GPU可用性
+if opts.useGpu && canUseGPU()
+    executionEnvironment = "gpu";
+    if opts.verbose
+        fprintf("使用GPU训练GRU\n");
+    end
+else
+    executionEnvironment = "cpu";
+    if opts.verbose
+        fprintf("使用CPU训练GRU\n");
+    end
 end
 
 %% 生成训练数据
@@ -73,56 +86,88 @@ model = ml_gru_impulse_model();
 model.inputMean = inputMean;
 model.inputStd = inputStd;
 
-%% 训练
+%% 统计脉冲率
+allY = cell2mat(allSeqY);
+posRate = mean(allY);
+
 if opts.verbose
-    allY = cell2mat(allSeqY);
-    posRate = mean(allY);
-    fprintf("训练数据：%d序列，%.2f%%脉冲\n", nBlocks, 100*posRate);
+    fprintf("训练数据：%d序列，每序列%d样本，%.2f%%脉冲\n", nBlocks, L, 100*posRate);
     fprintf("开始GRU训练%d轮...\n", opts.epochs);
 end
 
-lr = opts.lr;
+%% 类别权重（处理不平衡）
+wPos = 0.5 / max(posRate, 1e-6);
+wNeg = 0.5 / max(1 - posRate, 1e-6);
+
+%% 准备训练数据
+XTrain = cell(nBlocks, 1);
+YTrain = cell(nBlocks, 1);
+TxTrain = cell(nBlocks, 1);
+
+for b = 1:nBlocks
+    XTrain{b} = allSeqX{b}';      % [4 x L]
+    YTrain{b} = double(allSeqY{b})';  % [1 x L]
+    TxTrain{b} = allSeqTx{b}';    % [1 x L]
+end
+
+%% 初始化Adam优化器状态
+averageGrad = [];
+averageSqGrad = [];
+
+%% 训练循环
 losses = zeros(opts.epochs, 1);
+learnRate = opts.lr;
 
 for epoch = 1:opts.epochs
     perm = randperm(nBlocks);
     epochLoss = 0;
 
-    for bi = 1:nBlocks
-        b = perm(bi);
-        X = allSeqX{b};
-        Y = double(allSeqY{b});
-        txSym = allSeqTx{b};
-        N = size(X, 1);
+    for bStart = 1:opts.batchSize:nBlocks
+        bEnd = min(bStart + opts.batchSize - 1, nBlocks);
+        batchIdx = perm(bStart:bEnd);
+        batchSize = numel(batchIdx);
 
-        % 带BPTT的前向传播
-        [loss, grads] = gru_forward_backward(X, Y, txSym, model);
+        % 准备批次数据
+        XBatch = XTrain(batchIdx);
+        YBatch = YTrain(batchIdx);
+        TxBatch = TxTrain(batchIdx);
 
-        % 梯度裁剪
-        grads = clip_gradients(grads, opts.clipGrad);
+        % 合并批次数据
+        XData = cat(3, XBatch{:});  % [4 x L x batchSize]
+        YData = cat(3, YBatch{:});  % [1 x L x batchSize]
+        TxData = cat(3, TxBatch{:}); % [1 x L x batchSize]
 
-        % 更新权重
-        model.Wr = model.Wr - lr * grads.dWr;
-        model.Ur = model.Ur - lr * grads.dUr;
-        model.br = model.br - lr * grads.dbr;
+        % 计算类别权重
+        WData = ones(size(YData));
+        WData(YData == 1) = wPos;
+        WData(YData == 0) = wNeg;
 
-        model.Wz = model.Wz - lr * grads.dWz;
-        model.Uz = model.Uz - lr * grads.dUz;
-        model.bz = model.bz - lr * grads.dbz;
+        % 转换为dlarray
+        XDl = dlarray(single(XData), 'CTB');
+        YDl = dlarray(single(YData), 'CTB');
+        TxDl = dlarray(single(TxData), 'CTB');
+        WDl = dlarray(single(WData), 'CTB');
 
-        model.Wh = model.Wh - lr * grads.dWh;
-        model.Uh = model.Uh - lr * grads.dUh;
-        model.bh = model.bh - lr * grads.dbh;
+        % 移动到GPU
+        if executionEnvironment == "gpu"
+            XDl = gpuArray(XDl);
+            YDl = gpuArray(YDl);
+            TxDl = gpuArray(TxDl);
+            WDl = gpuArray(WDl);
+        end
 
-        model.Wo = model.Wo - lr * grads.dWo;
-        model.bo = model.bo - lr * grads.dbo;
+        % 计算损失和梯度
+        [loss, gradients] = dlfeval(@modelLossGru, model.net, XDl, YDl, TxDl, WDl);
 
-        epochLoss = epochLoss + loss;
+        % 更新网络参数
+        [model.net, averageGrad, averageSqGrad] = adamupdate(model.net, gradients, ...
+            averageGrad, averageSqGrad, epoch, learnRate);
+
+        epochLoss = epochLoss + extractdata(loss) * batchSize;
     end
 
     epochLoss = epochLoss / nBlocks;
     losses(epoch) = epochLoss;
-    lr = lr * opts.lrDecay;
 
     if opts.verbose && (epoch == 1 || mod(epoch, 5) == 0 || epoch == opts.epochs)
         % 评估
@@ -172,6 +217,7 @@ report.pfaTarget = opts.pfaTarget;
 report.pfaEst = pfaEst;
 report.pdEst = pdEst;
 report.threshold = model.threshold;
+report.executionEnvironment = executionEnvironment;
 
 if opts.verbose
     fprintf("\nGRU训练完成。Pd=%.3f, Pfa=%.3f\n", pdEst, pfaEst);
@@ -179,124 +225,39 @@ end
 
 end
 
-function [loss, grads] = gru_forward_backward(X, Y, txSym, model)
-%GRU_FORWARD_BACKWARD  GRU的BPTT。
+%% 损失函数
+function [loss, gradients] = modelLossGru(net, X, Y, Tx, W)
+%MODELLOSSGRU  计算GRU模型的损失和梯度。
 
-N = size(X, 1);
-hs = model.hiddenSize;
+% 前向传播
+out = forward(net, X);  % [4 x L x B]
 
-% 前向传播 - 存储所有状态
-H = zeros(N+1, hs);  % h[0]到h[N]
-R = zeros(N, hs);    % 重置门
-Z = zeros(N, hs);    % 更新门
-Htilde = zeros(N, hs);  % 候选状态
-outputs = zeros(N, 4);
+% 解析输出
+pImpulse = sigmoid(out(1,:,:));
+reliability = sigmoid(out(2,:,:));
+cleanReal = out(3,:,:);
 
-for t = 1:N
-    xt = X(t, :);
-    h_prev = H(t, :);
+% 1. 脉冲检测的加权二元交叉熵
+bce = -W .* (Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
+lossBce = mean(bce, 'all');
 
-    R(t, :) = sigmoid(xt * model.Wr + h_prev * model.Ur + model.br);
-    Z(t, :) = sigmoid(xt * model.Wz + h_prev * model.Uz + model.bz);
-    Htilde(t, :) = tanh(xt * model.Wh + (R(t,:) .* h_prev) * model.Uh + model.bh);
-    H(t+1, :) = (1 - Z(t,:)) .* h_prev + Z(t,:) .* Htilde(t,:);
+% 2. 符号重建的MSE
+mse = (cleanReal - Tx).^2;
+lossMse = mean(mse, 'all');
 
-    outputs(t, :) = H(t+1, :) * model.Wo + model.bo;
-end
-
-% 计算损失
-pImpulse = sigmoid(outputs(:, 1));
-reliability = sigmoid(outputs(:, 2));
-cleanReal = outputs(:, 3);
-
-bce = -(Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
-mse = (cleanReal - real(txSym)).^2;
+% 3. 可靠性损失
 relTarget = 1 - Y;
 relLoss = (reliability - relTarget).^2;
+lossRel = mean(relLoss, 'all');
 
-loss = mean(bce) + 0.5 * mean(mse) + 0.3 * mean(relLoss);
+% 总损失
+loss = lossBce + 0.5 * lossMse + 0.3 * lossRel;
 
-% 反向传播
-dout = zeros(N, 4);
-dout(:, 1) = (pImpulse - Y) / N;
-dout(:, 2) = 0.3 * 2 * (reliability - relTarget) .* reliability .* (1 - reliability) / N;
-dout(:, 3) = 0.5 * 2 * (cleanReal - real(txSym)) / N;
+% 计算梯度
+gradients = dlgradient(loss, net.Learnables);
 
-% 输出层梯度
-grads.dWo = H(2:end, :)' * dout;
-grads.dbo = sum(dout, 1);
-
-% BPTT
-dh_next = zeros(1, hs);
-grads.dWr = zeros(size(model.Wr));
-grads.dUr = zeros(size(model.Ur));
-grads.dbr = zeros(size(model.br));
-grads.dWz = zeros(size(model.Wz));
-grads.dUz = zeros(size(model.Uz));
-grads.dbz = zeros(size(model.bz));
-grads.dWh = zeros(size(model.Wh));
-grads.dUh = zeros(size(model.Uh));
-grads.dbh = zeros(size(model.bh));
-
-for t = N:-1:1
-    xt = X(t, :);
-    h_prev = H(t, :);
-    rt = R(t, :);
-    zt = Z(t, :);
-    ht = Htilde(t, :);
-
-    dh = dout(t, :) * model.Wo' + dh_next;
-
-    % 通过 h = (1-z)*h_prev + z*h_tilde 的梯度
-    dh_tilde = dh .* zt;
-    dz = dh .* (ht - h_prev);
-    dh_prev = dh .* (1 - zt);
-
-    % 通过 h_tilde = tanh(...) 的梯度
-    dh_tilde_pre = dh_tilde .* (1 - ht.^2);
-    grads.dWh = grads.dWh + xt' * dh_tilde_pre;
-    grads.dUh = grads.dUh + (rt .* h_prev)' * dh_tilde_pre;
-    grads.dbh = grads.dbh + dh_tilde_pre;
-
-    dr_from_h = dh_tilde_pre * model.Uh' .* h_prev;
-    dh_prev = dh_prev + dh_tilde_pre * model.Uh' .* rt;
-
-    % 通过 z = sigmoid(...) 的梯度
-    dz_pre = dz .* zt .* (1 - zt);
-    grads.dWz = grads.dWz + xt' * dz_pre;
-    grads.dUz = grads.dUz + h_prev' * dz_pre;
-    grads.dbz = grads.dbz + dz_pre;
-    dh_prev = dh_prev + dz_pre * model.Uz';
-
-    % 通过 r = sigmoid(...) 的梯度
-    dr_pre = dr_from_h .* rt .* (1 - rt);
-    grads.dWr = grads.dWr + xt' * dr_pre;
-    grads.dUr = grads.dUr + h_prev' * dr_pre;
-    grads.dbr = grads.dbr + dr_pre;
-    dh_prev = dh_prev + dr_pre * model.Ur';
-
-    dh_next = dh_prev;
-end
-
-end
-
-function grads = clip_gradients(grads, maxNorm)
-%CLIP_GRADIENTS  按全局范数裁剪梯度。
-fields = fieldnames(grads);
-totalNorm = 0;
-for i = 1:numel(fields)
-    totalNorm = totalNorm + sum(grads.(fields{i})(:).^2);
-end
-totalNorm = sqrt(totalNorm);
-
-if totalNorm > maxNorm
-    scale = maxNorm / totalNorm;
-    for i = 1:numel(fields)
-        grads.(fields{i}) = grads.(fields{i}) * scale;
-    end
-end
 end
 
 function y = sigmoid(x)
-y = 1 ./ (1 + exp(-max(min(x, 30), -30)));
+y = 1 ./ (1 + exp(-x));
 end

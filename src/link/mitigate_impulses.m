@@ -73,7 +73,9 @@ switch lower(string(method))
             % 未训练：退回到置零
             rOut(mask) = 0;
         end
-        reliability = rel;
+        % 确保double精度和CPU数组（vitdec需要）
+        rOut = double(gather(rOut));
+        reliability = double(gather(rel));
 
     case "ml_cnn_hard"
         % 1D CNN硬置零（用于比较）
@@ -85,7 +87,7 @@ switch lower(string(method))
         [mask, rel, ~, ~] = ml_cnn_impulse_detect(r, model);
         rOut = r;
         rOut(mask) = 0;
-        reliability = rel;
+        reliability = double(rel);
         reliability(mask) = 0;
 
     case "ml_gru"
@@ -103,7 +105,9 @@ switch lower(string(method))
         else
             rOut(mask) = 0;
         end
-        reliability = rel;
+        % 确保double精度和CPU数组（vitdec需要）
+        rOut = double(gather(rOut));
+        reliability = double(gather(rel));
 
     case "ml_gru_hard"
         % GRU硬置零
@@ -115,7 +119,7 @@ switch lower(string(method))
         [mask, rel, ~, ~] = ml_gru_impulse_detect(r, model);
         rOut = r;
         rOut(mask) = 0;
-        reliability = rel;
+        reliability = double(rel);
         reliability(mask) = 0;
 
     otherwise

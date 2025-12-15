@@ -1,54 +1,42 @@
 function model = ml_gru_impulse_model()
-%ML_GRU_IMPULSE_MODEL  返回默认（未训练）的GRU脉冲检测器。
+%ML_GRU_IMPULSE_MODEL  返回基于Deep Learning Toolbox的GRU脉冲检测器。
 %
-% GRU（门控循环单元）对于时序数据中脉冲检测的时间上下文非常有效。
+% 使用dlnetwork创建网络，支持GPU加速训练。
+%
+% 输出:
+%   - 每样本的脉冲概率
+%   - 软译码的可靠性权重
+%   - 清洁符号估计
 
 model = struct();
-model.name = "impulse_gru";
-model.type = "gru";
+model.name = "impulse_gru_dl";
+model.type = "gru_dl";
+model.trained = false;
 
-% 架构
-model.inputSize = 4;     % [实部, 虚部, 幅度, 幅度差分]
-model.hiddenSize = 16;   % GRU隐藏状态大小
-model.outputSize = 4;    % [p_impulse, reliability, clean_real, clean_imag]
+% 网络参数
+model.inputChannels = 4;  % [幅度, 归一化幅度, 幅度差分, 相位]
+model.hiddenSize = 32;    % GRU隐藏状态大小
+model.outputSize = 4;     % [p_impulse, reliability, clean_real, clean_imag]
 
-% 初始化GRU权重
-% GRU有3个门：重置门(r)、更新门(z)和候选门(h~)
-% 每个门都有输入权重(W)和隐藏权重(U)
-rng(42);
-hs = model.hiddenSize;
-is = model.inputSize;
+% 创建网络层
+layers = [
+    sequenceInputLayer(model.inputChannels, 'Name', 'input', 'Normalization', 'none')
 
-% Xavier初始化
-scaleW = sqrt(2 / (is + hs));
-scaleU = sqrt(2 / (hs + hs));
+    % 双向GRU层 - 可以同时利用过去和未来的上下文
+    bilstmLayer(model.hiddenSize, 'OutputMode', 'sequence', 'Name', 'bigru')
 
-% 重置门
-model.Wr = scaleW * randn(is, hs);
-model.Ur = scaleU * randn(hs, hs);
-model.br = zeros(1, hs);
+    % 全连接输出层
+    fullyConnectedLayer(model.outputSize, 'Name', 'fc_out')
+];
 
-% 更新门
-model.Wz = scaleW * randn(is, hs);
-model.Uz = scaleU * randn(hs, hs);
-model.bz = zeros(1, hs);
-
-% 候选隐藏状态
-model.Wh = scaleW * randn(is, hs);
-model.Uh = scaleU * randn(hs, hs);
-model.bh = zeros(1, hs);
-
-% 输出层
-model.Wo = 0.1 * randn(hs, model.outputSize);
-model.bo = [0, 1, 0, 0];  % 偏置reliability趋向1
+% 创建dlnetwork
+model.net = dlnetwork(layers);
 
 % 检测阈值
 model.threshold = 0.5;
 
-% 归一化
-model.inputMean = zeros(1, is);
-model.inputStd = ones(1, is);
-
-model.trained = false;
+% 归一化统计量（训练时计算）
+model.inputMean = zeros(1, model.inputChannels);
+model.inputStd = ones(1, model.inputChannels);
 
 end

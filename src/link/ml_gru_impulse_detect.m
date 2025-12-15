@@ -20,7 +20,53 @@ X = ml_cnn_features(r);  % 复用相同的特征提取
 % 归一化
 Xn = (X - model.inputMean) ./ (model.inputStd + 1e-8);
 
-% GRU前向传播
+% 检查模型类型
+if isfield(model, 'type') && model.type == "gru_dl"
+    % Deep Learning Toolbox dlnetwork推理
+    [pImpulse, reliability, cleanReal, cleanImag] = dl_forward_gru(Xn, model);
+else
+    % 旧版手动GRU推理（向后兼容）
+    [pImpulse, reliability, cleanReal, cleanImag] = legacy_forward_gru(Xn, model, N);
+end
+
+% 应用阈值
+mask = pImpulse >= model.threshold;
+
+% 构造清洁符号
+cleanSym = complex(cleanReal, cleanImag);
+
+% 对检测为脉冲的样本降低可靠性
+reliability(mask) = reliability(mask) .* (1 - pImpulse(mask));
+
+end
+
+%% Deep Learning Toolbox前向推理
+function [pImpulse, reliability, cleanReal, cleanImag] = dl_forward_gru(Xn, model)
+%DL_FORWARD_GRU  使用dlnetwork进行GRU推理。
+
+N = size(Xn, 1);
+
+% 转换为dlarray格式 'CTB' (Channel x Time x Batch)
+XDl = dlarray(single(Xn'), 'CTB');  % [4 x N x 1]
+
+% 前向传播（推理模式）
+out = predict(model.net, XDl);  % [4 x N x 1]
+
+% 提取数据并转换为double精度（vitdec需要double）
+out = double(extractdata(out));  % [4 x N]
+
+% 解析输出
+pImpulse = sigmoid(out(1,:)');       % [N x 1]
+reliability = sigmoid(out(2,:)');     % [N x 1]
+cleanReal = out(3,:)';               % [N x 1]
+cleanImag = out(4,:)';               % [N x 1]
+
+end
+
+%% 旧版手动GRU前向推理（向后兼容）
+function [pImpulse, reliability, cleanReal, cleanImag] = legacy_forward_gru(Xn, model, N)
+%LEGACY_FORWARD_GRU  使用手动实现的GRU进行推理。
+
 hs = model.hiddenSize;
 h = zeros(1, hs);  % 初始隐藏状态
 
@@ -50,15 +96,6 @@ pImpulse = sigmoid(outputs(:, 1));
 reliability = sigmoid(outputs(:, 2));
 cleanReal = outputs(:, 3);
 cleanImag = outputs(:, 4);
-
-% 应用阈值
-mask = pImpulse >= model.threshold;
-
-% 构造清洁符号
-cleanSym = complex(cleanReal, cleanImag);
-
-% 对检测为脉冲的样本降低可靠性
-reliability(mask) = reliability(mask) .* (1 - pImpulse(mask));
 
 end
 
