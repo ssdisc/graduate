@@ -81,10 +81,7 @@ close(fig4);
 
 if isfield(results, "eve") && isfield(results.eve, "example")
     fig5 = figure("Name", "Intercept");
-    nCols = ceil((numel(methods) + 1) / 2);
-    if nCols < 3
-        nCols = numel(methods) + 1;
-    end
+    nCols = numel(methods) + 1;
     tiledlayout(2, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
 
     % Bob
