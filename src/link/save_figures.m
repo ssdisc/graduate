@@ -22,6 +22,32 @@ legend(methods, "Location", "southeast");
 exportgraphics(fig2, fullfile(outDir, "psnr.png"));
 close(fig2);
 
+% 降噪PSNR对比图
+if isfield(results, "denoise") && results.denoise.enabled
+    fig2b = figure("Name", "PSNR Denoised");
+    hold on;
+    colors = lines(numel(methods));
+    for k = 1:numel(methods)
+        % 原始PSNR - 实线
+        plot(EbN0dB, results.psnr(k, :), 'o-', 'Color', colors(k,:), 'LineWidth', 1.5);
+        % 降噪后PSNR - 虚线
+        plot(EbN0dB, results.denoise.psnr(k, :), 's--', 'Color', colors(k,:), 'LineWidth', 1.5);
+    end
+    grid on;
+    xlabel("E_b/N_0 (dB)");
+    ylabel("PSNR (dB)");
+    % 创建图例
+    legendStrs = cell(1, 2*numel(methods));
+    for k = 1:numel(methods)
+        legendStrs{2*k-1} = sprintf("%s (原始)", methods(k));
+        legendStrs{2*k} = sprintf("%s (降噪)", methods(k));
+    end
+    legend(legendStrs, "Location", "southeast", "NumColumns", 2);
+    title("降噪前后PSNR对比");
+    exportgraphics(fig2b, fullfile(outDir, "psnr_denoised.png"));
+    close(fig2b);
+end
+
 if isfield(results, "eve")
     fig2b = figure("Name", "PSNR (Eve)");
     plot(results.eve.ebN0dB, results.eve.psnr.', "o-");
@@ -78,6 +104,72 @@ for k = 1:numel(methods)
 end
 exportgraphics(fig4, fullfile(outDir, "images.png"), 'Resolution', 150);
 close(fig4);
+
+% 降噪前后对比图
+if isfield(results, "denoise") && results.denoise.enabled
+    fig4b = figure("Name", "Denoised Images");
+    % 检查是否有降噪后的图像
+    hasDenoised = false;
+    for k = 1:numel(methods)
+        if isfield(results.example, methods(k)) && isfield(results.example.(methods(k)), "imgRxDenoised")
+            hasDenoised = true;
+            break;
+        end
+    end
+
+    if hasDenoised
+        % 3行布局：TX、RX原始、RX降噪
+        nCols = min(numel(methods), 6);
+        tiledlayout(3, nCols + 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+
+        % 第一行：TX图像
+        nexttile;
+        imshow(imgTx);
+        title("TX (原图)");
+        for k = 1:min(numel(methods), nCols)
+            nexttile;
+            axis off;
+        end
+
+        % 第二行：RX原始图像
+        nexttile;
+        text(0.5, 0.5, "RX原始", "Units", "normalized", "HorizontalAlignment", "center");
+        axis off;
+        for k = 1:min(numel(methods), nCols)
+            nexttile;
+            if isfield(results.example, methods(k))
+                imshow(results.example.(methods(k)).imgRx);
+                title(sprintf("%s", methods(k)));
+            else
+                axis off;
+            end
+        end
+
+        % 第三行：RX降噪后图像
+        nexttile;
+        text(0.5, 0.5, "RX降噪", "Units", "normalized", "HorizontalAlignment", "center");
+        axis off;
+        for k = 1:min(numel(methods), nCols)
+            nexttile;
+            if isfield(results.example, methods(k)) && isfield(results.example.(methods(k)), "imgRxDenoised")
+                imshow(results.example.(methods(k)).imgRxDenoised);
+                % 显示PSNR增益
+                psnrGain = results.denoise.psnrGain(k, :);
+                validGain = psnrGain(~isnan(psnrGain) & ~isinf(psnrGain));
+                if ~isempty(validGain)
+                    title(sprintf("%s (%+.1fdB)", methods(k), mean(validGain)));
+                else
+                    title(sprintf("%s (降噪)", methods(k)));
+                end
+            else
+                axis off;
+            end
+        end
+
+        exportgraphics(fig4b, fullfile(outDir, "images_denoised.png"), 'Resolution', 150);
+    end
+    close(fig4b);
+end
 
 if isfield(results, "eve") && isfield(results.eve, "example")
     fig5 = figure("Name", "Intercept");

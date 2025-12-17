@@ -109,4 +109,13 @@ p.covert.warden.pfaTarget = 0.01;
 p.covert.warden.nObs = 4096;   % 观测窗口（符号数）
 p.covert.warden.nTrials = 200; % 蒙特卡洛试验次数用于估计Pd/Pfa
 
+% 接收端图像降噪（DnCNN）
+p.denoise = struct();
+p.denoise.enable = false;  % 默认关闭，需要先训练模型
+p.denoise.model = [];      % 训练好的模型，由ml_train_image_denoise生成
+% 模型参数（训练时使用）
+p.denoise.depth = 17;      % DnCNN网络深度
+p.denoise.filters = 64;    % 每层滤波器数量
+p.denoise.patchSize = 64;  % 训练patch大小
+
 end
