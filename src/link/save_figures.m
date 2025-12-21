@@ -77,7 +77,75 @@ title(sprintf("99%% OBW=%.1f Hz,  \\eta=%.3f b/s/Hz", results.spectrum.bw99Hz, r
 exportgraphics(fig3, fullfile(outDir, "psd.png"));
 close(fig3);
 
-fig4 = figure("Name", "Images");
+% ========== 分开保存每种方法的结果图片 ==========
+% 创建images子目录
+imagesDir = fullfile(outDir, "images");
+if ~exist(imagesDir, 'dir')
+    mkdir(imagesDir);
+end
+
+% 1. 保存原始发送图像
+figTx = figure("Name", "TX Image", "Visible", "off");
+imshow(imgTx);
+title("TX (原图)", "FontSize", 14);
+exportgraphics(figTx, fullfile(imagesDir, "00_tx_original.png"), 'Resolution', 200);
+close(figTx);
+
+% 2. 为每种方法单独保存接收图像
+for k = 1:numel(methods)
+    if isfield(results.example, methods(k))
+        figRx = figure("Name", sprintf("RX - %s", methods(k)), "Visible", "off");
+        
+        % 获取该方法的PSNR和SSIM
+        psnrVal = results.psnr(k, :);
+        ssimVal = results.ssim(k, :);
+        % 取中间Eb/N0点的值（与example对应）
+        midIdx = ceil(numel(results.ebN0dB)/2);
+        psnrMid = psnrVal(midIdx);
+        ssimMid = ssimVal(midIdx);
+        ebN0Mid = results.ebN0dB(midIdx);
+        
+        imshow(results.example.(methods(k)).imgRx);
+        titleStr = sprintf("RX - %s\nEb/N0=%.0fdB, PSNR=%.2fdB, SSIM=%.3f", ...
+            methods(k), ebN0Mid, psnrMid, ssimMid);
+        title(titleStr, "FontSize", 12);
+        
+        % 文件名带序号，方便排序
+        filename = sprintf("%02d_rx_%s.png", k, lower(strrep(methods(k), " ", "_")));
+        exportgraphics(figRx, fullfile(imagesDir, filename), 'Resolution', 200);
+        close(figRx);
+    end
+end
+
+% 3. 保存TX与各方法RX的对比图（每种方法一张，左TX右RX）
+for k = 1:numel(methods)
+    if isfield(results.example, methods(k))
+        figCmp = figure("Name", sprintf("Compare - %s", methods(k)), "Visible", "off");
+        figCmp.Position = [100 100 800 400];
+        
+        tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+        
+        % 左：TX
+        nexttile;
+        imshow(imgTx);
+        title("TX (原图)", "FontSize", 12);
+        
+        % 右：RX
+        nexttile;
+        imshow(results.example.(methods(k)).imgRx);
+        midIdx = ceil(numel(results.ebN0dB)/2);
+        psnrMid = results.psnr(k, midIdx);
+        ssimMid = results.ssim(k, midIdx);
+        title(sprintf("RX - %s\nPSNR=%.2fdB, SSIM=%.3f", methods(k), psnrMid, ssimMid), "FontSize", 12);
+        
+        filename = sprintf("compare_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
+        exportgraphics(figCmp, fullfile(imagesDir, filename), 'Resolution', 200);
+        close(figCmp);
+    end
+end
+
+% 4. 保存所有方法的汇总对比图（保留原有功能）
+fig4 = figure("Name", "Images", "Visible", "off");
 nMethods = numel(methods);
 nTotal = nMethods + 1;  % +1 for TX image
 % 使用2行布局以获得更好的显示效果
@@ -87,6 +155,7 @@ if nTotal <= 4
     nRows = 1;
     nCols = nTotal;
 end
+fig4.Position = [100 100 300*nCols 300*nRows];
 tiledlayout(nRows, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
 nexttile;
 imshow(imgTx);
@@ -107,7 +176,6 @@ close(fig4);
 
 % 降噪前后对比图
 if isfield(results, "denoise") && results.denoise.enabled
-    fig4b = figure("Name", "Denoised Images");
     % 检查是否有降噪后的图像
     hasDenoised = false;
     for k = 1:numel(methods)
@@ -118,15 +186,61 @@ if isfield(results, "denoise") && results.denoise.enabled
     end
 
     if hasDenoised
+        % 创建denoise子目录
+        denoiseDir = fullfile(outDir, "images_denoise");
+        if ~exist(denoiseDir, 'dir')
+            mkdir(denoiseDir);
+        end
+        
+        midIdx = ceil(numel(results.ebN0dB)/2);
+        ebN0Mid = results.ebN0dB(midIdx);
+        
+        % 为每种方法单独保存降噪前后对比图
+        for k = 1:numel(methods)
+            if isfield(results.example, methods(k)) && isfield(results.example.(methods(k)), "imgRxDenoised")
+                figDen = figure("Name", sprintf("Denoise - %s", methods(k)), "Visible", "off");
+                figDen.Position = [100 100 1200 400];
+                
+                tiledlayout(1, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+                
+                % 左：TX原图
+                nexttile;
+                imshow(imgTx);
+                title("TX (原图)", "FontSize", 12);
+                
+                % 中：RX原始
+                nexttile;
+                imshow(results.example.(methods(k)).imgRx);
+                psnrOrig = results.psnr(k, midIdx);
+                ssimOrig = results.ssim(k, midIdx);
+                title(sprintf("RX - %s (原始)\nPSNR=%.2fdB, SSIM=%.3f", methods(k), psnrOrig, ssimOrig), "FontSize", 12);
+                
+                % 右：RX降噪后
+                nexttile;
+                imshow(results.example.(methods(k)).imgRxDenoised);
+                psnrDen = results.denoise.psnr(k, midIdx);
+                ssimDen = results.denoise.ssim(k, midIdx);
+                psnrGain = psnrDen - psnrOrig;
+                title(sprintf("RX - %s (降噪)\nPSNR=%.2fdB (%+.2fdB), SSIM=%.3f", methods(k), psnrDen, psnrGain, ssimDen), "FontSize", 12);
+                
+                filename = sprintf("denoise_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
+                exportgraphics(figDen, fullfile(denoiseDir, filename), 'Resolution', 200);
+                close(figDen);
+            end
+        end
+        
+        % 保存汇总对比图（保留原有功能）
+        fig4b = figure("Name", "Denoised Images", "Visible", "off");
         % 3行布局：TX、RX原始、RX降噪
         nCols = min(numel(methods), 6);
+        fig4b.Position = [100 100 200*(nCols+1) 600];
         tiledlayout(3, nCols + 1, 'TileSpacing', 'compact', 'Padding', 'compact');
 
         % 第一行：TX图像
         nexttile;
         imshow(imgTx);
         title("TX (原图)");
-        for k = 1:min(numel(methods), nCols)
+        for kk = 1:min(numel(methods), nCols)
             nexttile;
             axis off;
         end
@@ -135,11 +249,11 @@ if isfield(results, "denoise") && results.denoise.enabled
         nexttile;
         text(0.5, 0.5, "RX原始", "Units", "normalized", "HorizontalAlignment", "center");
         axis off;
-        for k = 1:min(numel(methods), nCols)
+        for kk = 1:min(numel(methods), nCols)
             nexttile;
-            if isfield(results.example, methods(k))
-                imshow(results.example.(methods(k)).imgRx);
-                title(sprintf("%s", methods(k)));
+            if isfield(results.example, methods(kk))
+                imshow(results.example.(methods(kk)).imgRx);
+                title(sprintf("%s", methods(kk)));
             else
                 axis off;
             end
@@ -149,17 +263,17 @@ if isfield(results, "denoise") && results.denoise.enabled
         nexttile;
         text(0.5, 0.5, "RX降噪", "Units", "normalized", "HorizontalAlignment", "center");
         axis off;
-        for k = 1:min(numel(methods), nCols)
+        for kk = 1:min(numel(methods), nCols)
             nexttile;
-            if isfield(results.example, methods(k)) && isfield(results.example.(methods(k)), "imgRxDenoised")
-                imshow(results.example.(methods(k)).imgRxDenoised);
+            if isfield(results.example, methods(kk)) && isfield(results.example.(methods(kk)), "imgRxDenoised")
+                imshow(results.example.(methods(kk)).imgRxDenoised);
                 % 显示PSNR增益
-                psnrGain = results.denoise.psnrGain(k, :);
+                psnrGain = results.denoise.psnrGain(kk, :);
                 validGain = psnrGain(~isnan(psnrGain) & ~isinf(psnrGain));
                 if ~isempty(validGain)
-                    title(sprintf("%s (%+.1fdB)", methods(k), mean(validGain)));
+                    title(sprintf("%s (%+.1fdB)", methods(kk), mean(validGain)));
                 else
-                    title(sprintf("%s (降噪)", methods(k)));
+                    title(sprintf("%s (降噪)", methods(kk)));
                 end
             else
                 axis off;
@@ -167,13 +281,66 @@ if isfield(results, "denoise") && results.denoise.enabled
         end
 
         exportgraphics(fig4b, fullfile(outDir, "images_denoised.png"), 'Resolution', 150);
+        close(fig4b);
     end
-    close(fig4b);
 end
 
 if isfield(results, "eve") && isfield(results.eve, "example")
-    fig5 = figure("Name", "Intercept");
+    % 创建eve子目录
+    eveDir = fullfile(outDir, "images_eve");
+    if ~exist(eveDir, 'dir')
+        mkdir(eveDir);
+    end
+    
+    midIdx = ceil(numel(results.ebN0dB)/2);
+    
+    % 为每种方法单独保存Bob vs Eve对比图
+    for k = 1:numel(methods)
+        if isfield(results.example, methods(k)) && isfield(results.eve.example, methods(k))
+            figEve = figure("Name", sprintf("Bob vs Eve - %s", methods(k)), "Visible", "off");
+            figEve.Position = [100 100 1200 400];
+            
+            tiledlayout(1, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
+            
+            % 左：TX原图
+            nexttile;
+            imshow(imgTx);
+            title("TX (原图)", "FontSize", 12);
+            
+            % 中：Bob接收
+            nexttile;
+            imshow(results.example.(methods(k)).imgRx);
+            psnrBob = results.psnr(k, midIdx);
+            ssimBob = results.ssim(k, midIdx);
+            ebN0Bob = results.ebN0dB(midIdx);
+            title(sprintf("Bob - %s\nEb/N0=%.0fdB, PSNR=%.2fdB", methods(k), ebN0Bob, psnrBob), "FontSize", 12);
+            
+            % 右：Eve截获
+            nexttile;
+            imshow(results.eve.example.(methods(k)).imgRx);
+            psnrEve = results.eve.psnr(k, midIdx);
+            ssimEve = results.eve.ssim(k, midIdx);
+            ebN0Eve = results.eve.ebN0dB(midIdx);
+            hdrTxt = "";
+            if isfield(results.eve.example.(methods(k)), "headerOk")
+                if results.eve.example.(methods(k)).headerOk
+                    hdrTxt = " (hdr ok)";
+                else
+                    hdrTxt = " (hdr fail)";
+                end
+            end
+            title(sprintf("Eve - %s%s\nEb/N0=%.0fdB, PSNR=%.2fdB", methods(k), hdrTxt, ebN0Eve, psnrEve), "FontSize", 12);
+            
+            filename = sprintf("bob_vs_eve_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
+            exportgraphics(figEve, fullfile(eveDir, filename), 'Resolution', 200);
+            close(figEve);
+        end
+    end
+    
+    % 保存汇总对比图（保留原有功能）
+    fig5 = figure("Name", "Intercept", "Visible", "off");
     nCols = numel(methods) + 1;
+    fig5.Position = [100 100 200*nCols 400];
     tiledlayout(2, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
 
     % Bob
