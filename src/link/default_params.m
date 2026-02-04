@@ -27,6 +27,17 @@ p.scramble.enable = true;
 p.scramble.pnPolynomial = [1 0 0 1 1]; % x^4 + x + 1
 p.scramble.pnInit = [0 0 0 1];         % 非零初始值
 
+% 混沌加密（图像层面的置乱+扩散加密）
+p.chaosEncrypt = struct();
+p.chaosEncrypt.enable = true;          % 是否启用混沌加密
+p.chaosEncrypt.arnoldIter = 5;         % Arnold置乱迭代次数
+p.chaosEncrypt.chaosMethod = 'logistic'; % 混沌映射: 'logistic', 'henon', 'tent'
+p.chaosEncrypt.diffusionRounds = 2;    % 扩散轮数
+% 混沌参数（密钥）- Logistic映射
+p.chaosEncrypt.chaosParams = struct();
+p.chaosEncrypt.chaosParams.mu = 3.9999;              % Logistic参数 (3.57 < mu <= 4)
+p.chaosEncrypt.chaosParams.x0 = 0.1234567890123456;  % 初值（密钥的一部分）
+
 % 信道编码（卷积码，码率1/2）
 p.fec = struct();
 p.fec.trellis = poly2trellis(7, [171 133]);
@@ -98,6 +109,11 @@ p.eve.scrambleAssumption = "wrong_key";
 %   "none"      : 不知道跳频（不解跳，信号严重失真）
 %   "partial"   : 部分知道（使用错误的初始状态）
 p.eve.fhAssumption = "none";
+% Eve对混沌加密的知识：
+%   "known"     : 知道混沌密钥（能正确解密）
+%   "none"      : 不知道混沌加密（看到加密图像）
+%   "wrong_key" : 使用错误的混沌密钥（解密失败）
+p.eve.chaosAssumption = "none";
 
 % 隐蔽/低截获概率支持（监视者检测）
 p.covert = struct();

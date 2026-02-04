@@ -23,7 +23,17 @@ if denoiseEnabled
 end
 
 imgTx = load_source_image(p.source);
-[payloadBits, meta] = image_to_payload_bits(imgTx, p.payload);
+
+% 混沌加密（图像层面）
+chaosEnabled = isfield(p, 'chaosEncrypt') && isfield(p.chaosEncrypt, 'enable') && p.chaosEncrypt.enable;
+if chaosEnabled
+    [imgTxEnc, chaosEncInfo] = chaos_encrypt(imgTx, p.chaosEncrypt);
+else
+    imgTxEnc = imgTx;
+    chaosEncInfo = struct('enabled', false);
+end
+
+[payloadBits, meta] = image_to_payload_bits(imgTxEnc, p.payload);
 
 [~, preambleSym] = make_preamble(p.frame.preambleLength);
 [headerBits, ~] = build_header_bits(meta, p.frame.magic16);
@@ -113,6 +123,27 @@ if eveEnabled
             end
         otherwise
             error("Unknown eve.fhAssumption: %s", string(p.eve.fhAssumption));
+    end
+
+    % Eve对混沌加密的知识
+    if ~isfield(p.eve, 'chaosAssumption'); p.eve.chaosAssumption = "none"; end
+    switch lower(string(p.eve.chaosAssumption))
+        case "known"
+            % Eve知道混沌密钥（最佳截获情况）
+            chaosEncInfoEve = chaosEncInfo;
+        case "none"
+            % Eve不知道混沌加密，不解密（看到的是加密图像）
+            chaosEncInfoEve = struct('enabled', false);
+        case "wrong_key"
+            % Eve使用错误的混沌密钥
+            if chaosEnabled
+                chaosEncInfoEve = chaosEncInfo;
+                chaosEncInfoEve.chaosParams.x0 = chaosEncInfo.chaosParams.x0 + 1e-10;  % 微小扰动
+            else
+                chaosEncInfoEve = struct('enabled', false);
+            end
+        otherwise
+            error("Unknown eve.chaosAssumption: %s", string(p.eve.chaosAssumption));
     end
 end
 
@@ -255,7 +286,14 @@ for ie = 1:numel(EbN0dBList)
                     nErr(im) = nErr(im) + sum(payloadBitsRx ~= payloadBitsTxTrunc);
                     nTot(im) = nTot(im) + numel(payloadBitsTxTrunc);
 
-                    imgRx = payload_bits_to_image(payloadBitsRx, metaRx);
+                    imgRxEnc = payload_bits_to_image(payloadBitsRx, metaRx);
+
+                    % 混沌解密（Bob知道密钥）
+                    if chaosEnabled
+                        imgRx = chaos_decrypt(imgRxEnc, chaosEncInfo);
+                    else
+                        imgRx = imgRxEnc;
+                    end
 
                     [psnrNow, ssimNow] = image_quality(imgTx, imgRx);
                     if ~isnan(psnrNow)
@@ -320,7 +358,14 @@ for ie = 1:numel(EbN0dBList)
                 nErrEve(im) = nErrEve(im) + sum(payloadBitsEve ~= payloadBitsTxTrunc);
                 nTotEve(im) = nTotEve(im) + numel(payloadBitsTxTrunc);
 
-                imgEve = payload_bits_to_image(payloadBitsEve, metaUse);
+                imgEveEnc = payload_bits_to_image(payloadBitsEve, metaUse);
+
+                % Eve的混沌解密（根据Eve的知识假设）
+                if chaosEnabled && chaosEncInfoEve.enabled
+                    imgEve = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
+                else
+                    imgEve = imgEveEnc;  % Eve不解密或不知道密钥
+                end
 
                 [psnrNowEve, ssimNowEve] = image_quality(imgTx, imgEve);
                 if ~isnan(psnrNowEve)

@@ -9,7 +9,10 @@
       "Bash(dir:*)",
       "Bash(\"D:/Matlab/bin/matlab.exe\":*)",
       "Bash(\"D:/Matlab/bin/matlab.exe\" -batch:*)",
-      "Bash(\"D:/Matlab/bin/matlab.exe\" -batch \"cd(''D:/matlabfiles/graduate''); addpath(genpath(''src'')); run_demo\")"
+      "Bash(\"D:/Matlab/bin/matlab.exe\" -batch \"cd(''D:/matlabfiles/graduate''); addpath(genpath(''src'')); run_demo\")",
+      "Bash(del:*)",
+      "Bash(cmd /c:*)",
+      "Bash(rm:*)"
     ]
   }
 }
