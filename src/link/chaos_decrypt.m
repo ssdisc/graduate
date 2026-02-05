@@ -13,7 +13,7 @@ function imgDec = chaos_decrypt(imgEnc, encInfo)
 %   imgDec  - 解密后的图像（uint8）
 
 arguments
-    imgEnc (:,:) uint8
+    imgEnc (:,:,:) uint8
     encInfo (1,1) struct
 end
 
@@ -23,11 +23,13 @@ if ~isfield(encInfo, 'enabled') || ~encInfo.enabled
     return;
 end
 
-[rows, cols] = size(imgEnc);
-nPixels = rows * cols;
+rows = size(imgEnc, 1);
+cols = size(imgEnc, 2);
+channels = size(imgEnc, 3);
+nElems = numel(imgEnc);
 
 %% 步骤1: 生成相同的混沌密钥流
-seqLen = nPixels * encInfo.diffusionRounds;
+seqLen = nElems * encInfo.diffusionRounds;
 chaosSeq = chaos_generate(seqLen, encInfo.chaosMethod, encInfo.chaosParams);
 
 % 量化为0-255
@@ -39,15 +41,15 @@ imgVec = reshape(imgEnc, [], 1);
 
 for round = encInfo.diffusionRounds:-1:1
     % 当前轮的密钥
-    keyStart = (round - 1) * nPixels + 1;
-    keyEnd = round * nPixels;
+    keyStart = (round - 1) * nElems + 1;
+    keyEnd = round * nElems;
     key = keyStream(keyStart:keyEnd);
 
     % 逆向扩散
-    decrypted = zeros(nPixels, 1, 'uint8');
+    decrypted = zeros(nElems, 1, 'uint8');
 
     % 从最后一个像素开始逆向解密
-    for i = nPixels:-1:1
+    for i = nElems:-1:1
         if i == 1
             prevCipher = key(1);
         else
@@ -61,18 +63,23 @@ for round = encInfo.diffusionRounds:-1:1
     imgVec = decrypted;
 end
 
-imgScrambled = reshape(imgVec, rows, cols);
+imgScrambled = reshape(imgVec, rows, cols, channels);
 
 %% 步骤3: 逆Arnold置乱
-if rows ~= cols
-    % 填充为正方形进行逆变换
-    maxDim = max(rows, cols);
-    imgPad = zeros(maxDim, maxDim, 'uint8');
-    imgPad(1:rows, 1:cols) = imgScrambled;
-    imgDec = arnold_transform(imgPad, encInfo.arnoldIter, true);
-    imgDec = imgDec(1:rows, 1:cols);
-else
-    imgDec = arnold_transform(imgScrambled, encInfo.arnoldIter, true);
+imgDec = zeros(rows, cols, channels, 'uint8');
+for ch = 1:channels
+    imgCh = imgScrambled(:, :, ch);
+    if rows ~= cols
+        % 填充为正方形进行逆变换
+        maxDim = max(rows, cols);
+        imgPad = zeros(maxDim, maxDim, 'uint8');
+        imgPad(1:rows, 1:cols) = imgCh;
+        decCh = arnold_transform(imgPad, encInfo.arnoldIter, true);
+        decCh = decCh(1:rows, 1:cols);
+    else
+        decCh = arnold_transform(imgCh, encInfo.arnoldIter, true);
+    end
+    imgDec(:, :, ch) = decCh;
 end
 
 end

@@ -7,10 +7,10 @@ p.rngSeed = 1;
 
 % 图像源
 p.source = struct();
-p.source.useBuiltinImage = true;
-p.source.imagePath = ""; % useBuiltinImage=false时使用
+p.source.useBuiltinImage = false;
+p.source.imagePath = "images/maodie.png"; % useBuiltinImage=false时使用
 p.source.resizeTo = [128 128]; % [行 列]，[]保持原始尺寸
-p.source.grayscale = true;
+p.source.grayscale = false;
 
 % 载荷格式（图像的原始字节）
 p.payload = struct();
