@@ -1,8 +1,7 @@
 function results = simulate(p)
-%SIMULATE  端到端链路仿真，包含脉冲噪声抑制和图像降噪。
+%SIMULATE  端到端链路仿真，包含脉冲噪声抑制。
 %
 % 返回包含BER/PSNR/PSD结果的结构体，启用时保存图形。
-% 支持接收端图像降噪增强（通过p.denoise.enable启用）。
 
 arguments
     p (1,1) struct
@@ -11,16 +10,6 @@ end
 rng(p.rngSeed);
 set(0, 'DefaultFigureVisible', 'off');
 
-% 检查是否启用图像降噪
-denoiseEnabled = isfield(p, 'denoise') && isfield(p.denoise, 'enable') && p.denoise.enable;
-if denoiseEnabled
-    if isfield(p.denoise, 'model') && ~isempty(p.denoise.model) && p.denoise.model.trained
-        denoiseModel = p.denoise.model;
-    else
-        denoiseModel = ml_image_denoise_model();
-        denoiseModel.trained = false;
-    end
-end
 
 imgTx = load_source_image(p.source);
 
@@ -63,11 +52,6 @@ ber = nan(numel(methods), numel(EbN0dBList));
 psnrVals = nan(numel(methods), numel(EbN0dBList));
 ssimVals = nan(numel(methods), numel(EbN0dBList));
 
-% 降噪后的PSNR/SSIM（如果启用）
-if denoiseEnabled
-    psnrDenoised = nan(numel(methods), numel(EbN0dBList));
-    ssimDenoised = nan(numel(methods), numel(EbN0dBList));
-end
 
 example = struct();
 headerLenBits = numel(headerBits);
@@ -203,13 +187,6 @@ for ie = 1:numel(EbN0dBList)
     nPsnr = zeros(numel(methods), 1);
     nSsim = zeros(numel(methods), 1);
 
-    % 降噪后的累加器
-    if denoiseEnabled
-        psnrAccDen = zeros(numel(methods), 1);
-        ssimAccDen = zeros(numel(methods), 1);
-        nPsnrDen = zeros(numel(methods), 1);
-        nSsimDen = zeros(numel(methods), 1);
-    end
 
     if eveEnabled
         nErrEve = zeros(numel(methods), 1);
@@ -316,28 +293,10 @@ for ie = 1:numel(EbN0dBList)
                         nSsim(im) = nSsim(im) + 1;
                     end
 
-                    % 图像降噪增强
-                    if denoiseEnabled && denoiseModel.trained
-                        imgRxDen = ml_image_denoise(imgRx, denoiseModel);
-                        [psnrDen, ssimDen] = image_quality(imgTx, imgRxDen);
-                        if ~isnan(psnrDen)
-                            psnrAccDen(im) = psnrAccDen(im) + psnrDen;
-                            nPsnrDen(im) = nPsnrDen(im) + 1;
-                        end
-                        if isfinite(ssimDen)
-                            ssimAccDen(im) = ssimAccDen(im) + ssimDen;
-                            nSsimDen(im) = nSsimDen(im) + 1;
-                        end
-                    else
-                        imgRxDen = imgRx;
-                    end
 
                     if frameIdx == 1 && ie == exampleIdx
                         example.(methods(im)).EbN0dB = EbN0dB;
                         example.(methods(im)).imgRx = imgRx;
-                        if denoiseEnabled
-                            example.(methods(im)).imgRxDenoised = imgRxDen;
-                        end
                     end
                 end
             end
@@ -408,17 +367,6 @@ for ie = 1:numel(EbN0dBList)
     psnrVals(:, ie) = psnrOut;
     ssimVals(:, ie) = ssimOut;
 
-    % 降噪后的PSNR/SSIM
-    if denoiseEnabled
-        psnrOutDen = nan(numel(methods), 1);
-        ssimOutDen = nan(numel(methods), 1);
-        validPsnrDen = nPsnrDen > 0;
-        validSsimDen = nSsimDen > 0;
-        psnrOutDen(validPsnrDen) = psnrAccDen(validPsnrDen) ./ nPsnrDen(validPsnrDen);
-        ssimOutDen(validSsimDen) = ssimAccDen(validSsimDen) ./ nSsimDen(validSsimDen);
-        psnrDenoised(:, ie) = psnrOutDen;
-        ssimDenoised(:, ie) = ssimOutDen;
-    end
 
     if eveEnabled
         berEve(:, ie) = nErrEve ./ max(nTotEve, 1);
@@ -447,19 +395,6 @@ results.ssim = ssimVals;
 results.example = example;
 results.spectrum = struct("freqHz", freqHz, "psd", psd, "bw99Hz", bw99Hz, "etaBpsHz", etaBpsHz);
 
-% 添加降噪结果
-if denoiseEnabled
-    results.denoise = struct();
-    results.denoise.enabled = true;
-    results.denoise.modelTrained = denoiseModel.trained;
-    results.denoise.psnr = psnrDenoised;
-    results.denoise.ssim = ssimDenoised;
-    % 计算降噪增益
-    results.denoise.psnrGain = psnrDenoised - psnrVals;
-    results.denoise.ssimGain = ssimDenoised - ssimVals;
-else
-    results.denoise = struct('enabled', false);
-end
 
 if eveEnabled
     results.eve = struct();

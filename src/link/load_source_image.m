@@ -1,5 +1,5 @@
 function img = load_source_image(s)
-%LOAD_SOURCE_IMAGE  加载并预处理源图像。
+%LOAD_SOURCE_IMAGE  加载并预处理源图像，读取默认图像或自定义图像路径，设置灰度图或彩色图像，调整图像大小。
 
 if isfield(s, "useBuiltinImage") && s.useBuiltinImage
     img = imread("cameraman.tif");

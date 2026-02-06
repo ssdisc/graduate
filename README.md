@@ -252,49 +252,7 @@ results = simulate(p);
 train_ml_impulse_models  % 自动训练并保存到models/目录
 ```
 
-### 9. 接收端图像降噪（DnCNN）
-
-| 功能 | 文件 | 说明 |
-|------|------|------|
-| 模型定义 | `ml_image_denoise_model.m` | 创建DnCNN网络结构 |
-| 图像降噪 | `ml_image_denoise.m` | 使用训练好的模型进行降噪 |
-| 模型训练 | `ml_train_image_denoise.m` | 训练降噪模型 |
-
-#### DnCNN架构（残差学习）
-
-```
-输入图像 → Conv(64,k=3) → ReLU
-        → [Conv(64,k=3) → BN → ReLU] × 15
-        → Conv(1,k=3) → 残差输出
-去噪图像 = 输入图像 - 残差
-```
-
-#### 训练图像降噪模型
-
-```matlab
-% 方法1：使用训练脚本
-train_image_denoise_model  % 自动训练并保存到models/目录
-
-% 方法2：手动训练
-p = default_params();
-[denoiseModel, report] = ml_train_image_denoise(p, 'epochs', 30, 'nImages', 50);
-```
-
-#### 在仿真中使用
-
-```matlab
-p = default_params();
-load('models/image_denoise_model.mat', 'denoiseModel');
-p.denoise.enable = true;
-p.denoise.model = denoiseModel;
-results = simulate(p);
-
-% 查看降噪效果
-fprintf('PSNR增益: %.2f dB\n', mean(results.denoise.psnrGain(:), 'omitnan'));
-fprintf('SSIM增益: %.4f\n', mean(results.denoise.ssimGain(:), 'omitnan'));
-```
-
-### 10. 隐蔽性分析
+### 9. 隐蔽性分析
 
 | 功能 | 文件 | 说明 |
 |------|------|------|
@@ -306,7 +264,7 @@ Eve扰码假设模式：
 - `none`: Eve不解扰
 - `wrong_key`: Eve使用错误密钥（图像乱码）
 
-### 11. 频谱分析
+### 10. 频谱分析
 
 | 功能 | 文件 | 说明 |
 |------|------|------|
@@ -361,7 +319,6 @@ graduate/
 ├── src/
 │   ├── run_demo.m              # 主演示脚本
 │   ├── train_ml_impulse_models.m  # ML脉冲抑制模型训练脚本
-│   ├── train_image_denoise_model.m  # 图像降噪模型训练脚本
 │   ├── demo_ml_impulse_mitigation.m  # ML抑制演示
 │   └── link/
 │       ├── simulate.m          # 端到端仿真主函数
@@ -420,11 +377,6 @@ graduate/
 │       ├── ml_impulse_detect.m
 │       ├── ml_impulse_features.m
 │       ├── ml_train_impulse_lr.m
-│       │
-│       │── # ML模型 - 图像降噪(DnCNN)
-│       ├── ml_image_denoise_model.m
-│       ├── ml_image_denoise.m
-│       ├── ml_train_image_denoise.m
 │       │
 │       │── # 隐蔽性分析
 │       ├── warden_energy_detector.m

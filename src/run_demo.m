@@ -34,13 +34,6 @@ if trainML
         'nBlocks', 100, 'blockLen', 256, 'epochs', 15, 'verbose', true);
     fprintf('\n');
 
-    % 训练图像降噪DnCNN模型
-    fprintf('训练图像降噪DnCNN模型...\n');
-    [denoiseModel, ~] = ml_train_image_denoise(p, ...
-        'epochs', 20, 'nImages', 30, 'useGPU', true, 'verbose', true);
-    p.denoise.enable = true;
-    p.denoise.model = denoiseModel;
-    fprintf('\n');
 else
     % 不训练时，从方法列表中移除未训练的ML模型
     p.mitigation.methods = ["none", "blanking", "clipping", "ml_blanking"];
@@ -56,29 +49,4 @@ results = simulate(p);
 
 disp(results.summary);
 
-%% 显示降噪效果
-if isfield(results, 'denoise') && results.denoise.enabled
-    fprintf('\n========================================\n');
-    fprintf('图像降噪效果（按抑制方法）\n');
-    fprintf('========================================\n');
-
-    methods = p.mitigation.methods;
-    nMethods = numel(methods);
-    nEbN0 = numel(p.sim.ebN0dBList);
-
-    % 显示每种方法的降噪增益
-    for m = 1:nMethods
-        methodName = methods(m);
-        psnrOrig = results.psnr(m, :);
-        psnrDen = results.denoise.psnr(m, :);
-        psnrGain = results.denoise.psnrGain(m, :);
-
-        % 只显示有效数据
-        validIdx = ~isnan(psnrGain) & ~isinf(psnrGain);
-        if any(validIdx)
-            avgGain = mean(psnrGain(validIdx));
-            fprintf('%s: 平均PSNR增益 %+.2f dB\n', methodName, avgGain);
-        end
-    end
-end
 end
