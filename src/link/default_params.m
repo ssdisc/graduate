@@ -1,33 +1,28 @@
 function p = default_params()
-%DEFAULT_PARAMS  赛道一基准链路的默认参数集。
+%DEFAULT_PARAMS  赛道一基准链路的默认参数集（仿真控制置前，其余按链路顺序）。
 
 p = struct();
 
+% 全局随机种子
 p.rngSeed = 1;
 
-% 图像源
+%% 仿真控制
+p.sim = struct();
+p.sim.ebN0dBList = 0:2:10;
+p.sim.nFramesPerPoint = 1;
+p.sim.saveFigures = true;
+p.sim.resultsDir = fullfile(pwd, "results");
+p.sim.exampleEbN0dB = inf; % 示例图默认取最高Eb/N0；设为具体值时取最近点
+
+%% 发送端（TX）
+% 1) 图像源
 p.source = struct();
 p.source.useBuiltinImage = false;
 p.source.imagePath = "images/maodie.png"; % useBuiltinImage=false时使用
 p.source.resizeTo = [128 128]; % [行 列]，[]保持原始尺寸
 p.source.grayscale = false;
 
-% 载荷格式（图像的原始字节）
-p.payload = struct();
-p.payload.bitsPerPixel = 8;
-
-% 前导/帧
-p.frame = struct();
-p.frame.preambleLength = 127; % 比特（BPSK），PN序列
-p.frame.magic16 = hex2dec('A55A');
-
-% 扰码（用作白化/轻量加密）
-p.scramble = struct();
-p.scramble.enable = true;
-p.scramble.pnPolynomial = [1 0 0 1 1]; % x^4 + x + 1
-p.scramble.pnInit = [0 0 0 1];         % 非零初始值
-
-% 混沌加密（图像层面的置乱+扩散加密）
+% 2) 混沌加密（图像层面的置乱+扩散加密）
 p.chaosEncrypt = struct();
 p.chaosEncrypt.enable = true;          % 是否启用混沌加密
 p.chaosEncrypt.arnoldIter = 5;         % Arnold置乱迭代次数
@@ -38,7 +33,22 @@ p.chaosEncrypt.chaosParams = struct();
 p.chaosEncrypt.chaosParams.mu = 3.9999;              % Logistic参数 (3.57 < mu <= 4)
 p.chaosEncrypt.chaosParams.x0 = 0.1234567890123456;  % 初值（密钥的一部分）
 
-% 信道编码（卷积码，码率1/2）
+% 3) 载荷格式（图像的原始字节）
+p.payload = struct();
+p.payload.bitsPerPixel = 8;
+
+% 4) 前导/帧
+p.frame = struct();
+p.frame.preambleLength = 127; % 比特（BPSK），PN序列
+p.frame.magic16 = hex2dec('A55A');
+
+% 5) 扰码（用作白化/轻量加密）
+p.scramble = struct();
+p.scramble.enable = true;
+p.scramble.pnPolynomial = [1 0 0 1 1]; % x^4 + x + 1
+p.scramble.pnInit = [0 0 0 1];         % 非零初始值
+
+% 6) 信道编码（卷积码，码率1/2）
 p.fec = struct();
 p.fec.trellis = poly2trellis(7, [171 133]);
 p.fec.tracebackDepth = 34;
@@ -46,16 +56,16 @@ p.fec.opmode = 'trunc'; % 'trunc'简化处理
 p.fec.decisionType = 'soft'; % 'hard' | 'soft'
 p.fec.softBits = 3; % vitdec中的nsdec(1..13)，decisionType='soft'时使用
 
-% 交织（块交织器）
+% 7) 交织（块交织器）
 p.interleaver = struct();
 p.interleaver.enable = true;
 p.interleaver.nRows = 64;
 
-% 调制
+% 8) 调制
 p.mod = struct();
 p.mod.type = 'BPSK';
 
-% 跳频（Frequency Hopping）
+% 9) 跳频（Frequency Hopping）
 p.fh = struct();
 p.fh.enable = true;              % 是否启用跳频
 p.fh.nFreqs = 8;                 % 跳频频点数量
@@ -67,13 +77,15 @@ p.fh.pnInit = [1 0 0 1];         % 跳频PN序列初始状态
 % 例如：8个频点均匀分布在 [-0.35, 0.35]
 p.fh.freqSet = linspace(-0.35, 0.35, p.fh.nFreqs);
 
-% 信道：AWGN + 伯努利-高斯脉冲噪声
+%% 信道
+% AWGN + 伯努利-高斯脉冲噪声
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
 p.channel.impulseProb = 0.01;    % 每个符号产生脉冲的概率
 p.channel.impulseToBgRatio = 50; % 脉冲方差 = 比值 * 背景方差
 
-% 脉冲抑制
+%% 接收端（RX）
+% 10) 脉冲抑制
 p.mitigation = struct();
 p.mitigation.methods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru"]; % 运行并比较
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
@@ -83,18 +95,11 @@ p.mitigation.ml = ml_impulse_lr_model();      % 传统逻辑回归模型
 p.mitigation.mlCnn = ml_cnn_impulse_model();  % 1D CNN模型（默认未训练）
 p.mitigation.mlGru = ml_gru_impulse_model();  % GRU模型（默认未训练）
 
-% 软量化（用于vitdec 'soft'）
+% 11) 软量化（用于vitdec 'soft'）
 p.softMetric = struct();
 p.softMetric.clipA = 4.0; % 量化前将real(symbol)裁剪到[-A, A]
 
-% 仿真
-p.sim = struct();
-p.sim.ebN0dBList = 0:2:10;
-p.sim.nFramesPerPoint = 1;
-p.sim.saveFigures = true;
-p.sim.resultsDir = fullfile(pwd, "results");
-p.sim.exampleEbN0dB = inf; % 示例图默认取最高Eb/N0；设为具体值时取最近点
-
+%% 截获/隐蔽分析
 % 窃听者/截获者（Eve）
 p.eve = struct();
 p.eve.enable = true;
@@ -125,14 +130,5 @@ p.covert.warden.enable = true;
 p.covert.warden.pfaTarget = 0.01;
 p.covert.warden.nObs = 4096;   % 观测窗口（符号数）
 p.covert.warden.nTrials = 200; % 蒙特卡洛试验次数用于估计Pd/Pfa
-
-% 接收端图像降噪（DnCNN）
-p.denoise = struct();
-p.denoise.enable = false;  % 默认关闭，需要先训练模型
-p.denoise.model = [];      % 训练好的模型，由ml_train_image_denoise生成
-% 模型参数（训练时使用）
-p.denoise.depth = 17;      % DnCNN网络深度
-p.denoise.filters = 64;    % 每层滤波器数量
-p.denoise.patchSize = 64;  % 训练patch大小
 
 end
