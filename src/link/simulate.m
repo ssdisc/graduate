@@ -71,7 +71,18 @@ end
 
 example = struct();
 headerLenBits = numel(headerBits);
-exampleIdx = ceil(numel(EbN0dBList)/2);
+if isfield(p.sim, "exampleEbN0dB") && ~isempty(p.sim.exampleEbN0dB)
+    exampleEbN0 = double(p.sim.exampleEbN0dB);
+    if isfinite(exampleEbN0)
+        [~, exampleIdx] = min(abs(EbN0dBList - exampleEbN0));
+    elseif exampleEbN0 > 0
+        exampleIdx = numel(EbN0dBList);
+    else
+        exampleIdx = 1;
+    end
+else
+    exampleIdx = numel(EbN0dBList);
+end
 
 eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
 if eveEnabled

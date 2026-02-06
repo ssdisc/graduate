@@ -99,11 +99,17 @@ for k = 1:numel(methods)
         % 获取该方法的PSNR和SSIM
         psnrVal = results.psnr(k, :);
         ssimVal = results.ssim(k, :);
-        % 取中间Eb/N0点的值（与example对应）
-        midIdx = ceil(numel(results.ebN0dB)/2);
-        psnrMid = psnrVal(midIdx);
-        ssimMid = ssimVal(midIdx);
-        ebN0Mid = results.ebN0dB(midIdx);
+        % 与example图像保持一致的Eb/N0索引
+        if isfield(results.example.(methods(k)), "EbN0dB")
+            ebN0Sel = double(results.example.(methods(k)).EbN0dB);
+            [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
+        else
+            exampleIdx = numel(results.ebN0dB);
+            ebN0Sel = results.ebN0dB(exampleIdx);
+        end
+        psnrMid = psnrVal(exampleIdx);
+        ssimMid = ssimVal(exampleIdx);
+        ebN0Mid = ebN0Sel;
         
         imshow(results.example.(methods(k)).imgRx);
         titleStr = sprintf("RX - %s\nEb/N0=%.0fdB, PSNR=%.2fdB, SSIM=%.3f", ...
@@ -133,9 +139,14 @@ for k = 1:numel(methods)
         % 右：RX
         nexttile;
         imshow(results.example.(methods(k)).imgRx);
-        midIdx = ceil(numel(results.ebN0dB)/2);
-        psnrMid = results.psnr(k, midIdx);
-        ssimMid = results.ssim(k, midIdx);
+        if isfield(results.example.(methods(k)), "EbN0dB")
+            ebN0Sel = double(results.example.(methods(k)).EbN0dB);
+            [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
+        else
+            exampleIdx = numel(results.ebN0dB);
+        end
+        psnrMid = results.psnr(k, exampleIdx);
+        ssimMid = results.ssim(k, exampleIdx);
         title(sprintf("RX - %s\nPSNR=%.2fdB, SSIM=%.3f", methods(k), psnrMid, ssimMid), "FontSize", 12);
         
         filename = sprintf("compare_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
@@ -192,12 +203,17 @@ if isfield(results, "denoise") && results.denoise.enabled
             mkdir(denoiseDir);
         end
         
-        midIdx = ceil(numel(results.ebN0dB)/2);
-        ebN0Mid = results.ebN0dB(midIdx);
-        
         % 为每种方法单独保存降噪前后对比图
         for k = 1:numel(methods)
             if isfield(results.example, methods(k)) && isfield(results.example.(methods(k)), "imgRxDenoised")
+                if isfield(results.example.(methods(k)), "EbN0dB")
+                    ebN0Sel = double(results.example.(methods(k)).EbN0dB);
+                    [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
+                else
+                    exampleIdx = numel(results.ebN0dB);
+                    ebN0Sel = results.ebN0dB(exampleIdx);
+                end
+
                 figDen = figure("Name", sprintf("Denoise - %s", methods(k)), "Visible", "off");
                 figDen.Position = [100 100 1200 400];
                 
@@ -211,17 +227,17 @@ if isfield(results, "denoise") && results.denoise.enabled
                 % 中：RX原始
                 nexttile;
                 imshow(results.example.(methods(k)).imgRx);
-                psnrOrig = results.psnr(k, midIdx);
-                ssimOrig = results.ssim(k, midIdx);
-                title(sprintf("RX - %s (原始)\nPSNR=%.2fdB, SSIM=%.3f", methods(k), psnrOrig, ssimOrig), "FontSize", 12);
+                psnrOrig = results.psnr(k, exampleIdx);
+                ssimOrig = results.ssim(k, exampleIdx);
+                title(sprintf("RX - %s (原始)\nEb/N0=%.0fdB, PSNR=%.2fdB, SSIM=%.3f", methods(k), ebN0Sel, psnrOrig, ssimOrig), "FontSize", 12);
                 
                 % 右：RX降噪后
                 nexttile;
                 imshow(results.example.(methods(k)).imgRxDenoised);
-                psnrDen = results.denoise.psnr(k, midIdx);
-                ssimDen = results.denoise.ssim(k, midIdx);
+                psnrDen = results.denoise.psnr(k, exampleIdx);
+                ssimDen = results.denoise.ssim(k, exampleIdx);
                 psnrGain = psnrDen - psnrOrig;
-                title(sprintf("RX - %s (降噪)\nPSNR=%.2fdB (%+.2fdB), SSIM=%.3f", methods(k), psnrDen, psnrGain, ssimDen), "FontSize", 12);
+                title(sprintf("RX - %s (降噪)\nEb/N0=%.0fdB, PSNR=%.2fdB (%+.2fdB), SSIM=%.3f", methods(k), ebN0Sel, psnrDen, psnrGain, ssimDen), "FontSize", 12);
                 
                 filename = sprintf("denoise_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
                 exportgraphics(figDen, fullfile(denoiseDir, filename), 'Resolution', 200);
@@ -292,11 +308,16 @@ if isfield(results, "eve") && isfield(results.eve, "example")
         mkdir(eveDir);
     end
     
-    midIdx = ceil(numel(results.ebN0dB)/2);
-    
     % 为每种方法单独保存Bob vs Eve对比图
     for k = 1:numel(methods)
         if isfield(results.example, methods(k)) && isfield(results.eve.example, methods(k))
+            if isfield(results.example.(methods(k)), "EbN0dB")
+                ebN0Sel = double(results.example.(methods(k)).EbN0dB);
+                [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
+            else
+                exampleIdx = numel(results.ebN0dB);
+            end
+
             figEve = figure("Name", sprintf("Bob vs Eve - %s", methods(k)), "Visible", "off");
             figEve.Position = [100 100 1200 400];
             
@@ -310,17 +331,17 @@ if isfield(results, "eve") && isfield(results.eve, "example")
             % 中：Bob接收
             nexttile;
             imshow(results.example.(methods(k)).imgRx);
-            psnrBob = results.psnr(k, midIdx);
-            ssimBob = results.ssim(k, midIdx);
-            ebN0Bob = results.ebN0dB(midIdx);
+            psnrBob = results.psnr(k, exampleIdx);
+            ssimBob = results.ssim(k, exampleIdx);
+            ebN0Bob = results.ebN0dB(exampleIdx);
             title(sprintf("Bob - %s\nEb/N0=%.0fdB, PSNR=%.2fdB", methods(k), ebN0Bob, psnrBob), "FontSize", 12);
             
             % 右：Eve截获
             nexttile;
             imshow(results.eve.example.(methods(k)).imgRx);
-            psnrEve = results.eve.psnr(k, midIdx);
-            ssimEve = results.eve.ssim(k, midIdx);
-            ebN0Eve = results.eve.ebN0dB(midIdx);
+            psnrEve = results.eve.psnr(k, exampleIdx);
+            ssimEve = results.eve.ssim(k, exampleIdx);
+            ebN0Eve = results.eve.ebN0dB(exampleIdx);
             hdrTxt = "";
             if isfield(results.eve.example.(methods(k)), "headerOk")
                 if results.eve.example.(methods(k)).headerOk
