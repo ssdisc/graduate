@@ -6,6 +6,10 @@ function rxDehopped = fh_demodulate(rxSym, hopInfo)
 % 输入:
 %   rxSym   - 接收到的跳频符号 (复数列向量)
 %   hopInfo - 跳频信息结构体（来自fh_modulate）
+%             .enable      - 是否启用跳频
+%             .hopLen      - 每跳符号数
+%             .nHops       - 总跳数
+%             .freqOffsets - 每跳频偏序列
 %
 % 输出:
 %   rxDehopped - 解跳后的基带符号

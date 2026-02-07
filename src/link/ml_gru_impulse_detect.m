@@ -3,7 +3,13 @@ function [mask, reliability, cleanSym, pImpulse] = ml_gru_impulse_detect(rIn, mo
 %
 % 输入:
 %   rIn   - 复数接收符号 (N x 1)
-%   model - 来自ml_train_gru_impulse的已训练GRU模型
+%   model - 来自ml_train_gru_impulse的GRU模型结构体
+%           .type, .threshold
+%           .inputMean, .inputStd
+%           .net（DL模型）
+%           旧版兼容字段: .hiddenSize, .outputSize
+%                        .Wr, .Ur, .br, .Wz, .Uz, .bz
+%                        .Wh, .Uh, .bh, .Wo, .bo
 %
 % 输出:
 %   mask       - 二值脉冲掩码（逻辑型，N x 1）

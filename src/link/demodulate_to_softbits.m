@@ -3,9 +3,13 @@ function soft = demodulate_to_softbits(r, mod, fec, softCfg, reliability)
 %
 % 输入:
 %   r          - 接收符号（复数或实数）
-%   mod        - 调制参数
-%   fec        - FEC参数（decisionType, softBits）
-%   softCfg    - 软度量配置（clipA）
+%   mod        - 调制参数结构体
+%                .type - 调制类型（当前支持"BPSK"）
+%   fec        - FEC参数结构体
+%                .decisionType - 'hard' 或 'soft'
+%                .softBits     - 软判决量化位数（soft模式）
+%   softCfg    - 软度量配置结构体
+%                .clipA - 度量截断阈值
 %   reliability- （可选）每符号可靠性权重（0-1）
 %                低可靠性将软输出推向"擦除"（中间值）
 

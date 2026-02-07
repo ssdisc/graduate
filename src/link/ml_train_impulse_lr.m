@@ -11,6 +11,18 @@ function [model, report] = ml_train_impulse_lr(p, opts)
 %   [model, report] = ml_train_impulse_lr(p);
 %   p.mitigation.ml = model;
 %   results = simulate(p);
+%
+% 输入:
+%   p    - 参数结构体（default_params）
+%          主要使用: p.mod, p.channel, p.mitigation
+%   opts - 训练选项结构体（Name-Value）
+%          .nBlocks, .blockLen, .ebN0dBRange
+%          .pfaTarget, .epochs, .batchSize
+%          .lr, .l2, .verbose
+%
+% 输出:
+%   model  - 训练后的逻辑回归模型结构体
+%   report - 训练报告结构体（阈值/检测率等）
 
 arguments
     p (1,1) struct

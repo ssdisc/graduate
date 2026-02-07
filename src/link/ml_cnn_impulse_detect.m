@@ -3,7 +3,12 @@ function [mask, reliability, cleanSym, pImpulse] = ml_cnn_impulse_detect(rIn, mo
 %
 % 输入:
 %   rIn   - 复数接收符号 (N x 1)
-%   model - 来自ml_train_cnn_impulse的已训练CNN模型
+%   model - 来自ml_train_cnn_impulse的CNN模型结构体
+%           .type, .threshold
+%           .inputMean, .inputStd
+%           .net（DL模型）
+%           旧版兼容字段: .conv1KernelSize, .conv2KernelSize
+%                        .halfWin, .W1, .b1, .W2, .b2, .Wo, .bo
 %
 % 输出:
 %   mask       - 二值脉冲掩码（逻辑型，N x 1）

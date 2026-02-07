@@ -1,6 +1,15 @@
 function [rOut, reliability] = mitigate_impulses(rIn, method, mit)
 %MITIGATE_IMPULSES  脉冲抑制，可选软可靠性输出。
 %
+% 输入:
+%   rIn    - 接收符号序列
+%   method - 抑制方法名称
+%   mit    - 抑制参数结构体
+%            .thresholdStrategy - 'median' 或 'fixed'
+%            .thresholdAlpha    - 中值阈值系数（median策略）
+%            .thresholdFixed    - 固定阈值（fixed策略）
+%            .ml, .mlCnn, .mlGru- 对应ML模型（可选）
+%
 % 输出:
 %   rOut       - 抑制后的符号（与rIn大小相同）
 %   reliability- 软可靠性权重（0-1），用于加权软译码器输入

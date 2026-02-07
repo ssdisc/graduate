@@ -1,5 +1,17 @@
 function [psd, f, bw99, eta] = estimate_spectrum(sym, modInfo)
 %ESTIMATE_SPECTRUM  估计PSD和99%占用带宽。
+%
+% 输入:
+%   sym     - 基带符号序列
+%   modInfo - 调制信息结构体
+%             .bitsPerSymbol - 每符号比特数
+%             .codeRate      - 码率
+%
+% 输出:
+%   psd  - 功率谱密度估计
+%   f    - 频率轴（Hz）
+%   bw99 - 99%占用带宽（Hz）
+%   eta  - 频谱效率（bit/s/Hz）
 
 Rs = 10e3;      % 参考图的符号速率（Hz）
 sps = 8;        % 每符号采样数

@@ -1,14 +1,21 @@
 function m = warden_energy_detector(txBurst, N0, ch, maxDelaySymbols, det)
 %WARDEN_ENERGY_DETECTOR  辐射计（能量检测器）Pd/Pfa估计。
 %
-% txBurst: 发送符号（无前导延迟），列向量。
-% N0: channel_bg_impulsive()使用的噪声功率谱密度。
-% ch: channel_bg_impulsive()使用的信道配置。
-% maxDelaySymbols: 随机前导零延迟范围[0, maxDelaySymbols]。
-% det: 结构体，包含字段：
-%   - pfaTarget (0..1)
-%   - nObs（观测窗口长度，符号数）
-%   - nTrials（蒙特卡洛试验次数）
+% 输入:
+%   txBurst         - 发送符号（无前导延迟），列向量
+%   N0              - 背景噪声功率谱密度
+%   ch              - 信道配置结构体（同channel_bg_impulsive）
+%                     .impulseProb, .impulseToBgRatio
+%   maxDelaySymbols - 随机前导零延迟范围[0, maxDelaySymbols]
+%   det             - 检测器配置结构体
+%                     .pfaTarget - 目标虚警率(0,1)
+%                     .nObs      - 观测窗口长度（符号数）
+%                     .nTrials   - 蒙特卡洛试验次数
+%
+% 输出:
+%   m - 检测性能结构体
+%       .threshold, .pfaEst, .pdEst, .peEst
+%       .pfaTarget, .nObs, .nTrials
 
 arguments
     txBurst (:,1) double

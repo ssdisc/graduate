@@ -1,5 +1,17 @@
 function [headerBits, header] = build_header_bits(meta, magic16)
 %BUILD_HEADER_BITS  构建固定长度帧头比特流。
+%
+% 输入:
+%   meta    - 载荷元数据结构体
+%             .rows, .cols, .channels
+%             .bitsPerPixel, .payloadBytes
+%   magic16 - 帧头魔数（uint16）
+%
+% 输出:
+%   headerBits - 帧头比特流（列向量）
+%   header     - 帧头结构体
+%                .magic, .rows, .cols, .channels
+%                .bitsPerPixel, .payloadBytes
 
 header = struct();
 header.magic = uint16(magic16);

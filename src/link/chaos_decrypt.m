@@ -8,6 +8,12 @@ function imgDec = chaos_decrypt(imgEnc, encInfo)
 % 输入:
 %   imgEnc  - 加密图像（uint8）
 %   encInfo - 加密信息结构体（来自chaos_encrypt）
+%             .enabled        - 是否启用解密（false时直接透传）
+%             .spatialMethod  - 空间置乱方法（'arnold'/'chaos_permutation'）
+%             .arnoldIter     - Arnold逆置乱迭代次数（arnold模式）
+%             .chaosMethod    - 混沌映射类型
+%             .chaosParams    - 混沌参数（与加密一致）
+%             .diffusionRounds- 扩散轮数（与加密一致）
 %
 % 输出:
 %   imgDec  - 解密后的图像（uint8）

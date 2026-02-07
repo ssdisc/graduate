@@ -13,11 +13,17 @@ function [imgEnc, encInfo] = chaos_encrypt(imgIn, enc)
 %           .arnoldIter    - Arnold置乱迭代次数
 %           .chaosMethod   - 混沌映射类型 ('logistic', 'henon', 'tent')
 %           .chaosParams   - 混沌参数（密钥）
+%                            logistic: .mu, .x0
+%                            henon   : .a, .b, .x0, .y0
+%                            tent    : .mu, .x0
 %           .diffusionRounds - 扩散轮数
 %
 % 输出:
 %   imgEnc  - 加密后的图像（uint8）
 %   encInfo - 加密信息结构体（用于解密）
+%             .enabled, .origRows, .origCols, .origChannels
+%             .arnoldIter, .spatialMethod, .chaosMethod
+%             .chaosParams, .diffusionRounds
 
 arguments
     imgIn (:,:,:) uint8
@@ -57,8 +63,8 @@ if rows == cols
 else
     [perm, ~] = chaos_permutation(rows * cols, enc.chaosMethod, enc.chaosParams);
     for ch = 1:channels
-        imgVec = reshape(imgIn(:, :, ch), [], 1);
-        imgVec = imgVec(perm);
+        imgVec = reshape(imgIn(:, :, ch), [], 1); %冒号全取，中括号自动推断
+        imgVec = imgVec(perm); %序列索引置乱
         imgScrambled(:, :, ch) = reshape(imgVec, rows, cols);
     end
     spatialMethod = "chaos_permutation";

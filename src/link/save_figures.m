@@ -1,5 +1,17 @@
 function save_figures(outDir, imgTx, results)
 %SAVE_FIGURES  将标准图形（BER/PSNR/PSD/图像）保存到磁盘。
+%
+% 输入:
+%   outDir  - 输出目录
+%   imgTx   - 发送端原图
+%   results - 仿真结果结构体
+%             .methods, .ebN0dB, .ber, .psnr, .ssim
+%             .spectrum（freqHz, psd, bw99Hz, etaBpsHz）
+%             .example（按方法保存示例接收图）
+%             .eve（可选）, .covert.warden（可选）
+%
+% 输出:
+%   无（直接写图到磁盘）
 
 methods = results.methods;
 EbN0dB = results.ebN0dB;

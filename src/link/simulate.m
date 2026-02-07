@@ -1,6 +1,13 @@
 function results = simulate(p)
 %SIMULATE  端到端链路仿真，包含脉冲噪声抑制。
 %
+% 输入:
+%   p - 仿真参数结构体（建议由default_params()生成）
+%       .rngSeed, .sim, .source, .chaosEncrypt, .payload
+%       .frame, .scramble, .fec, .interleaver, .mod, .fh
+%       .channel, .mitigation, .softMetric
+%       .eve（可选）, .covert（可选）
+%
 % 返回包含BER/PSNR/PSD结果的结构体，启用时保存图形。
 
 arguments

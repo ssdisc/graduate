@@ -4,7 +4,10 @@ function seq = chaos_generate(n, method, params)
 % 输入:
 %   n      - 序列长度
 %   method - 混沌映射类型: 'logistic', 'henon', 'tent'
-%   params - 参数结构体
+%   params - 混沌参数结构体（字段随method变化）
+%            method='logistic': params.mu, params.x0
+%            method='henon'   : params.a, params.b, params.x0, params.y0
+%            method='tent'    : params.mu, params.x0
 %
 % 输出:
 %   seq    - 混沌序列 (n x 1)，值域 [0, 1]

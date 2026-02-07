@@ -4,7 +4,10 @@ function [perm, invPerm] = chaos_permutation(n, method, params)
 % 输入:
 %   n      - 索引长度
 %   method - 混沌映射类型
-%   params - 混沌参数
+%   params - 混沌参数结构体（字段随method变化）
+%            method='logistic': params.mu, params.x0
+%            method='henon'   : params.a, params.b, params.x0, params.y0
+%            method='tent'    : params.mu, params.x0
 %
 % 输出:
 %   perm    - 正向置乱索引，xPerm = x(perm)

@@ -1,5 +1,14 @@
 function s = make_summary(results)
 %MAKE_SUMMARY  生成用于控制台显示的紧凑摘要。
+%
+% 输入:
+%   results - 仿真结果结构体
+%             .methods, .ebN0dB, .ber, .psnr, .ssim
+%             .spectrum（含bw99Hz, etaBpsHz）
+%             .eve（可选）, .covert.warden（可选）
+%
+% 输出:
+%   s - 摘要结构体（便于控制台展示）
 
 s = struct();
 s.methods = results.methods;

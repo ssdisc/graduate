@@ -4,6 +4,10 @@ function [freqIdx, state] = fh_generate_sequence(nHops, fh)
 % 输入:
 %   nHops - 需要的跳频数量
 %   fh    - 跳频参数结构体
+%           .nFreqs       - 频点数量
+%           .sequenceType - 序列类型: 'pn'/'linear'/'random'
+%           .pnPolynomial - PN多项式（sequenceType='pn'时使用）
+%           .pnInit       - PN初始状态（sequenceType='pn'时使用）
 %
 % 输出:
 %   freqIdx - 频率索引序列 (1 到 nFreqs)
