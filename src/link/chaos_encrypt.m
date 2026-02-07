@@ -2,7 +2,7 @@ function [imgEnc, encInfo] = chaos_encrypt(imgIn, enc)
 %CHAOS_ENCRYPT  混沌图像加密（置乱 + 扩散）。
 %
 % 加密流程:
-%   1. Arnold变换进行像素位置置乱（打破空间相关性）
+%   1. 空间置乱（方图使用Arnold；非方图使用混沌置乱索引）
 %   2. Logistic混沌序列生成密钥流
 %   3. 密文反馈异或扩散（增强抗差分攻击能力）
 %
@@ -47,22 +47,21 @@ origRows = rows;
 origCols = cols;
 origChannels = channels;
 
-%% 步骤1: Arnold置乱（需要正方形图像）
+%% 步骤1: 空间置乱（支持任意尺寸）
 imgScrambled = zeros(rows, cols, channels, 'uint8');
-for ch = 1:channels
-    imgCh = imgIn(:, :, ch);
-    if rows ~= cols
-        % 填充为正方形
-        maxDim = max(rows, cols);
-        imgPad = zeros(maxDim, maxDim, 'uint8');
-        imgPad(1:rows, 1:cols) = imgCh;
-        scrambledCh = arnold_transform(imgPad, enc.arnoldIter, false);
-        % 裁剪回原始区域（保持置乱效果）
-        scrambledCh = scrambledCh(1:rows, 1:cols);
-    else
-        scrambledCh = arnold_transform(imgCh, enc.arnoldIter, false);
+if rows == cols
+    for ch = 1:channels
+        imgScrambled(:, :, ch) = arnold_transform(imgIn(:, :, ch), enc.arnoldIter, false);
     end
-    imgScrambled(:, :, ch) = scrambledCh;
+    spatialMethod = "arnold";
+else
+    [perm, ~] = chaos_permutation(rows * cols, enc.chaosMethod, enc.chaosParams);
+    for ch = 1:channels
+        imgVec = reshape(imgIn(:, :, ch), [], 1);
+        imgVec = imgVec(perm);
+        imgScrambled(:, :, ch) = reshape(imgVec, rows, cols);
+    end
+    spatialMethod = "chaos_permutation";
 end
 
 %% 步骤2: 生成混沌密钥流
@@ -107,6 +106,7 @@ encInfo.origRows = origRows;
 encInfo.origCols = origCols;
 encInfo.origChannels = origChannels;
 encInfo.arnoldIter = enc.arnoldIter;
+encInfo.spatialMethod = char(spatialMethod);
 encInfo.chaosMethod = enc.chaosMethod;
 encInfo.chaosParams = enc.chaosParams;
 encInfo.diffusionRounds = enc.diffusionRounds;

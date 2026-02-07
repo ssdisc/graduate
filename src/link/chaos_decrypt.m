@@ -3,7 +3,7 @@ function imgDec = chaos_decrypt(imgEnc, encInfo)
 %
 % 解密流程（加密的逆过程）:
 %   1. 逆扩散：使用相同的混沌密钥流进行逆向异或
-%   2. 逆Arnold变换：恢复像素位置
+%   2. 逆空间置乱：恢复像素位置
 %
 % 输入:
 %   imgEnc  - 加密图像（uint8）
@@ -65,21 +65,32 @@ end
 
 imgScrambled = reshape(imgVec, rows, cols, channels);
 
-%% 步骤3: 逆Arnold置乱
+%% 步骤3: 逆空间置乱
 imgDec = zeros(rows, cols, channels, 'uint8');
-for ch = 1:channels
-    imgCh = imgScrambled(:, :, ch);
-    if rows ~= cols
-        % 填充为正方形进行逆变换
-        maxDim = max(rows, cols);
-        imgPad = zeros(maxDim, maxDim, 'uint8');
-        imgPad(1:rows, 1:cols) = imgCh;
-        decCh = arnold_transform(imgPad, encInfo.arnoldIter, true);
-        decCh = decCh(1:rows, 1:cols);
-    else
-        decCh = arnold_transform(imgCh, encInfo.arnoldIter, true);
-    end
-    imgDec(:, :, ch) = decCh;
+if isfield(encInfo, 'spatialMethod')
+    spatialMethod = string(encInfo.spatialMethod);
+elseif rows == cols
+    spatialMethod = "arnold";
+else
+    spatialMethod = "chaos_permutation";
+end
+
+switch lower(spatialMethod)
+    case "arnold"
+        for ch = 1:channels
+            imgDec(:, :, ch) = arnold_transform(imgScrambled(:, :, ch), encInfo.arnoldIter, true);
+        end
+
+    case "chaos_permutation"
+        [~, invPerm] = chaos_permutation(rows * cols, encInfo.chaosMethod, encInfo.chaosParams);
+        for ch = 1:channels
+            imgVec = reshape(imgScrambled(:, :, ch), [], 1);
+            imgVec = imgVec(invPerm);
+            imgDec(:, :, ch) = reshape(imgVec, rows, cols);
+        end
+
+    otherwise
+        error('未知的空间置乱方法: %s', spatialMethod);
 end
 
 end
