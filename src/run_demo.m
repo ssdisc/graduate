@@ -15,7 +15,7 @@ p.sim.nFramesPerPoint = 1;
 p.sim.saveFigures = true;
 
 %% 训练ML模型（可选，设为false跳过以加快速度）
-trainML = true;
+trainML = false;
 
 if trainML
     fprintf('========================================\n');
