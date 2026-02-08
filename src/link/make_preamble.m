@@ -8,4 +8,3 @@ pn = comm.PNSequence( ...
 preambleBits = uint8(pn());
 preambleSym = 1 - 2*double(preambleBits);
 end
-

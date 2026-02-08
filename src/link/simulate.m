@@ -34,15 +34,15 @@ end
 [~, preambleSym] = make_preamble(p.frame.preambleLength);%生成PN前导
 [headerBits, ~] = build_header_bits(meta, p.frame.magic16);%构建帧头比特流
 
-dataBitsTx = [headerBits; payloadBits]; %帧头+载荷比特流%目前进度
+dataBitsTx = [headerBits; payloadBits]; %帧头+载荷比特流
 dataBitsTxScr = scramble_bits(dataBitsTx, p.scramble);%扰码（白化/轻量加密）
 
 codedBits = fec_encode(dataBitsTxScr, p.fec);%信道编码（卷积码）
 [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);%块交织
 
 [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);%调制（BPSK/QPSK/16QAM等）
+% 跳频调制（仅对数据符号，前导不跳频以便同步）%目前进度
 
-% 跳频调制（仅对数据符号，前导不跳频以便同步）
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
 if fhEnabled
     [dataSymTx, hopInfo] = fh_modulate(dataSymTx, p.fh);

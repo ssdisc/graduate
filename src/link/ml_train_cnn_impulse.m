@@ -75,9 +75,9 @@ for b = 1:nBlocks
     EbN0 = 10.^(ebN0dB/10);
     N0 = ebn0_to_n0(EbN0, codeRate, bitsPerSym, Es);
 
-    % 生成随机BPSK符号
-    bits = randi([0 1], L, 1, 'uint8');
-    txSym = 1 - 2*double(bits);  % BPSK: 0->+1, 1->-1
+    % 生成随机符号（BPSK/QPSK）
+    bits = randi([0 1], L * bitsPerSym, 1, 'uint8');
+    txSym = modulate_bits(bits, p.mod);
 
     % 通过脉冲信道
     [rxSym, impMask] = channel_bg_impulsive(txSym, N0, p.channel);
@@ -128,12 +128,14 @@ wNeg = 0.5 / max(1 - posRate, 1e-6);
 % 将序列打包为cell数组（用于不等长序列，但这里都是等长的）
 XTrain = cell(nBlocks, 1);
 YTrain = cell(nBlocks, 1);
-TxTrain = cell(nBlocks, 1);
+TxRealTrain = cell(nBlocks, 1);
+TxImagTrain = cell(nBlocks, 1);
 
 for b = 1:nBlocks
     XTrain{b} = allSeqX{b}';      % [4 x L]
     YTrain{b} = double(allSeqY{b})';  % [1 x L]
-    TxTrain{b} = allSeqTx{b}';    % [1 x L]
+    TxRealTrain{b} = real(allSeqTx{b})'; % [1 x L]
+    TxImagTrain{b} = imag(allSeqTx{b})'; % [1 x L]
 end
 
 %% 初始化Adam优化器状态
@@ -158,13 +160,15 @@ for epoch = 1:opts.epochs
         % 准备批次数据
         XBatch = XTrain(batchIdx);
         YBatch = YTrain(batchIdx);
-        TxBatch = TxTrain(batchIdx);
+        TxRealBatch = TxRealTrain(batchIdx);
+        TxImagBatch = TxImagTrain(batchIdx);
 
         % 将批次数据合并为单个数组
         % 由于序列等长，可以直接堆叠
         XData = cat(3, XBatch{:});  % [4 x L x batchSize]
         YData = cat(3, YBatch{:});  % [1 x L x batchSize]
-        TxData = cat(3, TxBatch{:}); % [1 x L x batchSize]
+        TxRealData = cat(3, TxRealBatch{:}); % [1 x L x batchSize]
+        TxImagData = cat(3, TxImagBatch{:}); % [1 x L x batchSize]
 
         % 计算类别权重
         WData = ones(size(YData));
@@ -174,19 +178,21 @@ for epoch = 1:opts.epochs
         % 转换为dlarray
         XDl = dlarray(single(XData), 'CTB');
         YDl = dlarray(single(YData), 'CTB');
-        TxDl = dlarray(single(TxData), 'CTB');
+        TxRealDl = dlarray(single(TxRealData), 'CTB');
+        TxImagDl = dlarray(single(TxImagData), 'CTB');
         WDl = dlarray(single(WData), 'CTB');
 
         % 移动到GPU
         if executionEnvironment == "gpu"
             XDl = gpuArray(XDl);
             YDl = gpuArray(YDl);
-            TxDl = gpuArray(TxDl);
+            TxRealDl = gpuArray(TxRealDl);
+            TxImagDl = gpuArray(TxImagDl);
             WDl = gpuArray(WDl);
         end
 
         % 计算损失和梯度
-        [loss, gradients] = dlfeval(@modelLoss, model.net, XDl, YDl, TxDl, WDl);
+        [loss, gradients] = dlfeval(@modelLoss, model.net, XDl, YDl, TxRealDl, TxImagDl, WDl);
 
         % 更新网络参数
         [model.net, averageGrad, averageSqGrad] = adamupdate(model.net, gradients, ...
@@ -261,7 +267,7 @@ end
 end
 
 %% 损失函数
-function [loss, gradients] = modelLoss(net, X, Y, Tx, W)
+function [loss, gradients] = modelLoss(net, X, Y, TxReal, TxImag, W)
 %MODELLOSS  计算CNN模型的损失和梯度。
 
 % 前向传播
@@ -271,14 +277,14 @@ out = forward(net, X);  % [4 x L x B]
 pImpulse = sigmoid(out(1,:,:));
 reliability = sigmoid(out(2,:,:));
 cleanReal = out(3,:,:);
-% cleanImag = out(4,:,:);  % 暂不使用
+cleanImag = out(4,:,:);
 
 % 1. 脉冲检测的加权二元交叉熵
 bce = -W .* (Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
 lossBce = mean(bce, 'all');
 
 % 2. 符号重建的MSE
-mse = (cleanReal - Tx).^2;
+mse = (cleanReal - TxReal).^2 + (cleanImag - TxImag).^2;
 lossMse = mean(mse, 'all');
 
 % 3. 可靠性损失（脉冲应该低可靠性）

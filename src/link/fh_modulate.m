@@ -39,7 +39,7 @@ end
 
 nSym = numel(txSym);
 hopLen = fh.symbolsPerHop;  % 每跳的符号数
-nHops = ceil(nSym / hopLen);
+nHops = ceil(nSym / hopLen); % 计算跳数，向上取整
 
 % 生成跳频序列
 [freqIdx, pnState] = fh_generate_sequence(nHops, fh);

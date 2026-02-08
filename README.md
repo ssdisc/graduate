@@ -53,7 +53,7 @@ run_demo
 │   (灰度图)   (RAW字节)    (Magic+尺寸)  (白化/加密)  (码率1/2)            │
 │                                              │                          │
 │                                              ▼                          │
-│                 块交织 ──→ BPSK调制 ──→ ★跳频调制★ ──→ 添加前导         │
+│              块交织 ──→ BPSK/QPSK调制 ──→ ★跳频调制★ ──→ 添加前导      │
 │               (抗突发)                  (可选,PN序列)   (PN序列)         │
 │                                              │                          │
 │                                              ▼                          │
@@ -142,7 +142,7 @@ run_demo
 
 | 功能 | 文件 | 说明 |
 |------|------|------|
-| BPSK调制 | `modulate_bits.m` | 0→+1, 1→-1 |
+| BPSK/QPSK调制 | `modulate_bits.m` | BPSK: 0→+1,1→-1；QPSK: Gray映射，单位功率归一化 |
 | 软解调 | `demodulate_to_softbits.m` | 输出LLR软信息，支持可靠性加权 |
 
 ### 6. 跳频扩频（Frequency Hopping）
@@ -297,6 +297,12 @@ p.mitigation.thresholdAlpha = 4.0;  % blanking阈值系数
 ### 交织深度
 ```matlab
 p.interleaver.nRows = 64;  % 越深越抗突发，但时延增加
+```
+
+### 调制方式
+```matlab
+p.mod.type = 'BPSK';  % 默认
+% p.mod.type = 'QPSK'; % Gray映射: [bI,bQ] -> ((1-2*bI)+1j*(1-2*bQ))/sqrt(2)
 ```
 
 ### 隐蔽性配置

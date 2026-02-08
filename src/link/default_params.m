@@ -63,7 +63,7 @@ p.interleaver.nRows = 64;
 
 % 8) 调制
 p.mod = struct();
-p.mod.type = 'BPSK';
+p.mod.type = 'BPSK'; % 'BPSK' | 'QPSK'（默认BPSK）
 
 % 9) 跳频（Frequency Hopping）
 p.fh = struct();
@@ -97,7 +97,7 @@ p.mitigation.mlGru = ml_gru_impulse_model();  % GRU模型（默认未训练）
 
 % 11) 软量化（用于vitdec 'soft'）
 p.softMetric = struct();
-p.softMetric.clipA = 4.0; % 量化前将real(symbol)裁剪到[-A, A]
+p.softMetric.clipA = 4.0; % 量化前将每比特度量裁剪到[-A, A]
 
 %% 截获/隐蔽分析
 % 窃听者/截获者（Eve）

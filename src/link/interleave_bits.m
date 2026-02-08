@@ -24,8 +24,8 @@ nCols = ceil(n / nRows);
 pad = nRows*nCols - n;
 xPad = [x(:); zeros(pad, 1, 'like', x)];
 
-mat = reshape(xPad, nCols, nRows).';
-y = mat(:);
+mat = reshape(xPad, nCols, nRows).';% 按行填充
+y = mat(:);% 按列读取
 
 state = struct("pad", pad, "nRows", nRows, "nCols", nCols);
 end

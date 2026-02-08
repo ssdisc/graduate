@@ -4,7 +4,7 @@ function soft = demodulate_to_softbits(r, mod, fec, softCfg, reliability)
 % 输入:
 %   r          - 接收符号（复数或实数）
 %   mod        - 调制参数结构体
-%                .type - 调制类型（当前支持"BPSK"）
+%                .type - 调制类型（支持"BPSK"/"QPSK"）
 %   fec        - FEC参数结构体
 %                .decisionType - 'hard' 或 'soft'
 %                .softBits     - 软判决量化位数（soft模式）
@@ -20,6 +20,13 @@ end
 switch upper(string(mod.type))
     case "BPSK"
         metric = real(r(:));
+        bitsPerSym = 1;
+    case "QPSK"
+        r = r(:);
+        metricI = real(r) * sqrt(2);
+        metricQ = imag(r) * sqrt(2);
+        metric = reshape([metricI.'; metricQ.'], [], 1);
+        bitsPerSym = 2;
     otherwise
         error("不支持的调制方式: %s", mod.type);
 end
@@ -44,8 +51,15 @@ soft = (A - metric) / (2*A) * maxv;
 if ~isempty(reliability)
     reliability = reliability(:);
     if numel(reliability) == numel(soft)
+        reliabilityBits = reliability;
+    elseif numel(reliability) * bitsPerSym == numel(soft)
+        reliabilityBits = repelem(reliability, bitsPerSym);
+    else
+        reliabilityBits = [];
+    end
+    if ~isempty(reliabilityBits)
         % 在软值和中间（不确定）值之间插值
-        soft = reliability .* soft + (1 - reliability) .* midv;
+        soft = reliabilityBits .* soft + (1 - reliabilityBits) .* midv;
     end
 end
 

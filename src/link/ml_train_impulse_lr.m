@@ -63,8 +63,8 @@ for b = 1:nBlocks
     EbN0 = 10.^(ebN0dB/10);
     N0 = ebn0_to_n0(EbN0, codeRate, bitsPerSym, Es);
 
-    bits = randi([0 1], L, 1, "uint8");
-    tx = 1 - 2*double(bits);
+    bits = randi([0 1], L * bitsPerSym, 1, "uint8");
+    tx = modulate_bits(bits, p.mod);
 
     [r, impMask] = channel_bg_impulsive(tx, N0, p.channel);
 
