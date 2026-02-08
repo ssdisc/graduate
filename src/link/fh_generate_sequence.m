@@ -29,16 +29,29 @@ seqType = lower(string(fh.sequenceType));
 switch seqType
     case "pn"
         % 基于PN序列生成跳频序列
-        % 使用LFSR生成伪随机比特，然后映射到频率索引
+        % 使用comm.PNSequence生成伪随机比特，然后映射到频率索引
         poly = fh.pnPolynomial;
         initState = fh.pnInit;
 
         % 计算每个跳频索引需要的比特数
         bitsPerHop = ceil(log2(nFreqs));
-        nBits = nHops * bitsPerHop;
+        if bitsPerHop == 0
+            % 仅一个频点时，无需生成PN比特
+            freqIdx = ones(nHops, 1);
+            state = initState(:).';
+            return;
+        end
 
         % 生成PN序列
-        [pnBits, state] = generate_pn_bits(nBits, poly, initState);
+        pn = comm.PNSequence( ...
+            "Polynomial", poly, ...
+            "InitialConditions", initState, ...
+            "SamplesPerFrame", nHops * bitsPerHop);
+        pnBits = uint8(pn());
+        state = [];
+        if isprop(pn, "CurrentState")
+            state = uint8(pn.CurrentState(:)).';
+        end
 
         % 将比特转换为频率索引
         freqIdx = zeros(nHops, 1);
@@ -47,7 +60,7 @@ switch seqType
             endBit = k * bitsPerHop;
             bits = pnBits(startBit:endBit);
 
-            % 比特转整数
+            % 比特转整数0~nFreqs-1
             idx = 0;
             for b = 1:bitsPerHop
                 idx = idx + bits(b) * 2^(bitsPerHop - b);
@@ -69,37 +82,6 @@ switch seqType
 
     otherwise
         error("未知的跳频序列类型: %s", seqType);
-end
-
-end
-
-%% 辅助函数
-
-function [bits, state] = generate_pn_bits(nBits, poly, initState)
-%GENERATE_PN_BITS  生成PN序列比特。
-
-% poly是多项式系数，如 [1 0 0 1 1] 表示 x^4 + x + 1
-% initState是初始状态
-
-regLen = numel(initState);
-state = initState(:)';
-
-bits = zeros(nBits, 1, 'uint8');
-
-for k = 1:nBits
-    % 输出最低位
-    bits(k) = state(end);
-
-    % 计算反馈
-    feedback = 0;
-    for i = 1:numel(poly)
-        if poly(i) == 1 && i <= regLen
-            feedback = xor(feedback, state(i));
-        end
-    end
-
-    % 移位
-    state = [feedback, state(1:end-1)];
 end
 
 end

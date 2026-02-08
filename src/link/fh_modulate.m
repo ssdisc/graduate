@@ -50,10 +50,9 @@ freqOffsets = fh.freqSet(freqIdx);  % 归一化频率偏移
 
 % 对每个符号应用频率偏移
 txHopped = complex(zeros(size(txSym)));
-symIdx = 0;
 
 for hop = 1:nHops
-    % 当前跳的符号范围
+    % 当前跳的符号范围 
     startIdx = (hop - 1) * hopLen + 1;
     endIdx = min(hop * hopLen, nSym);
     hopSymCount = endIdx - startIdx + 1;

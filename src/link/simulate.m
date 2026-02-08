@@ -41,7 +41,7 @@ codedBits = fec_encode(dataBitsTxScr, p.fec);%信道编码（卷积码）
 [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);%块交织
 
 [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);%调制（BPSK/QPSK/16QAM等）
-% 跳频调制（仅对数据符号，前导不跳频以便同步）%目前进度
+% 跳频调制（仅对数据符号，前导不跳频以便同步）
 
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
 if fhEnabled
@@ -50,7 +50,7 @@ else
     hopInfo = struct('enable', false);
 end
 
-txSym = [preambleSym; dataSymTx];%串联前导和数据符号形成完整帧
+txSym = [preambleSym; dataSymTx];%串联前导和数据符号形成完整帧%目前进度
 
 EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
 methods = string(p.mitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
