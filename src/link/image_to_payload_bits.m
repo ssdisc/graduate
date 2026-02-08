@@ -4,7 +4,7 @@ function [bits, meta] = image_to_payload_bits(img, payload)
 % 输入:
 %   img     - 输入图像（uint8）
 %   payload - 载荷配置结构体
-%             .bitsPerPixel - 每像素比特数（当前链路按8处理）
+%             .bitsPerPixel - 每通道位深（当前链路按8处理，对应0-255）
 %
 % 输出:
 %   bits - 图像字节对应的比特流

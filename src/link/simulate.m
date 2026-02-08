@@ -1,4 +1,4 @@
-function results = simulate(p)
+﻿function results = simulate(p)
 %SIMULATE  端到端链路仿真，包含脉冲噪声抑制。
 %
 % 输入:
@@ -27,20 +27,20 @@ if chaosEnabled
 else
     imgTxEnc = imgTx;
     chaosEncInfo = struct('enabled', false);
-end
+end 
 
-[payloadBits, meta] = image_to_payload_bits(imgTxEnc, p.payload);
+[payloadBits, meta] = image_to_payload_bits(imgTxEnc, p.payload);%将图像转换为比特流载荷，并生成元数据（尺寸等）
 
-[~, preambleSym] = make_preamble(p.frame.preambleLength);
-[headerBits, ~] = build_header_bits(meta, p.frame.magic16);
+[~, preambleSym] = make_preamble(p.frame.preambleLength);%生成PN前导
+[headerBits, ~] = build_header_bits(meta, p.frame.magic16);%构建帧头比特流
 
-dataBitsTx = [headerBits; payloadBits];
-dataBitsTxScr = scramble_bits(dataBitsTx, p.scramble);
+dataBitsTx = [headerBits; payloadBits]; %帧头+载荷比特流%目前进度
+dataBitsTxScr = scramble_bits(dataBitsTx, p.scramble);%扰码（白化/轻量加密）
 
-codedBits = fec_encode(dataBitsTxScr, p.fec);
-[codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
+codedBits = fec_encode(dataBitsTxScr, p.fec);%信道编码（卷积码）
+[codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);%块交织
 
-[dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);
+[dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);%调制（BPSK/QPSK/16QAM等）
 
 % 跳频调制（仅对数据符号，前导不跳频以便同步）
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
@@ -50,14 +50,14 @@ else
     hopInfo = struct('enable', false);
 end
 
-txSym = [preambleSym; dataSymTx];
+txSym = [preambleSym; dataSymTx];%串联前导和数据符号形成完整帧
 
-EbN0dBList = p.sim.ebN0dBList(:).';
-methods = string(p.mitigation.methods(:).');
+EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
+methods = string(p.mitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
 ber = nan(numel(methods), numel(EbN0dBList));
 psnrVals = nan(numel(methods), numel(EbN0dBList));
-ssimVals = nan(numel(methods), numel(EbN0dBList));
+ssimVals = nan(numel(methods), numel(EbN0dBList));%结构相似性指数（SSIM）评估图像质量
 
 
 example = struct();

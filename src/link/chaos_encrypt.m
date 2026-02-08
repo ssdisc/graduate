@@ -77,10 +77,10 @@ chaosSeq = chaos_generate(seqLen, enc.chaosMethod, enc.chaosParams);
 
 % 将混沌序列量化为0-255的整数
 keyStream = uint8(floor(chaosSeq * 256));
-keyStream(keyStream > 255) = 255;
+keyStream(keyStream > 255) = 255; %逻辑索引
 
 %% 步骤3: 密文反馈扩散
-imgVec = reshape(imgScrambled, [], 1);
+imgVec = reshape(imgScrambled, [], 1);%又变成列向量
 
 for round = 1:enc.diffusionRounds
     % 当前轮的密钥
@@ -96,7 +96,7 @@ for round = 1:enc.diffusionRounds
 
     for i = 1:nElems
         % 异或：明文 XOR 密钥 XOR 前一密文
-        encrypted(i) = bitxor(bitxor(imgVec(i), key(i)), prevCipher);
+        encrypted(i) = bitxor(bitxor(imgVec(i), key(i)), prevCipher);%明文是打乱后的图像，也是0-255的uint8
         prevCipher = encrypted(i);
     end
 
