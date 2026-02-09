@@ -21,9 +21,15 @@ function [imgEnc, encInfo] = chaos_encrypt(imgIn, enc)
 % 输出:
 %   imgEnc  - 加密后的图像（uint8）
 %   encInfo - 加密信息结构体（用于解密）
-%             .enabled, .origRows, .origCols, .origChannels
-%             .arnoldIter, .spatialMethod, .chaosMethod
-%             .chaosParams, .diffusionRounds
+%             .enabled         - 是否启用过加密（false表示原图直通）
+%             .origRows        - 原始图像行数（解密后用于恢复尺寸）
+%             .origCols        - 原始图像列数（解密后用于恢复尺寸）
+%             .origChannels    - 原始通道数（1=灰度，3=RGB）
+%             .arnoldIter      - Arnold置乱迭代次数（仅方形图像生效）
+%             .spatialMethod   - 空间置乱方法（'arnold' 或 'chaos_permutation'）
+%             .chaosMethod     - 混沌序列类型（与加密阶段保持一致）
+%             .chaosParams     - 混沌参数结构体（解密时需与加密完全一致）
+%             .diffusionRounds - 密文反馈扩散轮数（解密需按相同轮数逆过程）
 
 arguments
     imgIn (:,:,:) uint8

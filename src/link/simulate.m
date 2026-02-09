@@ -58,8 +58,8 @@ txSym = [preambleSym; dataSymTx];%串联前导和数据符号形成完整帧
 EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
 methods = string(p.mitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
-ber = nan(numel(methods), numel(EbN0dBList));
-psnrVals = nan(numel(methods), numel(EbN0dBList));
+ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
+psnrVals = nan(numel(methods), numel(EbN0dBList));%峰值信噪比（PSNR）评估图像质量
 ssimVals = nan(numel(methods), numel(EbN0dBList));%结构相似性指数（SSIM）评估图像质量
 
 
@@ -76,13 +76,13 @@ if isfield(p.sim, "exampleEbN0dB") && ~isempty(p.sim.exampleEbN0dB)
     end
 else
     exampleIdx = numel(EbN0dBList);
-end
+end %示例图默认取最高Eb/N0点；设为具体值时取最近点
 
 eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
 if eveEnabled
     if ~isfield(p.eve, "ebN0dBOffset"); p.eve.ebN0dBOffset = -6; end
     if ~isfield(p.eve, "scrambleAssumption"); p.eve.scrambleAssumption = "wrong_key"; end
-
+%当前进度
     eveEbN0dBList = EbN0dBList + double(p.eve.ebN0dBOffset);
     berEve = nan(numel(methods), numel(EbN0dBList));
     psnrEveVals = nan(numel(methods), numel(EbN0dBList));

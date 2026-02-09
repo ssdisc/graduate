@@ -15,11 +15,16 @@ function [txHopped, hopInfo] = fh_modulate(txSym, fh)
 %           .pnInit        - PN初始状态（pn模式）
 %
 % 输出:
-%   txHopped - 跳频后的符号
-%   hopInfo  - 跳频信息结构体（用于接收端解跳）
-%              .enable, .nHops, .hopLen
-%              .freqIdx, .freqOffsets
-%              .pnState, .nFreqs, .freqSet
+%   txHopped - 跳频后的符号（复数列向量）
+%   hopInfo  - 跳频信息结构体（接收端解跳频时需要）
+%              .enable       - 跳频使能标志
+%              .nHops        - 总跳数
+%              .hopLen       - 每跳符号数
+%              .freqIdx      - 频点索引序列 (1×nHops)
+%              .freqOffsets  - 归一化频偏序列 (1×nHops)
+%              .pnState      - PN序列生成器最终状态（用于连续传输）
+%              .nFreqs       - 可用频点总数
+%              .freqSet      - 频偏集合
 %
 % 跳频原理:
 %   每个跳频周期(hop)内的符号乘以 exp(j*2*pi*f_k*n/Fs)
