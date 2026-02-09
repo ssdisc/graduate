@@ -17,6 +17,7 @@ end
 rng(p.rngSeed);
 set(0, 'DefaultFigureVisible', 'off');
 
+%% 发送端（TRANSMITTER）
 
 imgTx = load_source_image(p.source);
 
@@ -50,7 +51,9 @@ else
     hopInfo = struct('enable', false);
 end
 
-txSym = [preambleSym; dataSymTx];%串联前导和数据符号形成完整帧%目前进度
+txSym = [preambleSym; dataSymTx];%串联前导和数据符号形成完整帧
+
+%% 仿真参数初始化与配置
 
 EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
 methods = string(p.mitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
@@ -161,6 +164,8 @@ if wardenEnabled
     wardenNTrials = NaN;
 end
 
+%% 主仿真循环：信道传输与接收端处理
+
 for ie = 1:numel(EbN0dBList)
     EbN0dB = EbN0dBList(ie);
     EbN0 = 10.^(EbN0dB/10);
@@ -204,7 +209,9 @@ for ie = 1:numel(EbN0dBList)
         nSsimEve = zeros(numel(methods), 1);
     end
 
+    % --- 帧循环：每个Eb/N0点仿真多帧 ---
     for frameIdx = 1:p.sim.nFramesPerPoint
+        % ============ 信道（CHANNEL） ============
         delay = randi([0, p.channel.maxDelaySymbols], 1, 1);
         tx = [zeros(delay, 1); txSym];
 
@@ -213,6 +220,7 @@ for ie = 1:numel(EbN0dBList)
             rxEve = channel_bg_impulsive(tx, N0Eve, p.channel);
         end
 
+        % ============ 接收端（RECEIVER）：Bob（合法接收方） ============
         bobOk = true;
         startIdx = frame_sync(rx, preambleSym);
         if isempty(startIdx)
@@ -235,6 +243,7 @@ for ie = 1:numel(EbN0dBList)
             nTot = nTot + numel(payloadBits);
         end
 
+        % ============ 接收端（RECEIVER）：Eve（窃听方） ============
         eveOk = false;
         if eveEnabled
             eveOk = true;
@@ -260,8 +269,10 @@ for ie = 1:numel(EbN0dBList)
             end
         end
 
+        % --- 遍历不同脉冲抑制方法进行接收端处理 ---
         for im = 1:numel(methods)
             if bobOk
+                % -- Bob接收端：脉冲抑制、解调、解码、解密 --
                 [rMit, reliability] = mitigate_impulses(rData, methods(im), p.mitigation);
 
                 demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
@@ -309,6 +320,7 @@ for ie = 1:numel(EbN0dBList)
             end
 
             if eveEnabled && eveOk
+                % -- Eve接收端：脉冲抑制、解调、解码（使用其知识假设） --
                 [rMitEve, reliabilityEve] = mitigate_impulses(rDataEve, methods(im), p.mitigation);
 
                 demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
@@ -363,6 +375,7 @@ for ie = 1:numel(EbN0dBList)
         end
     end
 
+    % --- 当前Eb/N0点的性能统计 ---
     ber(:, ie) = nErr ./ max(nTot, 1);
 
     psnrOut = nan(numel(methods), 1);
@@ -388,6 +401,8 @@ for ie = 1:numel(EbN0dBList)
         ssimEveVals(:, ie) = ssimOutEve;
     end
 end
+
+%% 仿真评估与结果汇总（SIMULATION EVALUATION）
 
 % 波形/频谱（单次突发，无信道）
 [psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum(txSym, modInfo);
