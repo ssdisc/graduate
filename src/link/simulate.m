@@ -82,7 +82,7 @@ eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
 if eveEnabled
     if ~isfield(p.eve, "ebN0dBOffset"); p.eve.ebN0dBOffset = -6; end
     if ~isfield(p.eve, "scrambleAssumption"); p.eve.scrambleAssumption = "wrong_key"; end
-%当前进度
+
     eveEbN0dBList = EbN0dBList + double(p.eve.ebN0dBOffset);
     berEve = nan(numel(methods), numel(EbN0dBList));
     psnrEveVals = nan(numel(methods), numel(EbN0dBList));
@@ -155,17 +155,17 @@ end
 wardenEnabled = isfield(p, "covert") && isfield(p.covert, "enable") && p.covert.enable ...
     && isfield(p.covert, "warden") && isfield(p.covert.warden, "enable") && p.covert.warden.enable;
 if wardenEnabled
-    wardenThreshold = nan(1, numel(EbN0dBList));
-    wardenPfaEst = nan(1, numel(EbN0dBList));
-    wardenPdEst = nan(1, numel(EbN0dBList));
-    wardenPeEst = nan(1, numel(EbN0dBList));
-    wardenNObs = nan(1, numel(EbN0dBList));
-    wardenPfaTarget = NaN;
-    wardenNTrials = NaN;
+    wardenThreshold = nan(1, numel(EbN0dBList)); %能量检测阈值
+    wardenPfaEst = nan(1, numel(EbN0dBList)); %实测虚警率
+    wardenPdEst = nan(1, numel(EbN0dBList)); %实测检测率
+    wardenPeEst = nan(1, numel(EbN0dBList)); %实测错误率（误检为有信号）
+    wardenNObs = nan(1, numel(EbN0dBList)); %每点观测符号数
+    wardenPfaTarget = NaN; %目标虚警率（如果仿真中未指定，则使用实测值）
+    wardenNTrials = NaN; %蒙特卡洛试验次数（如果仿真中未指定，则使用仿真中实际的试验次数）
 end
 
 %% 主仿真循环：信道传输与接收端处理
-
+%当前进度
 for ie = 1:numel(EbN0dBList)
     EbN0dB = EbN0dBList(ie);
     EbN0 = 10.^(EbN0dB/10);

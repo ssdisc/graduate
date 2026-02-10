@@ -1,4 +1,4 @@
-function m = warden_energy_detector(txBurst, N0, ch, maxDelaySymbols, det)
+﻿function m = warden_energy_detector(txBurst, N0, ch, maxDelaySymbols, det)
 %WARDEN_ENERGY_DETECTOR  辐射计（能量检测器）Pd/Pfa估计。
 %
 % 输入:
@@ -14,8 +14,13 @@ function m = warden_energy_detector(txBurst, N0, ch, maxDelaySymbols, det)
 %
 % 输出:
 %   m - 检测性能结构体
-%       .threshold, .pfaEst, .pdEst, .peEst
-%       .pfaTarget, .nObs, .nTrials
+%       .threshold - 能量判决阈值（由H0统计量按目标虚警率分位数确定）
+%       .pfaEst    - 估计虚警率 Pfa（H0下误报“有信号”的概率）
+%       .pdEst     - 估计检测率 Pd（H1下正确判定“有信号”的概率）
+%       .peEst     - 等先验下平均判错率 Pe = 0.5 * (Pfa + 1 - Pd)
+%       .pfaTarget - 目标虚警率（检测器设计参数）
+%       .nObs      - 实际观测窗口长度（符号数，受突发长度与延迟范围约束）
+%       .nTrials   - 蒙特卡洛试验次数（用于估计阈值与检测性能）
 
 arguments
     txBurst (:,1) double
@@ -85,4 +90,5 @@ m.pfaEst = pfaEst;
 m.pdEst = pdEst;
 m.peEst = peEst;
 end
+
 
