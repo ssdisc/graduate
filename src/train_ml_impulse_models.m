@@ -28,6 +28,7 @@ modelDir = fullfile(pwd, 'models');
 if ~exist(modelDir, 'dir')
     mkdir(modelDir);
 end
+batchTag = char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
 
 %% 训练LR模型
 fprintf('========================================\n');
@@ -46,8 +47,13 @@ lrOpts.verbose = true;
 % 保存LR模型
 model = lrModel;
 report = lrReport;
-save(fullfile(modelDir, 'impulse_lr_model.mat'), 'model', 'report');
-fprintf('LR模型已保存到: %s\n\n', fullfile(modelDir, 'impulse_lr_model.mat'));
+meta = struct('batchTag', batchTag, 'savedBy', 'train_ml_impulse_models', 'savedAt', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
+lrLatestPath = fullfile(modelDir, 'impulse_lr_model.mat');
+lrBatchPath = fullfile(modelDir, sprintf('impulse_lr_model_%s.mat', batchTag));
+save(lrLatestPath, 'model', 'report', 'meta');
+save(lrBatchPath, 'model', 'report', 'meta');
+fprintf('LR模型已保存(最新): %s\n', lrLatestPath);
+fprintf('LR模型已保存(批次): %s\n\n', lrBatchPath);
 
 %% 训练CNN模型
 fprintf('========================================\n');
@@ -66,8 +72,13 @@ cnnOpts.verbose = true;
 % 保存CNN模型
 model = cnnModel;
 report = cnnReport;
-save(fullfile(modelDir, 'impulse_cnn_model.mat'), 'model', 'report');
-fprintf('CNN模型已保存到: %s\n\n', fullfile(modelDir, 'impulse_cnn_model.mat'));
+meta = struct('batchTag', batchTag, 'savedBy', 'train_ml_impulse_models', 'savedAt', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
+cnnLatestPath = fullfile(modelDir, 'impulse_cnn_model.mat');
+cnnBatchPath = fullfile(modelDir, sprintf('impulse_cnn_model_%s.mat', batchTag));
+save(cnnLatestPath, 'model', 'report', 'meta');
+save(cnnBatchPath, 'model', 'report', 'meta');
+fprintf('CNN模型已保存(最新): %s\n', cnnLatestPath);
+fprintf('CNN模型已保存(批次): %s\n\n', cnnBatchPath);
 
 %% 训练GRU模型
 fprintf('========================================\n');
@@ -86,13 +97,19 @@ gruOpts.verbose = true;
 % 保存GRU模型
 model = gruModel;
 report = gruReport;
-save(fullfile(modelDir, 'impulse_gru_model.mat'), 'model', 'report');
-fprintf('GRU模型已保存到: %s\n\n', fullfile(modelDir, 'impulse_gru_model.mat'));
+meta = struct('batchTag', batchTag, 'savedBy', 'train_ml_impulse_models', 'savedAt', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
+gruLatestPath = fullfile(modelDir, 'impulse_gru_model.mat');
+gruBatchPath = fullfile(modelDir, sprintf('impulse_gru_model_%s.mat', batchTag));
+save(gruLatestPath, 'model', 'report', 'meta');
+save(gruBatchPath, 'model', 'report', 'meta');
+fprintf('GRU模型已保存(最新): %s\n', gruLatestPath);
+fprintf('GRU模型已保存(批次): %s\n\n', gruBatchPath);
 
 %% 摘要
 fprintf('========================================\n');
 fprintf('训练摘要\n');
 fprintf('========================================\n');
+fprintf('批次标签: %s\n', batchTag);
 fprintf('\nLR模型:\n');
 fprintf('  检测率 (Pd): %.1f%%\n', 100 * lrReport.pdEst);
 fprintf('  虚警率 (Pfa):   %.1f%%\n', 100 * lrReport.pfaEst);

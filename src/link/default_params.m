@@ -144,6 +144,14 @@ p.covert.warden.nTrials = 200; % 蒙特卡洛试验次数用于估计Pd/Pfa
 end
 
 function model = load_pretrained_model(modelPath, defaultFactory)
+if ~exist(modelPath, 'file')
+    [modelDir, baseName, ~] = fileparts(modelPath);
+    candidates = dir(fullfile(modelDir, [baseName, "_*.mat"]));
+    if ~isempty(candidates)
+        [~, idx] = max([candidates.datenum]);
+        modelPath = fullfile(modelDir, candidates(idx).name);
+    end
+end
 if exist(modelPath, 'file')
     s = load(modelPath, 'model');
     if isfield(s, 'model') && ~isempty(s.model)

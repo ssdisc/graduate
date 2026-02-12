@@ -22,6 +22,7 @@ end
 
 % 若需强制重训三种模型，改为true
 forceRetrain = false;
+batchTag = char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
 
 fprintf('========================================\n');
 fprintf('加载或训练ML脉冲检测模型...\n');
@@ -45,8 +46,12 @@ if needTrainLr
         'nBlocks', 200, 'blockLen', 4096, 'epochs', 25, 'verbose', true);
     model = p.mitigation.ml;
     report = lrReport;
-    save(lrModelPath, 'model', 'report');
-    fprintf('LR模型已保存: %s\n\n', lrModelPath);
+    meta = struct('batchTag', batchTag, 'savedBy', 'run_demo', 'savedAt', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
+    save(lrModelPath, 'model', 'report', 'meta');
+    lrBatchPath = fullfile(modelDir, sprintf('impulse_lr_model_%s.mat', batchTag));
+    save(lrBatchPath, 'model', 'report', 'meta');
+    fprintf('LR模型已保存(最新): %s\n', lrModelPath);
+    fprintf('LR模型已保存(批次): %s\n\n', lrBatchPath);
 end
 
 % 2) CNN模型（ml_cnn）
@@ -67,8 +72,12 @@ if needTrainCnn
         'nBlocks', 150, 'blockLen', 1024, 'epochs', 20, 'verbose', true);
     model = p.mitigation.mlCnn;
     report = cnnReport;
-    save(cnnModelPath, 'model', 'report');
-    fprintf('CNN模型已保存: %s\n\n', cnnModelPath);
+    meta = struct('batchTag', batchTag, 'savedBy', 'run_demo', 'savedAt', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
+    save(cnnModelPath, 'model', 'report', 'meta');
+    cnnBatchPath = fullfile(modelDir, sprintf('impulse_cnn_model_%s.mat', batchTag));
+    save(cnnBatchPath, 'model', 'report', 'meta');
+    fprintf('CNN模型已保存(最新): %s\n', cnnModelPath);
+    fprintf('CNN模型已保存(批次): %s\n\n', cnnBatchPath);
 end
 
 % 3) GRU模型（ml_gru）
@@ -89,8 +98,12 @@ if needTrainGru
         'nBlocks', 100, 'blockLen', 256, 'epochs', 15, 'verbose', true);
     model = p.mitigation.mlGru;
     report = gruReport;
-    save(gruModelPath, 'model', 'report');
-    fprintf('GRU模型已保存: %s\n\n', gruModelPath);
+    meta = struct('batchTag', batchTag, 'savedBy', 'run_demo', 'savedAt', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
+    save(gruModelPath, 'model', 'report', 'meta');
+    gruBatchPath = fullfile(modelDir, sprintf('impulse_gru_model_%s.mat', batchTag));
+    save(gruBatchPath, 'model', 'report', 'meta');
+    fprintf('GRU模型已保存(最新): %s\n', gruModelPath);
+    fprintf('GRU模型已保存(批次): %s\n\n', gruBatchPath);
 end
 
 %% 运行仿真
