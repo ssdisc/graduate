@@ -30,14 +30,17 @@ arguments
     det (1,1) struct
 end
 
+% 设置默认参数
 if ~isfield(det, "pfaTarget"); det.pfaTarget = 0.01; end
 if ~isfield(det, "nObs"); det.nObs = 4096; end
-if ~isfield(det, "nTrials"); det.nTrials = 200; end
+if ~isfield(det, "nTrials"); det.nTrials = 200; end 
 
+% 参数验证
 pfaTarget = double(det.pfaTarget);
 nObs = double(det.nObs);
-nTrials = double(det.nTrials);
+nTrials = double(det.nTrials); 
 
+% 参数合理性检查
 if ~(pfaTarget > 0 && pfaTarget < 1)
     error("pfaTarget必须在(0,1)范围内。");
 end
@@ -51,22 +54,25 @@ end
 txBurst = txBurst(:);
 L = min(nObs, numel(txBurst) + maxDelaySymbols);
 
+% 蒙特卡洛仿真
 T0 = zeros(nTrials, 1);
 T1 = zeros(nTrials, 1);
 
+% 对每次试验，随机生成一个前导零延迟，并构造对应的观测窗口。
+% 然后分别在H0（无信号）和H1（有信号）条件下通过信道模型生成观测数据，并计算能量统计量。
 for i = 1:nTrials
     delay = randi([0, maxDelaySymbols], 1, 1);
 
     txWin = zeros(L, 1);
-    if delay < L
-        nSig = min(numel(txBurst), L - delay);
+    if delay < L 
+        nSig = min(numel(txBurst), L - delay); 
         if nSig > 0
-            txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+            txWin(delay+1:delay+nSig) = txBurst(1:nSig); 
         end
     end
 
-    r0 = channel_bg_impulsive(zeros(L, 1), N0, ch);
-    r1 = channel_bg_impulsive(txWin, N0, ch);
+    r0 = channel_bg_impulsive(zeros(L, 1), N0, ch);%H0：输入全零，观测仅包含噪声和冲击干扰
+    r1 = channel_bg_impulsive(txWin, N0, ch);%H1：输入包含信号（可能部分被前导零覆盖），观测包含信号、噪声和冲击干扰
 
     T0(i) = mean(abs(r0).^2);
     T1(i) = mean(abs(r1).^2);
@@ -75,7 +81,7 @@ end
 T0s = sort(T0);
 q = 1 - pfaTarget;
 idx = max(1, min(nTrials, ceil(q * nTrials)));
-threshold = T0s(idx);
+threshold = T0s(idx);%根据H0统计量的排序结果和目标虚警率确定能量判决阈值，即H0统计量的(1-pfaTarget)分位数。
 
 pfaEst = mean(T0 > threshold);
 pdEst = mean(T1 > threshold);

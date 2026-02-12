@@ -40,11 +40,9 @@ for hop = 1:nHops
     % 当前跳的符号范围
     startIdx = (hop - 1) * hopLen + 1;
     endIdx = min(hop * hopLen, nSym);
-
     if startIdx > nSym
         break;
     end
-    endIdx = min(endIdx, nSym);
     hopSymCount = endIdx - startIdx + 1;
 
     % 当前跳的频率偏移

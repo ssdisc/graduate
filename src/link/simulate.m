@@ -165,7 +165,6 @@ if wardenEnabled
 end
 
 %% 主仿真循环：信道传输与接收端处理
-%当前进度
 for ie = 1:numel(EbN0dBList)
     EbN0dB = EbN0dBList(ie);
     EbN0 = 10.^(EbN0dB/10);
@@ -191,6 +190,7 @@ for ie = 1:numel(EbN0dBList)
         wardenPeEst(ie) = det.peEst;
         wardenNObs(ie) = det.nObs;
     end
+
 
     nErr = zeros(numel(methods), 1);
     nTot = zeros(numel(methods), 1);
@@ -219,7 +219,6 @@ for ie = 1:numel(EbN0dBList)
         if eveEnabled
             rxEve = channel_bg_impulsive(tx, N0Eve, p.channel);
         end
-
         % ============ 接收端（RECEIVER）：Bob（合法接收方） ============
         bobOk = true;
         startIdx = frame_sync(rx, preambleSym);
@@ -268,7 +267,7 @@ for ie = 1:numel(EbN0dBList)
                 nTotEve = nTotEve + numel(payloadBits);
             end
         end
-
+%当前进度
         % --- 遍历不同脉冲抑制方法进行接收端处理 ---
         for im = 1:numel(methods)
             if bobOk
