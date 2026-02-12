@@ -267,26 +267,26 @@ for ie = 1:numel(EbN0dBList)
                 nTotEve = nTotEve + numel(payloadBits);
             end
         end
-%当前进度
+
         % --- 遍历不同脉冲抑制方法进行接收端处理 ---
         for im = 1:numel(methods)
             if bobOk
                 % -- Bob接收端：脉冲抑制、解调、解码、解密 --
                 [rMit, reliability] = mitigate_impulses(rData, methods(im), p.mitigation);
+%当前进度
+                demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);%软判决解调，生成带可靠性加权的Viterbi输入度量
+                demodDeint = deinterleave_bits(demodSoft, intState, p.interleaver);%逆交织
 
-                demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
-                demodDeint = deinterleave_bits(demodSoft, intState, p.interleaver);
+                dataBitsRxScr = fec_decode(demodDeint, p.fec);%FEC解码（卷积码）
+                dataBitsRx = descramble_bits(dataBitsRxScr, p.scramble);%解扰（与发送端相同的扰码配置）
 
-                dataBitsRxScr = fec_decode(demodDeint, p.fec);
-                dataBitsRx = descramble_bits(dataBitsRxScr, p.scramble);
-
-                [payloadBitsRx, metaRx, okHeader] = parse_frame_bits(dataBitsRx, p.frame.magic16);
+                [payloadBitsRx, metaRx, okHeader] = parse_frame_bits(dataBitsRx, p.frame.magic16);%解析帧比特流，提取载荷比特和元数据（如图像尺寸等），并验证帧头（使用magic16作为同步标志）
                 if ~okHeader
                     nErr(im) = nErr(im) + numel(payloadBits);
                     nTot(im) = nTot(im) + numel(payloadBits);
                 else
-                    payloadBitsRx = payloadBitsRx(1:min(end, numel(payloadBits)));
-                    payloadBitsTxTrunc = payloadBits(1:numel(payloadBitsRx));
+                    payloadBitsRx = payloadBitsRx(1:min(end, numel(payloadBits)));%截断接收的载荷比特以匹配发送的载荷比特长度
+                    payloadBitsTxTrunc = payloadBits(1:numel(payloadBitsRx));%截断发送的载荷比特以匹配接收的载荷比特长度（如果接收的载荷比特较少）
 
                     nErr(im) = nErr(im) + sum(payloadBitsRx ~= payloadBitsTxTrunc);
                     nTot(im) = nTot(im) + numel(payloadBitsTxTrunc);

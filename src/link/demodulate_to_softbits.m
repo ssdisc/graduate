@@ -25,14 +25,14 @@ switch upper(string(mod.type))
         r = r(:);
         metricI = real(r) * sqrt(2);
         metricQ = imag(r) * sqrt(2);
-        metric = reshape([metricI.'; metricQ.'], [], 1);
+        metric = reshape([metricI.'; metricQ.'], [], 1); %按列展开，交错I/Q分量以匹配软比特顺序（I1,Q1,I2,Q2,...）
         bitsPerSym = 2;
     otherwise
         error("不支持的调制方式: %s", mod.type);
 end
 
 if strcmpi(fec.decisionType, "hard")
-    soft = uint8(metric < 0);
+    soft = uint8(metric < 0);%硬判决：负值映射为1，非负值映射为0
     return;
 end
 
