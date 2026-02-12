@@ -1,5 +1,5 @@
 %% train_ml_impulse_models.m
-% 训练通信链路的CNN和GRU脉冲检测模型。
+% 训练通信链路的LR/CNN/GRU脉冲检测模型。
 %
 % 用法:
 %   1. 运行此脚本训练模型
@@ -9,8 +9,12 @@
 %   >> train_ml_impulse_models
 %   >> % 然后用训练好的模型运行仿真
 %   >> p = default_params();
+%   >> load('models/impulse_lr_model.mat', 'model');
+%   >> p.mitigation.ml = model;
 %   >> load('models/impulse_cnn_model.mat', 'model');
 %   >> p.mitigation.mlCnn = model;
+%   >> load('models/impulse_gru_model.mat', 'model');
+%   >> p.mitigation.mlGru = model;
 %   >> results = simulate(p);
 
 clear; clc;
@@ -24,6 +28,26 @@ modelDir = fullfile(pwd, 'models');
 if ~exist(modelDir, 'dir')
     mkdir(modelDir);
 end
+
+%% 训练LR模型
+fprintf('========================================\n');
+fprintf('训练逻辑回归脉冲检测器\n');
+fprintf('========================================\n');
+
+lrOpts = struct();
+lrOpts.nBlocks = 200;       % 训练块数量
+lrOpts.blockLen = 4096;     % 每块样本数
+lrOpts.epochs = 25;         % 训练轮数
+lrOpts.lr = 0.2;            % 学习率
+lrOpts.verbose = true;
+
+[lrModel, lrReport] = ml_train_impulse_lr(p, lrOpts);
+
+% 保存LR模型
+model = lrModel;
+report = lrReport;
+save(fullfile(modelDir, 'impulse_lr_model.mat'), 'model', 'report');
+fprintf('LR模型已保存到: %s\n\n', fullfile(modelDir, 'impulse_lr_model.mat'));
 
 %% 训练CNN模型
 fprintf('========================================\n');
@@ -41,7 +65,8 @@ cnnOpts.verbose = true;
 
 % 保存CNN模型
 model = cnnModel;
-save(fullfile(modelDir, 'impulse_cnn_model.mat'), 'model', 'cnnReport');
+report = cnnReport;
+save(fullfile(modelDir, 'impulse_cnn_model.mat'), 'model', 'report');
 fprintf('CNN模型已保存到: %s\n\n', fullfile(modelDir, 'impulse_cnn_model.mat'));
 
 %% 训练GRU模型
@@ -60,13 +85,19 @@ gruOpts.verbose = true;
 
 % 保存GRU模型
 model = gruModel;
-save(fullfile(modelDir, 'impulse_gru_model.mat'), 'model', 'gruReport');
+report = gruReport;
+save(fullfile(modelDir, 'impulse_gru_model.mat'), 'model', 'report');
 fprintf('GRU模型已保存到: %s\n\n', fullfile(modelDir, 'impulse_gru_model.mat'));
 
 %% 摘要
 fprintf('========================================\n');
 fprintf('训练摘要\n');
 fprintf('========================================\n');
+fprintf('\nLR模型:\n');
+fprintf('  检测率 (Pd): %.1f%%\n', 100 * lrReport.pdEst);
+fprintf('  虚警率 (Pfa):   %.1f%%\n', 100 * lrReport.pfaEst);
+fprintf('  阈值:           %.3f\n', lrReport.threshold);
+
 fprintf('\nCNN模型:\n');
 fprintf('  检测率 (Pd): %.1f%%\n', 100 * cnnReport.pdEst);
 fprintf('  虚警率 (Pfa):   %.1f%%\n', 100 * cnnReport.pfaEst);
@@ -80,6 +111,10 @@ fprintf('  阈值:           %.3f\n', gruReport.threshold);
 fprintf('\n模型保存在: %s\n', modelDir);
 fprintf('\n在仿真中使用训练好的模型:\n');
 fprintf('  p = default_params();\n');
+fprintf('  load(''models/impulse_lr_model.mat'', ''model'');\n');
+fprintf('  p.mitigation.ml = model;\n');
 fprintf('  load(''models/impulse_cnn_model.mat'', ''model'');\n');
 fprintf('  p.mitigation.mlCnn = model;\n');
+fprintf('  load(''models/impulse_gru_model.mat'', ''model'');\n');
+fprintf('  p.mitigation.mlGru = model;\n');
 fprintf('  results = simulate(p);\n');

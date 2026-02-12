@@ -231,9 +231,12 @@ p.eve.fhAssumption = "partial";  % Eve使用错误的序列
 #### 训练ML模型
 
 ```matlab
-% 训练CNN和GRU模型
+% 训练LR/CNN/GRU模型
 addpath(genpath('src'));
 p = default_params();
+
+% 训练逻辑回归
+[lrModel, lrReport] = ml_train_impulse_lr(p, 'nBlocks', 200, 'epochs', 25);
 
 % 训练CNN
 [cnnModel, cnnReport] = ml_train_cnn_impulse(p, 'nBlocks', 300, 'epochs', 30);
@@ -242,6 +245,7 @@ p = default_params();
 [gruModel, gruReport] = ml_train_gru_impulse(p, 'nBlocks', 200, 'epochs', 20);
 
 % 在仿真中使用
+p.mitigation.ml = lrModel;
 p.mitigation.mlCnn = cnnModel;
 p.mitigation.mlGru = gruModel;
 results = simulate(p);

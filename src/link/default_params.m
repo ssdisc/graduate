@@ -91,9 +91,19 @@ p.mitigation.methods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
 p.mitigation.thresholdAlpha = 4.0; % T = alpha * median(abs(r))
 p.mitigation.thresholdFixed = 3.0; % thresholdStrategy="fixed"时使用
-p.mitigation.ml = ml_impulse_lr_model();      % 传统逻辑回归模型
-p.mitigation.mlCnn = ml_cnn_impulse_model();  % 1D CNN模型（默认未训练）
-p.mitigation.mlGru = ml_gru_impulse_model();  % GRU模型（默认未训练）
+
+modelDir = fullfile(pwd, "models");
+if ~exist(modelDir, 'dir')
+    repoRoot = fileparts(fileparts(fileparts(mfilename('fullpath'))));
+    altModelDir = fullfile(repoRoot, "models");
+    if exist(altModelDir, 'dir')
+        modelDir = altModelDir;
+    end
+end
+
+p.mitigation.ml = load_pretrained_model(fullfile(modelDir, "impulse_lr_model.mat"), @ml_impulse_lr_model);
+p.mitigation.mlCnn = load_pretrained_model(fullfile(modelDir, "impulse_cnn_model.mat"), @ml_cnn_impulse_model);
+p.mitigation.mlGru = load_pretrained_model(fullfile(modelDir, "impulse_gru_model.mat"), @ml_gru_impulse_model);
 
 % 11) 软量化（用于vitdec 'soft'）
 p.softMetric = struct();
@@ -131,4 +141,15 @@ p.covert.warden.pfaTarget = 0.01;
 p.covert.warden.nObs = 4096;   % 观测窗口（符号数）
 p.covert.warden.nTrials = 200; % 蒙特卡洛试验次数用于估计Pd/Pfa
 
+end
+
+function model = load_pretrained_model(modelPath, defaultFactory)
+if exist(modelPath, 'file')
+    s = load(modelPath, 'model');
+    if isfield(s, 'model') && ~isempty(s.model)
+        model = s.model;
+        return;
+    end
+end
+model = defaultFactory();
 end

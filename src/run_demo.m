@@ -14,30 +14,83 @@ p.sim.ebN0dBList = 0:2:10;
 p.sim.nFramesPerPoint = 1;
 p.sim.saveFigures = true;
 
-%% 训练ML模型（可选，设为false跳过以加快速度）
-trainML = false;
+%% ML模型：训练一次，后续复用（LR/CNN/GRU）
+modelDir = fullfile(pwd, 'models');
+if ~exist(modelDir, 'dir')
+    mkdir(modelDir);
+end
 
-if trainML
-    fprintf('========================================\n');
-    fprintf('训练ML脉冲检测模型...\n');
-    fprintf('========================================\n\n');
+% 若需强制重训三种模型，改为true
+forceRetrain = false;
 
-    % 训练CNN（快速模式）
+fprintf('========================================\n');
+fprintf('加载或训练ML脉冲检测模型...\n');
+fprintf('========================================\n\n');
+
+% 1) 逻辑回归模型（ml_blanking）
+lrModelPath = fullfile(modelDir, 'impulse_lr_model.mat');
+needTrainLr = forceRetrain || ~exist(lrModelPath, 'file');
+if ~needTrainLr
+    s = load(lrModelPath, 'model');
+    if isfield(s, 'model') && ~isempty(s.model)
+        p.mitigation.ml = s.model;
+        fprintf('已加载LR模型: %s\n\n', lrModelPath);
+    else
+        needTrainLr = true;
+    end
+end
+if needTrainLr
+    fprintf('训练LR模型...\n');
+    [p.mitigation.ml, lrReport] = ml_train_impulse_lr(p, ...
+        'nBlocks', 200, 'blockLen', 4096, 'epochs', 25, 'verbose', true);
+    model = p.mitigation.ml;
+    report = lrReport;
+    save(lrModelPath, 'model', 'report');
+    fprintf('LR模型已保存: %s\n\n', lrModelPath);
+end
+
+% 2) CNN模型（ml_cnn）
+cnnModelPath = fullfile(modelDir, 'impulse_cnn_model.mat');
+needTrainCnn = forceRetrain || ~exist(cnnModelPath, 'file');
+if ~needTrainCnn
+    s = load(cnnModelPath, 'model');
+    if isfield(s, 'model') && ~isempty(s.model)
+        p.mitigation.mlCnn = s.model;
+        fprintf('已加载CNN模型: %s\n\n', cnnModelPath);
+    else
+        needTrainCnn = true;
+    end
+end
+if needTrainCnn
     fprintf('训练CNN模型...\n');
-    [p.mitigation.mlCnn, ~] = ml_train_cnn_impulse(p, ...
+    [p.mitigation.mlCnn, cnnReport] = ml_train_cnn_impulse(p, ...
         'nBlocks', 150, 'blockLen', 1024, 'epochs', 20, 'verbose', true);
-    fprintf('\n');
+    model = p.mitigation.mlCnn;
+    report = cnnReport;
+    save(cnnModelPath, 'model', 'report');
+    fprintf('CNN模型已保存: %s\n\n', cnnModelPath);
+end
 
-    % 训练GRU（快速模式）
+% 3) GRU模型（ml_gru）
+gruModelPath = fullfile(modelDir, 'impulse_gru_model.mat');
+needTrainGru = forceRetrain || ~exist(gruModelPath, 'file');
+if ~needTrainGru
+    s = load(gruModelPath, 'model');
+    if isfield(s, 'model') && ~isempty(s.model)
+        p.mitigation.mlGru = s.model;
+        fprintf('已加载GRU模型: %s\n\n', gruModelPath);
+    else
+        needTrainGru = true;
+    end
+end
+if needTrainGru
     fprintf('训练GRU模型...\n');
-    [p.mitigation.mlGru, ~] = ml_train_gru_impulse(p, ...
+    [p.mitigation.mlGru, gruReport] = ml_train_gru_impulse(p, ...
         'nBlocks', 100, 'blockLen', 256, 'epochs', 15, 'verbose', true);
-    fprintf('\n');
-
-else
-    % 不训练时，从方法列表中移除未训练的ML模型
-    p.mitigation.methods = ["none", "blanking", "clipping", "ml_blanking"];
-    fprintf('跳过ML模型训练，仅使用传统方法\n\n');
+    model = p.mitigation.mlGru;
+    report = gruReport;
+    save(gruModelPath, 'model', 'report');
+    fprintf('GRU模型已保存: %s\n\n', gruModelPath);
 end
 
 %% 运行仿真
