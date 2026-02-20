@@ -15,9 +15,9 @@ function [psd, f, bw99, eta] = estimate_spectrum(sym, modInfo)
 
 Rs = 10e3;      % 参考图的符号速率（Hz）
 sps = 8;        % 每符号采样数
-rolloff = 0.25;
+rolloff = 0.25; % 滚降系数
 span = 10;      % 符号数
-Fs = Rs * sps;
+Fs = Rs * sps;  % 采样频率
 
 rrc = rcosdesign(rolloff, span, sps, "sqrt");
 wave = upfirdn(sym(:), rrc, sps, 1);

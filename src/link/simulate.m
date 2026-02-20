@@ -273,12 +273,11 @@ for ie = 1:numel(EbN0dBList)
             if bobOk
                 % -- Bob接收端：脉冲抑制、解调、解码、解密 --
                 [rMit, reliability] = mitigate_impulses(rData, methods(im), p.mitigation);
-%当前进度
                 demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);%软判决解调，生成带可靠性加权的Viterbi输入度量
                 demodDeint = deinterleave_bits(demodSoft, intState, p.interleaver);%逆交织
-
                 dataBitsRxScr = fec_decode(demodDeint, p.fec);%FEC解码（卷积码）
                 dataBitsRx = descramble_bits(dataBitsRxScr, p.scramble);%解扰（与发送端相同的扰码配置）
+
 
                 [payloadBitsRx, metaRx, okHeader] = parse_frame_bits(dataBitsRx, p.frame.magic16);%解析帧比特流，提取载荷比特和元数据（如图像尺寸等），并验证帧头（使用magic16作为同步标志）
                 if ~okHeader
@@ -452,3 +451,4 @@ if p.sim.saveFigures
 end
 
 end
+%当前进度

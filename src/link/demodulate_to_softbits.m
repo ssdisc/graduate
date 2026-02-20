@@ -36,12 +36,12 @@ if strcmpi(fec.decisionType, "hard")
     return;
 end
 
-ns = fec.softBits;
-maxv = 2^ns - 1;
+ns = fec.softBits;%软判决量化位数
+maxv = 2^ns - 1; %最大软值（例如ns=3时为7），对应于强'1'，0对应于强'0'，中间值表示不确定/擦除
 midv = maxv / 2;  % 中间值 = 擦除/不确定
 A = softCfg.clipA;
 
-metric = max(min(metric, A), -A);
+metric = max(min(metric, A), -A); % 截断度量以限制最大值和最小值，防止极端值过度影响软比特
 
 % 量化使得 0 => 强'0', maxv => 强'1'
 soft = (A - metric) / (2*A) * maxv;

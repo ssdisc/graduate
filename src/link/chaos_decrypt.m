@@ -57,9 +57,9 @@ for round = encInfo.diffusionRounds:-1:1
     % 从最后一个像素开始逆向解密
     for i = nElems:-1:1
         if i == 1
-            prevCipher = key(1);
+            prevCipher = key(1);%第一个像素没有前一个密文，使用密钥的第一个值作为“前一密文”
         else
-            prevCipher = imgVec(i-1);
+            prevCipher = imgVec(i-1);%前一个密文像素
         end
 
         % 逆异或：明文 = 密文 XOR 密钥 XOR 前一密文

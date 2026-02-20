@@ -28,7 +28,7 @@ idx = (1:n).';
 
 if nargout > 1
     invPerm = zeros(n, 1);
-    invPerm(perm) = 1:n;
+    invPerm(perm) = 1:n;%生成逆置乱索引
 end
 
 end

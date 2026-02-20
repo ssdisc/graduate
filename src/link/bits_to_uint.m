@@ -42,10 +42,10 @@ switch lower(type)
         nBits = numel(bits);
         nBytes = floor(nBits / 8);
         bits = bits(1:8*nBytes);
-        bits = reshape(bits, 8, nBytes).';
+        bits = reshape(bits, 8, nBytes).';%每行8比特对应一个字节
         x = zeros(nBytes, 1, 'uint8');
         for k = 1:8
-            x = bitset(x, 9-k, bits(:, k));
+            x = bitset(x, 9-k, bits(:, k));%第k列的比特对应字节中的第(9-k)位（MSB在前）
         end
 
     otherwise

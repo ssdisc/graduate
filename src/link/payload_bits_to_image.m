@@ -12,7 +12,7 @@ function img = payload_bits_to_image(bits, meta)
 bytes = bits_to_uint(bits, 'uint8vec');
 needBytes = double(meta.rows) * double(meta.cols) * double(meta.channels);
 if numel(bytes) < needBytes
-    bytes(end+1:needBytes, 1) = 0; %#ok<AGROW>
+    bytes(end+1:needBytes, 1) = 0;
 else
     bytes = bytes(1:needBytes);
 end

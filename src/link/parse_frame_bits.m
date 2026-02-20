@@ -11,6 +11,7 @@ if numel(rxBits) < needHeaderBits
     return;
 end
 
+% 1) 解析帧头
 idx = 1;
 magic = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
 if magic ~= uint16(magic16)
@@ -20,6 +21,7 @@ if magic ~= uint16(magic16)
     return;
 end
 
+% 继续解析帧头中的图像元数据
 rows = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
 cols = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
 channels = bits_to_uint(rxBits(idx:idx+7), 'uint8'); idx = idx + 8;

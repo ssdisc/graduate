@@ -7,8 +7,11 @@ function save_figures(outDir, imgTx, results)
 %   results - 仿真结果结构体
 %             .methods, .ebN0dB, .ber, .psnr, .ssim
 %             .spectrum（freqHz, psd, bw99Hz, etaBpsHz）
-%             .example（按方法保存示例接收图）
-%             .eve（可选）, .covert.warden（可选）
+%             .example（按方法名的动态字段保存示例接收图）
+%                 .<method>.EbN0dB - 示例图对应的Eb/N0（dB）
+%                 .<method>.imgRx  - 该方法的示例接收图像
+%             .eve（可选，含 .example.<method>.EbN0dB/.headerOk/.imgRx）
+%             .covert.warden（可选）
 %
 % 输出:
 %   无（直接写图到磁盘）
