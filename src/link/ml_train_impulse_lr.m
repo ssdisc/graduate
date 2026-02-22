@@ -16,9 +16,15 @@ function [model, report] = ml_train_impulse_lr(p, opts)
 %   p    - 参数结构体（default_params）
 %          主要使用: p.mod, p.channel, p.mitigation
 %   opts - 训练选项结构体（Name-Value）
-%          .nBlocks, .blockLen, .ebN0dBRange
-%          .pfaTarget, .epochs, .batchSize
-%          .lr, .l2, .verbose
+%          .nBlocks    训练数据块数（块=数据生成单位）
+%          .blockLen   每块样本数
+%          .ebN0dBRange 每块随机采样的Eb/N0范围[dB]，形如[lo hi]
+%          .pfaTarget  用于选阈值的目标虚警率
+%          .epochs     训练轮数
+%          .batchSize  每次梯度更新的样本数（批=参数更新单位）
+%          .lr         学习率
+%          .l2         L2正则系数
+%          .verbose    是否打印训练日志
 %
 % 输出:
 %   model  - 训练后的逻辑回归模型结构体
