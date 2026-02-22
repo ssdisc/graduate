@@ -5,7 +5,7 @@ function run_demo()
 %   addpath(genpath('src'));
 %   run_demo
 
-addpath(genpath(fullfile(fileparts(mfilename('fullpath')), 'link')));
+addpath(genpath(fullfile(fileparts(mfilename('fullpath')), 'src')));
 
 p = default_params();
 

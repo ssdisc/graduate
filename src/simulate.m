@@ -164,16 +164,35 @@ if wardenEnabled
     wardenNTrials = NaN; %蒙特卡洛试验次数（如果仿真中未指定，则使用仿真中实际的试验次数）
 end
 
+totalEbN0Points = numel(EbN0dBList);
+totalFrames = totalEbN0Points * p.sim.nFramesPerPoint;
+globalFrameIdx = 0;
+frameLogStep = max(1, floor(p.sim.nFramesPerPoint / 10));
+simTic = tic;
+
+fprintf('\n========================================\n');
+fprintf('[SIM] 链路仿真开始\n');
+fprintf('[SIM] Eb/N0点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
+    totalEbN0Points, p.sim.nFramesPerPoint, totalFrames);
+fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s\n', ...
+    on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), on_off_text(chaosEnabled));
+fprintf('========================================\n\n');
+
 %% 主仿真循环：信道传输与接收端处理
 for ie = 1:numel(EbN0dBList)
+    pointTic = tic;
     EbN0dB = EbN0dBList(ie);
     EbN0 = 10.^(EbN0dB/10);
     N0 = ebn0_to_n0(EbN0, modInfo.codeRate, modInfo.bitsPerSymbol, 1.0);
+
+    fprintf('[SIM] >>> Eb/N0点 %d/%d: %.2f dB\n', ie, totalEbN0Points, EbN0dB);
 
     if eveEnabled
         EbN0dBEve = EbN0dB + double(p.eve.ebN0dBOffset);
         EbN0Eve = 10.^(EbN0dBEve/10);
         N0Eve = ebn0_to_n0(EbN0Eve, modInfo.codeRate, modInfo.bitsPerSymbol, 1.0);
+        fprintf('[SIM]     Eve等效Eb/N0: %.2f dB\n', EbN0dBEve);
     end
 
     if wardenEnabled
@@ -211,6 +230,13 @@ for ie = 1:numel(EbN0dBList)
 
     % --- 帧循环：每个Eb/N0点仿真多帧 ---
     for frameIdx = 1:p.sim.nFramesPerPoint
+        globalFrameIdx = globalFrameIdx + 1;
+        if p.sim.nFramesPerPoint <= 20 || frameIdx == 1 || frameIdx == p.sim.nFramesPerPoint || mod(frameIdx, frameLogStep) == 0
+            fprintf('[SIM]     帧 %d/%d (总进度 %d/%d, %.1f%%)\n', ...
+                frameIdx, p.sim.nFramesPerPoint, globalFrameIdx, totalFrames, ...
+                100 * globalFrameIdx / max(totalFrames, 1));
+        end
+
         % ============ 信道（CHANNEL） ============
         delay = randi([0, p.channel.maxDelaySymbols], 1, 1);
         tx = [zeros(delay, 1); txSym];
@@ -238,6 +264,7 @@ for ie = 1:numel(EbN0dBList)
                 rData = fh_demodulate(rData, hopInfo);
             end
         else
+            fprintf('[SIM][WARN] Bob帧同步失败: Eb/N0=%.2f dB, frame=%d\n', EbN0dB, frameIdx);
             nErr = nErr + numel(payloadBits);
             nTot = nTot + numel(payloadBits);
         end
@@ -263,6 +290,8 @@ for ie = 1:numel(EbN0dBList)
                     rDataEve = fh_demodulate(rDataEve, hopInfoEve);
                 end
             else
+                fprintf('[SIM][WARN] Eve帧同步失败: Eb/N0=%.2f dB(Eve=%.2f dB), frame=%d\n', ...
+                    EbN0dB, EbN0dBEve, frameIdx);
                 nErrEve = nErrEve + numel(payloadBits);
                 nTotEve = nTotEve + numel(payloadBits);
             end
@@ -398,9 +427,17 @@ for ie = 1:numel(EbN0dBList)
         psnrEveVals(:, ie) = psnrOutEve;
         ssimEveVals(:, ie) = ssimOutEve;
     end
+
+    fprintf('[SIM] <<< Eb/N0点 %.2f dB 完成, 用时 %.2fs\n', EbN0dB, toc(pointTic));
+    fprintf('[SIM]     Bob BER: %s\n', format_metric_pairs(methods, ber(:, ie)));
+    if eveEnabled
+        fprintf('[SIM]     Eve BER: %s\n', format_metric_pairs(methods, berEve(:, ie)));
+    end
+    fprintf('\n');
 end
 
 %% 仿真评估与结果汇总（SIMULATION EVALUATION）
+fprintf('[SIM] 开始频谱估计与结果汇总...\n');
 
 % 波形/频谱（单次突发，无信道）
 [psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum(txSym, modInfo);
@@ -445,10 +482,30 @@ end
 results.summary = make_summary(results);
 
 if p.sim.saveFigures
+    fprintf('[SIM] 保存结果与图像...\n');
     outDir = make_results_dir(p.sim.resultsDir);
     save(fullfile(outDir, "results.mat"), "-struct", "results");
     save_figures(outDir, imgTx, results);
+    fprintf('[SIM] 已保存至: %s\n', outDir);
 end
 
+fprintf('[SIM] 链路仿真结束，总耗时 %.2fs\n', toc(simTic));
+
+end
+
+function txt = on_off_text(flag)
+if flag
+    txt = 'ON';
+else
+    txt = 'OFF';
+end
+end
+
+function txt = format_metric_pairs(methods, values)
+pairs = cell(1, numel(methods));
+for k = 1:numel(methods)
+    pairs{k} = sprintf('%s=%.3e', char(methods(k)), values(k));
+end
+txt = strjoin(pairs, ', ');
 end
 %当前进度

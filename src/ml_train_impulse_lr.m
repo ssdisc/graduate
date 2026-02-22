@@ -42,13 +42,13 @@ arguments
     opts.l2 (1,1) double {mustBeNonnegative} = 1e-3
     opts.verbose (1,1) logical = true
 end
-
 if opts.ebN0dBRange(2) <= opts.ebN0dBRange(1)
     error("ebN0dBRange must satisfy hi > lo.");
 end
 if ~(opts.pfaTarget > 0 && opts.pfaTarget < 1)
     error("pfaTarget must be in (0,1).");
 end
+
 
 [~, modInfo] = modulate_bits(uint8([0; 1]), p.mod);
 codeRate = modInfo.codeRate;
@@ -59,8 +59,8 @@ nBlocks = opts.nBlocks;
 L = opts.blockLen;
 n = nBlocks * L;
 
-X = zeros(n, 3, "single");
-y = false(n, 1);
+X = zeros(n, 3, "single");%特征矩阵：每行一个样本，每列一个特征
+y = false(n, 1);%标签向量：true=脉冲样本，false=非脉冲样本
 ebN0dBPerBlock = zeros(nBlocks, 1);
 
 for b = 1:nBlocks
@@ -80,12 +80,14 @@ for b = 1:nBlocks
     y(idx) = impMask ~= 0;
 end
 
+%特征标准化
 X = double(X);
 mu = mean(X, 1);
 sigma = std(X, 0, 1);
 sigma(sigma == 0) = 1;
 Xn = (X - mu) ./ sigma;
 
+%处理类别不平衡：为正负样本分配权重，使得它们在损失函数中具有相等的影响力
 pos = y;
 neg = ~y;
 posRate = mean(pos);
@@ -94,10 +96,10 @@ wNeg = 0.5 / max(1 - posRate, eps);
 weights = ones(n, 1);
 weights(pos) = wPos;
 weights(neg) = wNeg;
+%当前进度
 
 w = zeros(3, 1);
 b = 0;
-
 for epoch = 1:opts.epochs
     perm = randperm(n);
     for start = 1:opts.batchSize:n
