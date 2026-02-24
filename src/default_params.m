@@ -146,7 +146,7 @@ end
 function model = load_pretrained_model(modelPath, defaultFactory)
 if ~exist(modelPath, 'file')
     [modelDir, baseName, ~] = fileparts(modelPath);
-    candidates = dir(fullfile(modelDir, [baseName, "_*.mat"]));
+    candidates = dir(fullfile(modelDir, strcat(baseName, "_*.mat")));
     if ~isempty(candidates)
         [~, idx] = max([candidates.datenum]);
         modelPath = fullfile(modelDir, candidates(idx).name);
