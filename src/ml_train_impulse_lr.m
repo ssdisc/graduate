@@ -69,11 +69,12 @@ for b = 1:nBlocks
     EbN0 = 10.^(ebN0dB/10);
     N0 = ebn0_to_n0(EbN0, codeRate, bitsPerSym, Es);
 
+    %每块随机生成L个符号（对应L*bitsPerSym个比特），通过信道模型得到接收样本和脉冲标签
     bits = randi([0 1], L * bitsPerSym, 1, "uint8");
     tx = modulate_bits(bits, p.mod);
-
     [r, impMask] = channel_bg_impulsive(tx, N0, p.channel);
 
+    %提取特征并填充训练矩阵X和标签向量y
     feats = ml_impulse_features(r);
     idx = (b-1)*L + (1:L);
     X(idx, :) = single(feats);
@@ -96,32 +97,38 @@ wNeg = 0.5 / max(1 - posRate, eps);
 weights = ones(n, 1);
 weights(pos) = wPos;
 weights(neg) = wNeg;
-%当前进度
 
 w = zeros(3, 1);
 b = 0;
 for epoch = 1:opts.epochs
     perm = randperm(n);
     for start = 1:opts.batchSize:n
+        
+        %每次处理一个批次的样本，计算梯度并更新参数
         stop = min(start + opts.batchSize - 1, n);
         sel = perm(start:stop);
 
+        %批次样本的特征、标签和权重
         xb = Xn(sel, :);
         yb = double(y(sel));
         wb = weights(sel);
 
+
+        %计算逻辑回归的预测概率和梯度，使用sigmoid函数
         logit = xb*w + b;
         logit = max(min(logit, 30), -30);
         pHat = 1 ./ (1 + exp(-logit));
 
+        %计算加权的梯度（带L2正则化），并更新权重w和偏置b
         diff = (pHat - yb) .* wb;
         gw = (xb.' * diff) / numel(sel) + opts.l2 * w;
         gb = mean(diff);
 
+        %参数更新（梯度下降）
         w = w - opts.lr * gw;
         b = b - opts.lr * gb;
     end
-
+    %每5轮或第一轮打印一次训练日志，显示当前的TPR和FPR（使用0.5阈值）
     if opts.verbose && (epoch == 1 || mod(epoch, 5) == 0 || epoch == opts.epochs)
         logitAll = Xn*w + b;
         logitAll = max(min(logitAll, 30), -30);
