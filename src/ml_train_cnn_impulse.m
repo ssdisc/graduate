@@ -102,7 +102,7 @@ inputStd(inputStd < 1e-6) = 1;
 for b = 1:nBlocks
     allSeqX{b} = (allSeqX{b} - inputMean) ./ inputStd;
 end
-
+%当前进度
 %% 初始化模型
 model = ml_cnn_impulse_model();
 model.inputMean = inputMean;

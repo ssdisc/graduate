@@ -14,7 +14,7 @@ model.type = "cnn_dl";
 model.trained = false;
 
 % 网络参数
-model.inputChannels = 4;  % [幅度, 归一化幅度, 幅度差分, 相位]
+model.inputChannels = 4;  % [实部, 虚部, 幅度, 幅度差分]
 model.outputSize = 4;     % [p_impulse, reliability, clean_real, clean_imag]
 
 % 创建网络层
