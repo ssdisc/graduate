@@ -5,7 +5,7 @@
 %   p - 仿真参数结构体（建议由default_params()生成）
 %       .rngSeed, .sim, .source, .chaosEncrypt, .payload
 %       .frame, .scramble, .fec, .interleaver, .mod, .fh
-%       .channel, .mitigation, .softMetric, .rxSync
+%       .rf, .channel, .mitigation, .softMetric, .rxSync
 %       .eve（可选）, .covert（可选）
 %
 % 返回包含BER/PSNR/PSD结果的结构体，启用时保存图形。
@@ -30,6 +30,13 @@ if ~isfield(p.rxSync.carrierPll, "enable"); p.rxSync.carrierPll.enable = false; 
 if ~isfield(p.rxSync.carrierPll, "alpha"); p.rxSync.carrierPll.alpha = 0.02; end
 if ~isfield(p.rxSync.carrierPll, "beta"); p.rxSync.carrierPll.beta = 3e-4; end
 if ~isfield(p.rxSync.carrierPll, "maxFreq"); p.rxSync.carrierPll.maxFreq = 0.1; end
+if ~isfield(p, "rf"); p.rf = struct(); end
+if ~isfield(p.rf, "enable"); p.rf.enable = false; end
+if ~isfield(p.rf, "ifFreqNorm"); p.rf.ifFreqNorm = 0.18; end
+if ~isfield(p.rf, "txFreqNorm"); p.rf.txFreqNorm = p.rf.ifFreqNorm; end
+if ~isfield(p.rf, "rxFreqNorm"); p.rf.rxFreqNorm = p.rf.ifFreqNorm; end
+if ~isfield(p.rf, "txPhaseOffsetRad"); p.rf.txPhaseOffsetRad = 0; end
+if ~isfield(p.rf, "rxPhaseOffsetRad"); p.rf.rxPhaseOffsetRad = 0; end
 
 %% 发送端（TRANSMITTER）
 
@@ -66,6 +73,11 @@ else
 end
 
 txSym = [preambleSym; dataSymTx];%串联前导和数据符号形成完整帧
+if p.rf.enable
+    txSymForChannel = rf_upconvert(txSym, p.rf);
+else
+    txSymForChannel = txSym;
+end
 
 %% 仿真参数初始化与配置
 
@@ -96,6 +108,7 @@ eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
 if eveEnabled
     if ~isfield(p.eve, "ebN0dBOffset"); p.eve.ebN0dBOffset = -6; end
     if ~isfield(p.eve, "scrambleAssumption"); p.eve.scrambleAssumption = "wrong_key"; end
+    if ~isfield(p.eve, "rfFreqOffsetNorm"); p.eve.rfFreqOffsetNorm = 0.0; end
 
     eveEbN0dBList = EbN0dBList + double(p.eve.ebN0dBOffset);
     berEve = nan(numel(methods), numel(EbN0dBList));
@@ -191,9 +204,9 @@ fprintf('[SIM] Eb/N0点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
 syncEnabled = p.rxSync.compensateCarrier || p.rxSync.fineSearchRadius > 0 || ...
     p.rxSync.enableFractionalTiming || p.rxSync.carrierPll.enable;
-fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, RxSync=%s\n', ...
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, RF=%s, RxSync=%s\n', ...
     on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
-    on_off_text(chaosEnabled), on_off_text(syncEnabled));
+    on_off_text(chaosEnabled), on_off_text(p.rf.enable), on_off_text(syncEnabled));
 fprintf('========================================\n\n');
 
 %% 主仿真循环：信道传输与接收端处理
@@ -214,9 +227,9 @@ for ie = 1:numel(EbN0dBList)
 
     if wardenEnabled
         if eveEnabled
-            det = warden_energy_detector(txSym, N0Eve, p.channel, p.channel.maxDelaySymbols, p.covert.warden);
+            det = warden_energy_detector(txSymForChannel, N0Eve, p.channel, p.channel.maxDelaySymbols, p.covert.warden);
         else
-            det = warden_energy_detector(txSym, N0, p.channel, p.channel.maxDelaySymbols, p.covert.warden);
+            det = warden_energy_detector(txSymForChannel, N0, p.channel, p.channel.maxDelaySymbols, p.covert.warden);
         end
         if isnan(wardenPfaTarget); wardenPfaTarget = det.pfaTarget; end
         if isnan(wardenNTrials); wardenNTrials = det.nTrials; end
@@ -265,11 +278,23 @@ for ie = 1:numel(EbN0dBList)
 
         % ============ 信道（CHANNEL） ============
         delay = randi([0, p.channel.maxDelaySymbols], 1, 1);
-        tx = [zeros(delay, 1); txSym];
+        tx = [zeros(delay, 1); txSymForChannel];
 
-        rx = channel_bg_impulsive(tx, N0, p.channel);
+        rxCh = channel_bg_impulsive(tx, N0, p.channel);
+        if p.rf.enable
+            rx = rf_downconvert(rxCh, p.rf);
+        else
+            rx = rxCh;
+        end
         if eveEnabled
-            rxEve = channel_bg_impulsive(tx, N0Eve, p.channel);
+            rxEveCh = channel_bg_impulsive(tx, N0Eve, p.channel);
+            if p.rf.enable
+                rfEve = p.rf;
+                rfEve.rxFreqNorm = p.rf.rxFreqNorm + double(p.eve.rfFreqOffsetNorm);
+                rxEve = rf_downconvert(rxEveCh, rfEve);
+            else
+                rxEve = rxEveCh;
+            end
         end
         % ============ 接收端（RECEIVER）：Bob（合法接收方） ============
         bobOk = true;
@@ -465,7 +490,7 @@ end
 fprintf('[SIM] 开始频谱估计与结果汇总...\n');
 
 % 波形/频谱（单次突发，无信道）
-[psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum(txSym, modInfo);
+[psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum(txSymForChannel, modInfo);
 
 results = struct();
 results.params = p;
