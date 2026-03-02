@@ -1,5 +1,5 @@
-function [y, impMask] = channel_bg_impulsive(x, N0, ch)
-%CHANNEL_BG_IMPULSIVE  AWGN + 伯努利-高斯脉冲噪声信道。
+function [y, impMask, chState] = channel_bg_impulsive(x, N0, ch)
+%CHANNEL_BG_IMPULSIVE  复基带信道：AWGN + BG脉冲（可选衰落/窄带干扰）。
 %
 % 输入:
 %   x  - 输入符号（列向量）
@@ -7,17 +7,140 @@ function [y, impMask] = channel_bg_impulsive(x, N0, ch)
 %   ch - 信道参数结构体
 %        .impulseProb      - 脉冲噪声出现概率
 %        .impulseToBgRatio - 脉冲噪声功率与背景噪声功率比
+%        .fading.enable/.type（可选）
+%        .singleTone.enable/.toBgRatio/.normFreq（可选）
+%        .narrowband.enable/.toBgRatio/.centerFreq/.bandwidth（可选）
+%        .syncImpairment.enable/.timingOffset/.cfoNorm/.phaseOffsetRad（可选）
 %
 % 输出:
 %   y       - 加噪后符号
 %   impMask - 脉冲样本掩码（logical）
+%   chState - 信道状态（可选）
 
 x = x(:);
+n = (0:numel(x)-1).';
+
+% 默认：无衰落
+h = ones(size(x));
+fadingType = "none";
+
+% 可选衰落：块瑞利/逐符号瑞利
+if isfield(ch, "fading") && isfield(ch.fading, "enable") && ch.fading.enable
+    if isfield(ch.fading, "type")
+        fadingType = lower(string(ch.fading.type));
+    else
+        fadingType = "rayleigh_block";
+    end
+    switch fadingType
+        case "rayleigh_block"
+            h0 = (randn(1, 1) + 1j*randn(1, 1)) / sqrt(2);
+            h = h0 * ones(size(x));
+        case "rayleigh_per_symbol"
+            h = (randn(size(x)) + 1j*randn(size(x))) / sqrt(2);
+        otherwise
+            error("未知的衰落类型: %s", string(fadingType));
+    end
+end
+xCh = h .* x;
+
+% 可选：同步失配（分数定时偏移 + 载波频偏/相偏）
+syncImpEnable = false;
+timingOffset = 0;
+cfoNorm = 0;
+phaseOffsetRad = 0;
+if isfield(ch, "syncImpairment") && isfield(ch.syncImpairment, "enable") && ch.syncImpairment.enable
+    syncImpEnable = true;
+    if isfield(ch.syncImpairment, "timingOffset"); timingOffset = double(ch.syncImpairment.timingOffset); end
+    if isfield(ch.syncImpairment, "cfoNorm"); cfoNorm = double(ch.syncImpairment.cfoNorm); end
+    if isfield(ch.syncImpairment, "phaseOffsetRad"); phaseOffsetRad = double(ch.syncImpairment.phaseOffsetRad); end
+
+    if abs(timingOffset) > 1e-12
+        xCh = fractional_delay(xCh, timingOffset);
+    end
+    if abs(cfoNorm) > 0 || abs(phaseOffsetRad) > 0
+        xCh = xCh .* exp(1j * (2*pi*cfoNorm*n + phaseOffsetRad));
+    end
+end
+
+% 背景高斯噪声 + BG脉冲噪声
 nBg = sqrt(N0/2) * (randn(size(x)) + 1j*randn(size(x)));
 
 impMask = rand(size(x)) < ch.impulseProb;
 N0imp = ch.impulseToBgRatio * N0;
 nImp = sqrt(N0imp/2) * (randn(size(x)) + 1j*randn(size(x)));
 
-y = x + nBg + impMask .* nImp;
+jammer = complex(zeros(size(x)));
+
+% 可选单音干扰
+singleToneEnable = false;
+if isfield(ch, "singleTone") && isfield(ch.singleTone, "enable") && ch.singleTone.enable
+    singleToneEnable = true;
+    toneRatio = 10;
+    toneFreq = 0.08;
+    randomPhase = true;
+    if isfield(ch.singleTone, "toBgRatio"); toneRatio = ch.singleTone.toBgRatio; end
+    if isfield(ch.singleTone, "normFreq"); toneFreq = ch.singleTone.normFreq; end
+    if isfield(ch.singleTone, "randomPhase"); randomPhase = logical(ch.singleTone.randomPhase); end
+    if abs(toneFreq) >= 0.5
+        error("singleTone.normFreq必须在(-0.5, 0.5)范围。");
+    end
+    phi0 = 0;
+    if randomPhase
+        phi0 = 2*pi*rand();
+    end
+    toneAmp = sqrt(max(toneRatio, 0) * N0);
+    jammer = jammer + toneAmp * exp(1j * (2*pi*toneFreq*n + phi0));
+end
+
+% 可选窄带噪声干扰（频域成形）
+narrowbandEnable = false;
+if isfield(ch, "narrowband") && isfield(ch.narrowband, "enable") && ch.narrowband.enable
+    narrowbandEnable = true;
+    nbRatio = 8;
+    nbFc = 0.12;
+    nbBw = 0.08;
+    if isfield(ch.narrowband, "toBgRatio"); nbRatio = ch.narrowband.toBgRatio; end
+    if isfield(ch.narrowband, "centerFreq"); nbFc = ch.narrowband.centerFreq; end
+    if isfield(ch.narrowband, "bandwidth"); nbBw = ch.narrowband.bandwidth; end
+    if abs(nbFc) >= 0.5
+        error("narrowband.centerFreq必须在(-0.5, 0.5)范围。");
+    end
+    nbBw = max(min(nbBw, 1.0), 1e-3);
+
+    wn = (randn(size(x)) + 1j*randn(size(x))) / sqrt(2);
+    W = fftshift(fft(wn));
+    f = ((0:numel(x)-1).' / numel(x)) - 0.5;
+    passMask = abs(f) <= (nbBw / 2);
+    W(~passMask) = 0;
+    nb = ifft(ifftshift(W));
+    nb = nb .* exp(1j * 2*pi*nbFc*n);
+
+    targetPow = max(nbRatio, 0) * N0;
+    nowPow = mean(abs(nb).^2);
+    if nowPow > 0
+        nb = nb * sqrt(targetPow / nowPow);
+    end
+    jammer = jammer + nb;
+end
+
+y = xCh + nBg + impMask .* nImp + jammer;
+
+if nargout >= 3
+    chState = struct();
+    chState.h = h;
+    chState.fadingType = char(fadingType);
+    chState.singleToneEnable = singleToneEnable;
+    chState.narrowbandEnable = narrowbandEnable;
+    chState.syncImpairmentEnable = syncImpEnable;
+    chState.timingOffset = timingOffset;
+    chState.cfoNorm = cfoNorm;
+    chState.phaseOffsetRad = phaseOffsetRad;
+end
+end
+
+function y = fractional_delay(x, d)
+% y[n] = x[n-d]，d>0表示向右延时（抽样点更晚）。
+idx = (1:numel(x)).';
+query = idx - d;
+y = interp1(idx, x, query, "linear", 0);
 end

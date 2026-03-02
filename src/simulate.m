@@ -5,7 +5,7 @@
 %   p - 仿真参数结构体（建议由default_params()生成）
 %       .rngSeed, .sim, .source, .chaosEncrypt, .payload
 %       .frame, .scramble, .fec, .interleaver, .mod, .fh
-%       .channel, .mitigation, .softMetric
+%       .channel, .mitigation, .softMetric, .rxSync
 %       .eve（可选）, .covert（可选）
 %
 % 返回包含BER/PSNR/PSD结果的结构体，启用时保存图形。
@@ -16,6 +16,20 @@ end
 
 rng(p.rngSeed);
 set(0, 'DefaultFigureVisible', 'off');
+
+if ~isfield(p, "rxSync"); p.rxSync = struct(); end
+if ~isfield(p.rxSync, "fineSearchRadius"); p.rxSync.fineSearchRadius = 0; end
+if ~isfield(p.rxSync, "compensateCarrier"); p.rxSync.compensateCarrier = false; end
+if ~isfield(p.rxSync, "equalizeAmplitude"); p.rxSync.equalizeAmplitude = true; end
+if ~isfield(p.rxSync, "enableFractionalTiming"); p.rxSync.enableFractionalTiming = false; end
+if ~isfield(p.rxSync, "fractionalRange"); p.rxSync.fractionalRange = 0.5; end
+if ~isfield(p.rxSync, "fractionalStep"); p.rxSync.fractionalStep = 0.05; end
+if ~isfield(p.rxSync, "estimateCfo"); p.rxSync.estimateCfo = false; end
+if ~isfield(p.rxSync, "carrierPll"); p.rxSync.carrierPll = struct(); end
+if ~isfield(p.rxSync.carrierPll, "enable"); p.rxSync.carrierPll.enable = false; end
+if ~isfield(p.rxSync.carrierPll, "alpha"); p.rxSync.carrierPll.alpha = 0.02; end
+if ~isfield(p.rxSync.carrierPll, "beta"); p.rxSync.carrierPll.beta = 3e-4; end
+if ~isfield(p.rxSync.carrierPll, "maxFreq"); p.rxSync.carrierPll.maxFreq = 0.1; end
 
 %% 发送端（TRANSMITTER）
 
@@ -175,8 +189,11 @@ fprintf('[SIM] 链路仿真开始\n');
 fprintf('[SIM] Eb/N0点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
     totalEbN0Points, p.sim.nFramesPerPoint, totalFrames);
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
-fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s\n', ...
-    on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), on_off_text(chaosEnabled));
+syncEnabled = p.rxSync.compensateCarrier || p.rxSync.fineSearchRadius > 0 || ...
+    p.rxSync.enableFractionalTiming || p.rxSync.carrierPll.enable;
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, RxSync=%s\n', ...
+    on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
+    on_off_text(chaosEnabled), on_off_text(syncEnabled));
 fprintf('========================================\n\n');
 
 %% 主仿真循环：信道传输与接收端处理
@@ -231,6 +248,15 @@ for ie = 1:numel(EbN0dBList)
     % --- 帧循环：每个Eb/N0点仿真多帧 ---
     for frameIdx = 1:p.sim.nFramesPerPoint
         globalFrameIdx = globalFrameIdx + 1;
+        syncCfgUse = p.rxSync;
+        if ~isfield(syncCfgUse, "minSearchIndex"); syncCfgUse.minSearchIndex = 1; end
+        if ~isfield(syncCfgUse, "maxSearchIndex") || ~isfinite(double(syncCfgUse.maxSearchIndex))
+            if isfield(p, "channel") && isfield(p.channel, "maxDelaySymbols")
+                syncCfgUse.maxSearchIndex = double(p.channel.maxDelaySymbols) + 6;
+            else
+                syncCfgUse.maxSearchIndex = inf;
+            end
+        end
         if p.sim.nFramesPerPoint <= 20 || frameIdx == 1 || frameIdx == p.sim.nFramesPerPoint || mod(frameIdx, frameLogStep) == 0
             fprintf('[SIM]     帧 %d/%d (总进度 %d/%d, %.1f%%)\n', ...
                 frameIdx, p.sim.nFramesPerPoint, globalFrameIdx, totalFrames, ...
@@ -247,21 +273,21 @@ for ie = 1:numel(EbN0dBList)
         end
         % ============ 接收端（RECEIVER）：Bob（合法接收方） ============
         bobOk = true;
-        startIdx = frame_sync(rx, preambleSym);
+        [startIdx, rxBobSync] = frame_sync(rx, preambleSym, syncCfgUse);
         if isempty(startIdx)
             bobOk = false;
         else
             dataStart = startIdx + numel(preambleSym);
-            dataStop = dataStart + numel(dataSymTx) - 1;
-            if dataStop > numel(rx)
-                bobOk = false;
-            end
+            [rData, bobOk] = extract_fractional_block(rxBobSync, dataStart, numel(dataSymTx));
         end
         if bobOk
-            rData = rx(dataStart:dataStop);
             % 跳频解调（Bob知道跳频序列）
             if fhEnabled
                 rData = fh_demodulate(rData, hopInfo);
+            end
+            % 决策导向载波PLL跟踪残余相位/频偏
+            if p.rxSync.carrierPll.enable
+                rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
             end
         else
             fprintf('[SIM][WARN] Bob帧同步失败: Eb/N0=%.2f dB, frame=%d\n', EbN0dB, frameIdx);
@@ -273,21 +299,20 @@ for ie = 1:numel(EbN0dBList)
         eveOk = false;
         if eveEnabled
             eveOk = true;
-            startIdxEve = frame_sync(rxEve, preambleSym);
+            [startIdxEve, rxEveSync] = frame_sync(rxEve, preambleSym, syncCfgUse);
             if isempty(startIdxEve)
                 eveOk = false;
             else
                 dataStartEve = startIdxEve + numel(preambleSym);
-                dataStopEve = dataStartEve + numel(dataSymTx) - 1;
-                if dataStopEve > numel(rxEve)
-                    eveOk = false;
-                end
+                [rDataEve, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, numel(dataSymTx));
             end
             if eveOk
-                rDataEve = rxEve(dataStartEve:dataStopEve);
                 % Eve的跳频解调（根据Eve的知识假设）
                 if fhEnabled
                     rDataEve = fh_demodulate(rDataEve, hopInfoEve);
+                end
+                if p.rxSync.carrierPll.enable
+                    rDataEve = carrier_pll_sync(rDataEve, p.mod, p.rxSync.carrierPll);
                 end
             else
                 fprintf('[SIM][WARN] Eve帧同步失败: Eb/N0=%.2f dB(Eve=%.2f dB), frame=%d\n', ...
@@ -508,4 +533,24 @@ for k = 1:numel(methods)
 end
 txt = strjoin(pairs, ', ');
 end
-%当前进度
+
+function [blk, ok] = extract_fractional_block(x, startPos, nSamp)
+% 从可能带分数起点的位置提取定长序列。
+x = x(:);
+if nSamp <= 0 || isempty(x)
+    blk = complex(zeros(0, 1));
+    ok = false;
+    return;
+end
+t = startPos + (0:nSamp-1).';
+% 允许轻微越界（线性外推为0），避免分数定时下末尾判定失败
+guard = 2;
+if t(1) < 1 - guard || t(end) > numel(x) + guard
+    blk = complex(zeros(nSamp, 1));
+    ok = false;
+    return;
+end
+idx = (1:numel(x)).';
+blk = interp1(idx, x, t, "linear", 0);
+ok = all(isfinite(blk)) && any(abs(blk) > 0);
+end

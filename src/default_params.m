@@ -78,11 +78,33 @@ p.fh.pnInit = [1 0 0 1];         % 跳频PN序列初始状态
 p.fh.freqSet = linspace(-0.35, 0.35, p.fh.nFreqs);
 
 %% 信道
-% AWGN + 伯努利-高斯脉冲噪声
+% AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/衰落）
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
 p.channel.impulseProb = 0.01;    % 每个符号产生脉冲的概率
 p.channel.impulseToBgRatio = 50; % 脉冲方差 = 比值 * 背景方差
+% 可选：块瑞利衰落（用于更贴近无线场景）
+p.channel.fading = struct();
+p.channel.fading.enable = false;
+p.channel.fading.type = "rayleigh_block"; % 'rayleigh_block' | 'rayleigh_per_symbol'
+% 可选：单音干扰（窄带强干扰）
+p.channel.singleTone = struct();
+p.channel.singleTone.enable = false;
+p.channel.singleTone.toBgRatio = 10;    % 单音功率与背景噪声功率比
+p.channel.singleTone.normFreq = 0.08;   % 归一化频率（cycles/sample），范围(-0.5,0.5)
+p.channel.singleTone.randomPhase = true;
+% 可选：窄带噪声干扰
+p.channel.narrowband = struct();
+p.channel.narrowband.enable = false;
+p.channel.narrowband.toBgRatio = 8;     % 干扰功率与背景噪声功率比
+p.channel.narrowband.centerFreq = 0.12; % 归一化中心频率（cycles/sample）
+p.channel.narrowband.bandwidth = 0.08;  % 归一化双边带宽（0,1]
+% 可选：同步失配（用于验证“完整同步链路”）
+p.channel.syncImpairment = struct();
+p.channel.syncImpairment.enable = false;
+p.channel.syncImpairment.timingOffset = 0.0;      % 分数符号偏移（单位：sample）
+p.channel.syncImpairment.cfoNorm = 0.0;           % 归一化频偏（cycles/sample）
+p.channel.syncImpairment.phaseOffsetRad = 0.0;    % 初始相位偏移（rad）
 
 %% 接收端（RX）
 % 10) 脉冲抑制
@@ -108,6 +130,22 @@ p.mitigation.mlGru = load_pretrained_model(fullfile(modelDir, "impulse_gru_model
 % 11) 软量化（用于vitdec 'soft'）
 p.softMetric = struct();
 p.softMetric.clipA = 4.0; % 量化前将每比特度量裁剪到[-A, A]
+
+% 12) 接收同步（细同步+载波补偿）
+p.rxSync = struct();
+p.rxSync.fineSearchRadius = 2;     % 整数符号级细搜索窗口半径
+p.rxSync.compensateCarrier = true; % 使用前导估计并补偿载波相位/复增益
+p.rxSync.equalizeAmplitude = true; % true: 复增益均衡；false: 仅相位补偿
+p.rxSync.enableFractionalTiming = true; % 分数符号定时估计
+p.rxSync.fractionalRange = 0.5;         % 分数搜索范围（sample）
+p.rxSync.fractionalStep = 0.05;         % 分数搜索步长（sample）
+p.rxSync.estimateCfo = true;            % 用前导估计CFO并前馈补偿
+% 决策导向载波PLL（用于残余频偏/相位跟踪）
+p.rxSync.carrierPll = struct();
+p.rxSync.carrierPll.enable = true;
+p.rxSync.carrierPll.alpha = 0.02;   % 相位环比例增益
+p.rxSync.carrierPll.beta = 3e-4;    % 频率环积分增益
+p.rxSync.carrierPll.maxFreq = 0.1;  % 归一化角频率上限（rad/sample）
 
 %% 截获/隐蔽分析
 % 窃听者/截获者（Eve）
