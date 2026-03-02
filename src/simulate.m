@@ -264,8 +264,14 @@ for ie = 1:numel(EbN0dBList)
         syncCfgUse = p.rxSync;
         if ~isfield(syncCfgUse, "minSearchIndex"); syncCfgUse.minSearchIndex = 1; end
         if ~isfield(syncCfgUse, "maxSearchIndex") || ~isfinite(double(syncCfgUse.maxSearchIndex))
+            mpExtra = 0;
+            if isfield(p, "channel") && isfield(p.channel, "multipath") ...
+                    && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable ...
+                    && isfield(p.channel.multipath, "pathDelays") && ~isempty(p.channel.multipath.pathDelays)
+                mpExtra = max(double(p.channel.multipath.pathDelays(:)));
+            end
             if isfield(p, "channel") && isfield(p.channel, "maxDelaySymbols")
-                syncCfgUse.maxSearchIndex = double(p.channel.maxDelaySymbols) + 6;
+                syncCfgUse.maxSearchIndex = double(p.channel.maxDelaySymbols) + mpExtra + 6;
             else
                 syncCfgUse.maxSearchIndex = inf;
             end

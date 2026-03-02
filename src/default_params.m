@@ -114,6 +114,14 @@ p.channel.syncImpairment.enable = false;
 p.channel.syncImpairment.timingOffset = 0.0;      % 分数符号偏移（单位：sample）
 p.channel.syncImpairment.cfoNorm = 0.0;           % 归一化频偏（cycles/sample）
 p.channel.syncImpairment.phaseOffsetRad = 0.0;    % 初始相位偏移（rad）
+% 可选：多径抽头信道（整数抽头时延，复基带等效）
+p.channel.multipath = struct();
+p.channel.multipath.enable = true;
+p.channel.multipath.pathDelays = [0 1 2];      % 单位: sample
+p.channel.multipath.pathGainsDb = [0 -12 -18]; % 各径平均增益(dB)
+% 各径相位（固定相位便于可复现对比）
+p.channel.multipath.pathPhasesRad = [0 0 0];
+p.channel.multipath.fadingType = "static";     % 'static' | 'rayleigh_block'
 
 %% 接收端（RX）
 % 10) 脉冲抑制

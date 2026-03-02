@@ -1,5 +1,5 @@
 function [y, impMask, chState] = channel_bg_impulsive(x, N0, ch)
-%CHANNEL_BG_IMPULSIVE  复基带信道：AWGN + BG脉冲（可选衰落/窄带干扰）。
+%CHANNEL_BG_IMPULSIVE  复基带信道：AWGN + BG脉冲（可选多径/衰落/窄带干扰）。
 %
 % 输入:
 %   x  - 输入符号（列向量）
@@ -8,6 +8,7 @@ function [y, impMask, chState] = channel_bg_impulsive(x, N0, ch)
 %        .impulseProb      - 脉冲噪声出现概率
 %        .impulseToBgRatio - 脉冲噪声功率与背景噪声功率比
 %        .fading.enable/.type（可选）
+%        .multipath.enable/.pathDelays/.pathGainsDb（可选）
 %        .singleTone.enable/.toBgRatio/.normFreq（可选）
 %        .narrowband.enable/.toBgRatio/.centerFreq/.bandwidth（可选）
 %        .syncImpairment.enable/.timingOffset/.cfoNorm/.phaseOffsetRad（可选）
@@ -42,6 +43,56 @@ if isfield(ch, "fading") && isfield(ch.fading, "enable") && ch.fading.enable
     end
 end
 xCh = h .* x;
+
+% 可选：多径抽头（整数时延）
+mpEnable = false;
+mpTaps = 1;
+if isfield(ch, "multipath") && isfield(ch.multipath, "enable") && ch.multipath.enable
+    mpEnable = true;
+    if ~isfield(ch.multipath, "pathDelays") || ~isfield(ch.multipath, "pathGainsDb")
+        error("multipath启用时需提供pathDelays与pathGainsDb。");
+    end
+    dly = double(ch.multipath.pathDelays(:));
+    gDb = double(ch.multipath.pathGainsDb(:));
+    if numel(dly) ~= numel(gDb)
+        error("pathDelays与pathGainsDb长度必须一致。");
+    end
+    if any(dly < 0) || any(abs(dly - round(dly)) > 1e-12)
+        error("pathDelays必须是非负整数。");
+    end
+    dly = round(dly);
+
+    amp = 10.^(gDb/20);
+    phase = zeros(size(amp));
+    if isfield(ch.multipath, "pathPhasesRad") && ~isempty(ch.multipath.pathPhasesRad)
+        phase = double(ch.multipath.pathPhasesRad(:));
+        if numel(phase) ~= numel(amp)
+            error("pathPhasesRad长度需与pathDelays一致。");
+        end
+    else
+        phase = 2*pi*rand(size(amp));
+    end
+
+    if ~isfield(ch.multipath, "fadingType")
+        mpFadingType = "static";
+    else
+        mpFadingType = lower(string(ch.multipath.fadingType));
+    end
+    switch mpFadingType
+        case "static"
+            cplxAmp = amp .* exp(1j*phase);
+        case "rayleigh_block"
+            cplxAmp = amp .* exp(1j*phase) .* ((randn(size(amp)) + 1j*randn(size(amp))) / sqrt(2));
+        otherwise
+            error("未知的multipath.fadingType: %s", string(mpFadingType));
+    end
+
+    mpTaps = complex(zeros(max(dly)+1, 1));
+    for k = 1:numel(dly)
+        mpTaps(dly(k)+1) = mpTaps(dly(k)+1) + cplxAmp(k);
+    end
+    xCh = filter(mpTaps, 1, xCh);
+end
 
 % 可选：同步失配（分数定时偏移 + 载波频偏/相偏）
 syncImpEnable = false;
@@ -131,6 +182,8 @@ if nargout >= 3
     chState.fadingType = char(fadingType);
     chState.singleToneEnable = singleToneEnable;
     chState.narrowbandEnable = narrowbandEnable;
+    chState.multipathEnable = mpEnable;
+    chState.multipathTaps = mpTaps;
     chState.syncImpairmentEnable = syncImpEnable;
     chState.timingOffset = timingOffset;
     chState.cfoNorm = cfoNorm;
