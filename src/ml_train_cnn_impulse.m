@@ -102,7 +102,7 @@ inputStd(inputStd < 1e-6) = 1;
 for b = 1:nBlocks
     allSeqX{b} = (allSeqX{b} - inputMean) ./ inputStd;
 end
-%当前进度
+
 %% 初始化模型
 model = ml_cnn_impulse_model();
 model.inputMean = inputMean;
@@ -204,7 +204,7 @@ for epoch = 1:opts.epochs
 
     epochLoss = epochLoss / nBlocks;
     losses(epoch) = epochLoss;
-
+%当前进度
     if opts.verbose && (epoch == 1 || mod(epoch, 5) == 0 || epoch == opts.epochs)
         % 在完整数据集上评估
         allPred = [];

@@ -7,9 +7,6 @@ function [mask, reliability, cleanSym, pImpulse] = ml_gru_impulse_detect(rIn, mo
 %           .type, .threshold
 %           .inputMean, .inputStd
 %           .net（DL模型）
-%           旧版兼容字段: .hiddenSize, .outputSize
-%                        .Wr, .Ur, .br, .Wz, .Uz, .bz
-%                        .Wh, .Uh, .bh, .Wo, .bo
 %
 % 输出:
 %   mask       - 二值脉冲掩码（逻辑型，N x 1）
@@ -18,7 +15,6 @@ function [mask, reliability, cleanSym, pImpulse] = ml_gru_impulse_detect(rIn, mo
 %   pImpulse   - 原始脉冲概率（N x 1）
 
 r = rIn(:);
-N = numel(r);
 
 % 提取输入特征
 X = ml_cnn_features(r);  % 复用相同的特征提取
@@ -26,14 +22,12 @@ X = ml_cnn_features(r);  % 复用相同的特征提取
 % 归一化
 Xn = (X - model.inputMean) ./ (model.inputStd + 1e-8);
 
-% 检查模型类型
-if isfield(model, 'type') && model.type == "gru_dl"
-    % Deep Learning Toolbox dlnetwork推理
-    [pImpulse, reliability, cleanReal, cleanImag] = dl_forward_gru(Xn, model);
-else
-    % 旧版手动GRU推理（向后兼容）
-    [pImpulse, reliability, cleanReal, cleanImag] = legacy_forward_gru(Xn, model, N);
+% 仅支持Deep Learning Toolbox模型
+if ~isfield(model, 'type') || model.type ~= "gru_dl"
+    error("ml_gru_impulse_detect:UnsupportedModelType", ...
+        "仅支持 type=""gru_dl"" 的模型，请使用 ml_train_gru_impulse 重新训练。");
 end
+[pImpulse, reliability, cleanReal, cleanImag] = dl_forward_gru(Xn, model);
 
 % 应用阈值
 mask = pImpulse >= model.threshold;
@@ -50,58 +44,20 @@ end
 function [pImpulse, reliability, cleanReal, cleanImag] = dl_forward_gru(Xn, model)
 %DL_FORWARD_GRU  使用dlnetwork进行GRU推理。
 
-N = size(Xn, 1);
-
 % 转换为dlarray格式 'CTB' (Channel x Time x Batch)
-XDl = dlarray(single(Xn'), 'CTB');  % [4 x N x 1]
+XDl = dlarray(single(Xn'), 'CTB');  % [4 x T x 1]
 
 % 前向传播（推理模式）
-out = predict(model.net, XDl);  % [4 x N x 1]
+out = predict(model.net, XDl);  % [4 x T x 1]
 
 % 提取数据并转换为double精度（vitdec需要double）
-out = double(extractdata(out));  % [4 x N]
+out = double(extractdata(out));  % [4 x T]
 
 % 解析输出
 pImpulse = sigmoid(out(1,:)');       % [N x 1]
 reliability = sigmoid(out(2,:)');     % [N x 1]
 cleanReal = out(3,:)';               % [N x 1]
 cleanImag = out(4,:)';               % [N x 1]
-
-end
-
-%% 旧版手动GRU前向推理（向后兼容）
-function [pImpulse, reliability, cleanReal, cleanImag] = legacy_forward_gru(Xn, model, N)
-%LEGACY_FORWARD_GRU  使用手动实现的GRU进行推理。
-
-hs = model.hiddenSize;
-h = zeros(1, hs);  % 初始隐藏状态
-
-outputs = zeros(N, model.outputSize);
-
-for t = 1:N
-    xt = Xn(t, :);
-
-    % 重置门
-    rt = sigmoid(xt * model.Wr + h * model.Ur + model.br);
-
-    % 更新门
-    zt = sigmoid(xt * model.Wz + h * model.Uz + model.bz);
-
-    % 候选隐藏状态
-    h_tilde = tanh(xt * model.Wh + (rt .* h) * model.Uh + model.bh);
-
-    % 新隐藏状态
-    h = (1 - zt) .* h + zt .* h_tilde;
-
-    % 输出
-    outputs(t, :) = h * model.Wo + model.bo;
-end
-
-% 解析输出
-pImpulse = sigmoid(outputs(:, 1));
-reliability = sigmoid(outputs(:, 2));
-cleanReal = outputs(:, 3);
-cleanImag = outputs(:, 4);
 
 end
 

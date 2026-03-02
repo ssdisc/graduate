@@ -7,8 +7,6 @@ function [mask, reliability, cleanSym, pImpulse] = ml_cnn_impulse_detect(rIn, mo
 %           .type, .threshold
 %           .inputMean, .inputStd
 %           .net（DL模型）
-%           旧版兼容字段: .conv1KernelSize, .conv2KernelSize
-%                        .halfWin, .W1, .b1, .W2, .b2, .Wo, .bo
 %
 % 输出:
 %   mask       - 二值脉冲掩码（逻辑型，N x 1）
@@ -25,14 +23,12 @@ X = ml_cnn_features(r);  % [N x inputChannels]
 % 归一化
 Xn = (X - model.inputMean) ./ (model.inputStd + 1e-8);
 
-% 检查模型类型
-if isfield(model, 'type') && model.type == "cnn_dl"
-    % Deep Learning Toolbox dlnetwork推理
-    [pImpulse, reliability, cleanReal, cleanImag] = dl_forward(Xn, model);
-else
-    % 旧版手动CNN推理（向后兼容）
-    [pImpulse, reliability, cleanReal, cleanImag] = legacy_forward(Xn, model, N);
+% 仅支持Deep Learning Toolbox模型
+if ~isfield(model, 'type') || model.type ~= "cnn_dl"
+    error("ml_cnn_impulse_detect:UnsupportedModelType", ...
+        "仅支持 type=""cnn_dl"" 的模型，请使用 ml_train_cnn_impulse 重新训练。");
 end
+[pImpulse, reliability, cleanReal, cleanImag] = dl_forward(Xn, model);
 
 % 确保输出长度匹配
 actualN = numel(pImpulse);
@@ -63,16 +59,14 @@ end
 function [pImpulse, reliability, cleanReal, cleanImag] = dl_forward(Xn, model)
 %DL_FORWARD  使用dlnetwork进行推理。
 
-N = size(Xn, 1);
-
 % 转换为dlarray格式 'CTB' (Channel x Time x Batch)
-XDl = dlarray(single(Xn'), 'CTB');  % [4 x N x 1]
+XDl = dlarray(single(Xn'), 'CTB');  % [4 x T x 1]
 
 % 前向传播（推理模式）
-out = predict(model.net, XDl);  % [4 x N x 1]
+out = predict(model.net, XDl);  % [4 x T x 1]
 
 % 提取数据并转换为double精度（vitdec需要double）
-out = double(extractdata(out));  % [4 x N]
+out = double(extractdata(out));  % [4 x T]
 
 % 解析输出
 pImpulse = sigmoid(out(1,:)');       % [N x 1]
@@ -80,62 +74,6 @@ reliability = sigmoid(out(2,:)');     % [N x 1]
 cleanReal = out(3,:)';               % [N x 1]
 cleanImag = out(4,:)';               % [N x 1]
 
-end
-
-%% 旧版手动CNN前向推理（向后兼容）
-function [pImpulse, reliability, cleanReal, cleanImag] = legacy_forward(Xn, model, N)
-%LEGACY_FORWARD  使用手动实现的CNN进行推理。
-
-% 计算填充以保持卷积后的输出大小
-K1 = model.conv1KernelSize;
-K2 = model.conv2KernelSize;
-totalKernelLoss = (K1 - 1) + (K2 - 1);
-padLen = ceil(totalKernelLoss / 2) + model.halfWin;
-
-% 填充输入
-Xpad = [repmat(Xn(1,:), padLen, 1); Xn; repmat(Xn(end,:), padLen, 1)];
-
-% 前向传播
-% Conv1 + ReLU
-h1 = conv1d_forward(Xpad, model.W1, model.b1);
-h1 = max(h1, 0);
-
-% Conv2 + ReLU
-h2 = conv1d_forward(h1, model.W2, model.b2);
-h2 = max(h2, 0);
-
-% 裁剪到原始长度
-h2Len = size(h2, 1);
-trimStart = max(1, floor((h2Len - N) / 2) + 1);
-trimEnd = min(h2Len, trimStart + N - 1);
-h2 = h2(trimStart:trimEnd, :);
-
-% 输出层
-out = h2 * model.Wo + model.bo;
-
-% 解析输出
-pImpulse = sigmoid(out(:, 1));
-reliability = sigmoid(out(:, 2));
-cleanReal = out(:, 3);
-cleanImag = out(:, 4);
-
-end
-
-function y = conv1d_forward(x, W, b)
-%CONV1D_FORWARD  1D卷积（valid模式）。
-
-[T, Cin] = size(x);
-[K, ~, Cout] = size(W);
-Tout = T - K + 1;
-
-y = zeros(Tout, Cout);
-for co = 1:Cout
-    for ci = 1:Cin
-        kernel = W(:, ci, co);
-        y(:, co) = y(:, co) + conv(x(:, ci), flipud(kernel), 'valid');
-    end
-    y(:, co) = y(:, co) + b(co);
-end
 end
 
 function y = sigmoid(x)
