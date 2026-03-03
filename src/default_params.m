@@ -122,6 +122,25 @@ p.channel.multipath.pathGainsDb = [0 -12 -18]; % 各径平均增益(dB)
 % 各径相位（固定相位便于可复现对比）
 p.channel.multipath.pathPhasesRad = [0 0 0];
 p.channel.multipath.fadingType = "static";     % 'static' | 'rayleigh_block'
+% 可选：多普勒（归一化到采样率，cycles/sample）
+% 若与多径同时启用，可形成“每径不同频移”的时变信道。
+p.channel.doppler = struct();
+p.channel.doppler.enable = true;
+p.channel.doppler.mode = "common";             % 'common' | 'per_path_random' | 'per_path_fixed'
+p.channel.doppler.maxNorm = 3e-4;              % mode=per_path_random/fixed时生效
+p.channel.doppler.commonNorm = 1e-4;           % mode=common时生效
+p.channel.doppler.pathNorm = [];               % 显式指定每径频移（覆盖mode）
+p.channel.doppler.initialPhaseRad = [];        % 空=随机初相，标量/向量均可
+% 可选：路径损耗（大尺度衰减）
+p.channel.pathLoss = struct();
+p.channel.pathLoss.enable = true;
+p.channel.pathLoss.model = "log_distance";     % 'log_distance' | 'fixed_db'
+p.channel.pathLoss.referenceLossDb = 0.0;      % d0处路径损耗(dB)
+p.channel.pathLoss.referenceDistance = 1.0;    % d0（任意一致单位）
+p.channel.pathLoss.distance = 1.5;             % 链路距离（同d0单位）
+p.channel.pathLoss.pathLossExp = 2.0;          % 路径损耗指数
+p.channel.pathLoss.shadowStdDb = 0.0;          % 对数正态阴影标准差(dB)
+p.channel.pathLoss.fixedLossDb = 0.0;          % model='fixed_db'时使用
 
 %% 接收端（RX）
 % 10) 脉冲抑制
