@@ -158,7 +158,7 @@ p.mitigation.thresholdFixed = 3.0; % thresholdStrategy="fixed"时使用
 
 modelDir = fullfile(pwd, "models");
 if ~exist(modelDir, 'dir')
-    repoRoot = fileparts(fileparts(fileparts(mfilename('fullpath'))));
+    repoRoot = fileparts(fileparts(mfilename('fullpath')));
     altModelDir = fullfile(repoRoot, "models");
     if exist(altModelDir, 'dir')
         modelDir = altModelDir;

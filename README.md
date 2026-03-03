@@ -251,9 +251,9 @@ p.mitigation.mlGru = gruModel;
 results = simulate(p);
 ```
 
-或使用训练脚本：
+或直接运行主脚本（首次会自动训练并保存模型到 `models/`）：
 ```matlab
-train_ml_impulse_models  % 自动训练并保存到models/目录
+run_demo
 ```
 
 ### 9. 隐蔽性分析
@@ -278,7 +278,7 @@ Eve扰码假设模式：
 
 ## 关键参数配置
 
-在 `src/link/default_params.m` 中配置：
+在 `src/default_params.m` 中配置：
 
 ### 仿真参数
 ```matlab
@@ -325,86 +325,28 @@ p.covert.warden.pfaTarget = 0.01;  % 监视者虚警率目标
 
 ```
 graduate/
-├── README.md                    # 本文档
+├── README.md
+├── run_demo.m                     # 主演示入口
 ├── src/
-│   ├── run_demo.m              # 主演示脚本
-│   ├── train_ml_impulse_models.m  # ML脉冲抑制模型训练脚本
-│   ├── demo_ml_impulse_mitigation.m  # ML抑制演示
-│   └── link/
-│       ├── simulate.m          # 端到端仿真主函数
-│       ├── default_params.m    # 默认参数配置
-│       │
-│       │── # 信源处理
-│       ├── load_source_image.m
-│       ├── image_to_payload_bits.m
-│       ├── payload_bits_to_image.m
-│       ├── image_quality.m
-│       │
-│       │── # 成帧与同步
-│       ├── make_preamble.m
-│       ├── build_header_bits.m
-│       ├── frame_sync.m
-│       ├── parse_frame_bits.m
-│       │
-│       │── # 编码与交织
-│       ├── fec_encode.m
-│       ├── fec_decode.m
-│       ├── interleave_bits.m
-│       ├── deinterleave_bits.m
-│       │
-│       │── # 扰码
-│       ├── scramble_bits.m
-│       ├── descramble_bits.m
-│       │
-│       │── # 调制解调
-│       ├── modulate_bits.m
-│       ├── demodulate_to_softbits.m
-│       │
-│       │── # 跳频
-│       ├── fh_generate_sequence.m
-│       ├── fh_modulate.m
-│       ├── fh_demodulate.m
-│       │
-│       │── # 信道
-│       ├── channel_bg_impulsive.m
-│       │
-│       │── # 脉冲抑制
-│       ├── mitigate_impulses.m
-│       │
-│       │── # ML模型 - CNN
-│       ├── ml_cnn_impulse_model.m
-│       ├── ml_cnn_impulse_detect.m
-│       ├── ml_cnn_features.m
-│       ├── ml_train_cnn_impulse.m
-│       │
-│       │── # ML模型 - GRU
-│       ├── ml_gru_impulse_model.m
-│       ├── ml_gru_impulse_detect.m
-│       ├── ml_train_gru_impulse.m
-│       │
-│       │── # ML模型 - 逻辑回归
-│       ├── ml_impulse_lr_model.m
-│       ├── ml_impulse_detect.m
-│       ├── ml_impulse_features.m
-│       ├── ml_train_impulse_lr.m
-│       │
-│       │── # 隐蔽性分析
-│       ├── warden_energy_detector.m
-│       │
-│       │── # 工具函数
-│       ├── ebn0_to_n0.m
-│       ├── estimate_spectrum.m
-│       ├── bits_to_uint.m
-│       ├── uint_to_bits.m
-│       │
-│       │── # 结果输出
-│       ├── make_results_dir.m
-│       ├── make_summary.m
-│       └── save_figures.m
-│
-├── models/                      # 训练好的ML模型
-├── results/                     # 仿真结果输出
-└── docs/                        # 其他文档
+│   ├── default_params.m           # 默认参数配置
+│   ├── simulate.m                 # 端到端仿真主函数
+│   ├── source/                    # 图像信源与重建
+│   ├── security/                  # 混沌加密/解密
+│   ├── frame/                     # 前导、帧头、帧解析
+│   ├── coding/                    # 扰码/FEC/交织/比特工具
+│   ├── modem/                     # 调制解调
+│   ├── fh/                        # 跳频
+│   ├── rf/                        # 射频上下变频
+│   ├── sync/                      # 帧同步与载波跟踪
+│   ├── channel/                   # 信道与噪声参数换算
+│   ├── mitigation/                # 脉冲抑制
+│   │   └── ml/                    # ML检测与训练
+│   ├── covert/                    # 监视者检测
+│   ├── analysis/                  # 频谱估计与结果汇总
+│   └── io/                        # 结果目录与图像保存
+├── models/                        # 训练好的ML模型
+├── results/                       # 仿真结果输出
+└── docs/                          # 其他文档
 ```
 
 ---
