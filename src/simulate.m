@@ -42,16 +42,24 @@ if ~isfield(p.rf, "rxPhaseOffsetRad"); p.rf.rxPhaseOffsetRad = 0; end
 
 imgTx = load_source_image(p.source);
 
-% 混沌加密（图像层面）
-chaosEnabled = isfield(p, 'chaosEncrypt') && isfield(p.chaosEncrypt, 'enable') && p.chaosEncrypt.enable;
-if chaosEnabled
-    [imgTxEnc, chaosEncInfo] = chaos_encrypt(imgTx, p.chaosEncrypt);
-else
-    imgTxEnc = imgTx;
-    chaosEncInfo = struct('enabled', false);
-end 
+payloadCodec = get_payload_codec(p.payload);
+usePayloadBitChaos = payloadCodec == "dct";
 
-[payloadBits, meta] = image_to_payload_bits(imgTxEnc, p.payload);%将图像转换为比特流载荷，并生成元数据（尺寸等）
+% 混沌加密
+chaosEnabled = isfield(p, 'chaosEncrypt') && isfield(p.chaosEncrypt, 'enable') && p.chaosEncrypt.enable;
+imgForPayload = imgTx;
+chaosEncInfo = struct('enabled', false, 'mode', "none");
+if chaosEnabled && ~usePayloadBitChaos
+    [imgForPayload, chaosEncInfo] = chaos_encrypt(imgTx, p.chaosEncrypt);
+    chaosEncInfo.mode = "image";
+end
+
+[payloadBitsPlain, meta] = image_to_payload_bits(imgForPayload, p.payload);%将图像转换为比特流载荷，并生成元数据（尺寸等）
+if chaosEnabled && usePayloadBitChaos
+    [payloadBits, chaosEncInfo] = chaos_encrypt_bits(payloadBitsPlain, p.chaosEncrypt);
+else
+    payloadBits = payloadBitsPlain;
+end
 
 [~, preambleSym] = make_preamble(p.frame.preambleLength);%生成PN前导
 [headerBits, ~] = build_header_bits(meta, p.frame.magic16);%构建帧头比特流
@@ -379,13 +387,17 @@ for ie = 1:numel(EbN0dBList)
                     nErr(im) = nErr(im) + sum(payloadBitsRx ~= payloadBitsTxTrunc);
                     nTot(im) = nTot(im) + numel(payloadBitsTxTrunc);
 
-                    imgRxEnc = payload_bits_to_image(payloadBitsRx, metaRx);
-
                     % 混沌解密（Bob知道密钥）
-                    if chaosEnabled
-                        imgRx = chaos_decrypt(imgRxEnc, chaosEncInfo);
+                    if chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
+                        if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
+                            payloadBitsRxDec = chaos_decrypt_bits(payloadBitsRx, chaosEncInfo);
+                            imgRx = payload_bits_to_image(payloadBitsRxDec, metaRx, p.payload);
+                        else
+                            imgRxEnc = payload_bits_to_image(payloadBitsRx, metaRx, p.payload);
+                            imgRx = chaos_decrypt(imgRxEnc, chaosEncInfo);
+                        end
                     else
-                        imgRx = imgRxEnc;
+                        imgRx = payload_bits_to_image(payloadBitsRx, metaRx, p.payload);
                     end
 
                     [psnrNow, ssimNow] = image_quality(imgTx, imgRx);
@@ -434,13 +446,17 @@ for ie = 1:numel(EbN0dBList)
                 nErrEve(im) = nErrEve(im) + sum(payloadBitsEve ~= payloadBitsTxTrunc);
                 nTotEve(im) = nTotEve(im) + numel(payloadBitsTxTrunc);
 
-                imgEveEnc = payload_bits_to_image(payloadBitsEve, metaUse);
-
                 % Eve的混沌解密（根据Eve的知识假设）
-                if chaosEnabled && chaosEncInfoEve.enabled
-                    imgEve = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
+                if chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
+                    if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
+                        payloadBitsEveDec = chaos_decrypt_bits(payloadBitsEve, chaosEncInfoEve);
+                        imgEve = payload_bits_to_image(payloadBitsEveDec, metaUse, p.payload);
+                    else
+                        imgEveEnc = payload_bits_to_image(payloadBitsEve, metaUse, p.payload);
+                        imgEve = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
+                    end
                 else
-                    imgEve = imgEveEnc;  % Eve不解密或不知道密钥
+                    imgEve = payload_bits_to_image(payloadBitsEve, metaUse, p.payload);  % Eve不解密或不知道密钥
                 end
 
                 [psnrNowEve, ssimNowEve] = image_quality(imgTx, imgEve);
@@ -588,4 +604,19 @@ end
 idx = (1:numel(x)).';
 blk = interp1(idx, x, t, "linear", 0);
 ok = all(isfinite(blk)) && any(abs(blk) > 0);
+end
+
+function codec = get_payload_codec(payload)
+codec = "raw";
+if isfield(payload, "codec") && strlength(string(payload.codec)) > 0
+    codec = lower(string(payload.codec));
+end
+switch codec
+    case {"raw", "none"}
+        codec = "raw";
+    case {"dct", "dct8", "dct_lossy"}
+        codec = "dct";
+    otherwise
+        codec = "raw";
+end
 end

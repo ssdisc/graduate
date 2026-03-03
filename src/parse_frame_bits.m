@@ -47,8 +47,14 @@ if bpp ~= 8
     ok = false;
     return;
 end
-expectedBytes = uint32(rows) * uint32(cols) * uint32(channels);
-if payloadBytes ~= expectedBytes
+if payloadBytes == 0
+    payloadBits = uint8([]);
+    meta = struct();
+    ok = false;
+    return;
+end
+needPayloadBits = double(payloadBytes) * 8;
+if numel(rxBits) < (idx - 1) + needPayloadBits
     payloadBits = uint8([]);
     meta = struct();
     ok = false;
@@ -62,7 +68,7 @@ meta.channels = channels;
 meta.bitsPerPixel = bpp;
 meta.payloadBytes = payloadBytes;
 
-payloadBits = rxBits(idx:end);
+payloadBits = rxBits(idx:idx + needPayloadBits - 1);
 ok = true;
 end
 
