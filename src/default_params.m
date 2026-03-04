@@ -76,9 +76,17 @@ p.fh = struct();
 p.fh.enable = true;              % 是否启用跳频
 p.fh.nFreqs = 8;                 % 跳频频点数量
 p.fh.symbolsPerHop = 64;         % 每跳的符号数（跳频速率 = 符号率/symbolsPerHop）
-p.fh.sequenceType = 'pn';        % 'pn' | 'linear' | 'random'
+p.fh.sequenceType = 'chaos';        % 'pn' | 'chaos' | 'linear' | 'random'
 p.fh.pnPolynomial = [1 0 0 1 1]; % 跳频PN序列多项式 (x^4 + x + 1)
 p.fh.pnInit = [1 0 0 1];         % 跳频PN序列初始状态
+% 混沌跳频参数（sequenceType='chaos'时使用）
+p.fh.chaosMethod = 'logistic';   % 'logistic' | 'henon' | 'tent'
+p.fh.chaosParams = struct();
+p.fh.chaosParams.mu = 3.9999;                % logistic/tent参数
+p.fh.chaosParams.x0 = 0.3141592653589793;    % 初值（密钥）
+p.fh.chaosParams.a = 1.4;                    % henon参数a
+p.fh.chaosParams.b = 0.3;                    % henon参数b
+p.fh.chaosParams.y0 = 0.123456789;           % henon初值y0
 % 频率集合（归一化频率，相对于符号率）
 % 例如：8个频点均匀分布在 [-0.35, 0.35]
 p.fh.freqSet = linspace(-0.35, 0.35, p.fh.nFreqs);

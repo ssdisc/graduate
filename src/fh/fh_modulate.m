@@ -10,9 +10,10 @@ function [txHopped, hopInfo] = fh_modulate(txSym, fh)
 %           .symbolsPerHop - 每跳包含的符号数
 %           .nFreqs        - 频点数量
 %           .freqSet       - 频偏集合（长度为nFreqs）
-%           .sequenceType  - 序列类型: 'pn'/'linear'/'random'
+%           .sequenceType  - 序列类型: 'pn'/'chaos'/'linear'/'random'
 %           .pnPolynomial  - PN多项式（pn模式）
 %           .pnInit        - PN初始状态（pn模式）
+%           .chaosMethod/.chaosParams（chaos模式）
 %
 % 输出:
 %   txHopped - 跳频后的符号（复数列向量）

@@ -153,9 +153,50 @@ if eveEnabled
             % Eve使用错误的跳频初始状态
             if fhEnabled
                 fhEve = p.fh;
-                fhEve.pnInit = circshift(fhEve.pnInit, 2);
-                if all(fhEve.pnInit == 0)
-                    fhEve.pnInit(1) = 1;
+                seqTypeEve = lower(string(fhEve.sequenceType));
+                switch seqTypeEve
+                    case "pn"
+                        if isfield(fhEve, "pnInit") && ~isempty(fhEve.pnInit)
+                            fhEve.pnInit = circshift(fhEve.pnInit, 2);
+                            if all(fhEve.pnInit == 0)
+                                fhEve.pnInit(1) = 1;
+                            end
+                        end
+
+                    case {"chaos", "chaotic"}
+                        if ~isfield(fhEve, "chaosMethod") || strlength(string(fhEve.chaosMethod)) == 0
+                            fhEve.chaosMethod = "logistic";
+                        end
+                        if ~isfield(fhEve, "chaosParams") || ~isstruct(fhEve.chaosParams)
+                            fhEve.chaosParams = struct();
+                        end
+                        chaosMethodEve = lower(string(fhEve.chaosMethod));
+                        switch chaosMethodEve
+                            case {"logistic", "tent"}
+                                if ~isfield(fhEve.chaosParams, "x0") || isempty(fhEve.chaosParams.x0)
+                                    fhEve.chaosParams.x0 = 0.1234567890123456;
+                                end
+                                fhEve.chaosParams.x0 = wrap_unit_interval(double(fhEve.chaosParams.x0) + 1e-10);
+                            case "henon"
+                                if ~isfield(fhEve.chaosParams, "x0") || isempty(fhEve.chaosParams.x0)
+                                    fhEve.chaosParams.x0 = 0.1;
+                                end
+                                if ~isfield(fhEve.chaosParams, "y0") || isempty(fhEve.chaosParams.y0)
+                                    fhEve.chaosParams.y0 = 0.1;
+                                end
+                                fhEve.chaosParams.x0 = wrap_unit_interval(double(fhEve.chaosParams.x0) + 1e-10);
+                                fhEve.chaosParams.y0 = wrap_unit_interval(double(fhEve.chaosParams.y0) + 2e-10);
+                            otherwise
+                                if isfield(fhEve.chaosParams, "x0") && ~isempty(fhEve.chaosParams.x0)
+                                    fhEve.chaosParams.x0 = wrap_unit_interval(double(fhEve.chaosParams.x0) + 1e-10);
+                                end
+                        end
+
+                    otherwise
+                        % 其他序列类型下，扰动频点排列以构造“部分已知”
+                        if isfield(fhEve, "freqSet") && numel(fhEve.freqSet) > 1
+                            fhEve.freqSet = circshift(fhEve.freqSet, 1);
+                        end
                 end
                 [~, hopInfoEve] = fh_modulate(dataSymTx, fhEve);
             else
@@ -618,5 +659,14 @@ switch codec
         codec = "dct";
     otherwise
         codec = "raw";
+end
+end
+
+function x = wrap_unit_interval(x)
+x = mod(double(x), 1.0);
+if x <= 0
+    x = x + eps;
+elseif x >= 1
+    x = 1 - eps;
 end
 end

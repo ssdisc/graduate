@@ -166,7 +166,7 @@ run_demo
 p.fh.enable = true;           % 启用跳频
 p.fh.nFreqs = 8;              % 跳频频点数量
 p.fh.symbolsPerHop = 64;      % 每跳符号数（跳频速率）
-p.fh.sequenceType = 'pn';     % 序列类型：'pn' | 'linear' | 'random'
+p.fh.sequenceType = 'pn';     % 序列类型：'pn' | 'chaos' | 'linear' | 'random'
 p.fh.freqSet = linspace(-0.35, 0.35, 8);  % 归一化频率集合
 ```
 

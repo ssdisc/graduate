@@ -5,16 +5,19 @@ function [freqIdx, state] = fh_generate_sequence(nHops, fh)
 %   nHops - 需要的跳频数量
 %   fh    - 跳频参数结构体
 %           .nFreqs       - 频点数量
-%           .sequenceType - 序列类型: 'pn'/'linear'/'random'
+%           .sequenceType - 序列类型: 'pn'/'chaos'/'linear'/'random'
 %           .pnPolynomial - PN多项式（sequenceType='pn'时使用）
 %           .pnInit       - PN初始状态（sequenceType='pn'时使用）
+%           .chaosMethod  - 混沌映射类型（sequenceType='chaos'时使用）
+%           .chaosParams  - 混沌参数（sequenceType='chaos'时使用）
 %
 % 输出:
 %   freqIdx - 频率索引序列 (1 到 nFreqs)
-%   state   - PN序列状态（用于同步）
+%   state   - 序列状态（用于调试/同步）
 %
 % 支持的序列类型:
 %   'pn'     - 基于PN序列的伪随机跳频
+%   'chaos'  - 基于混沌映射的跳频（Logistic/Henon/Tent）
 %   'linear' - 线性递增跳频（用于测试）
 %   'random' - 完全随机跳频（不可复现，仅测试用）
 
@@ -25,6 +28,16 @@ end
 
 nFreqs = fh.nFreqs;
 seqType = lower(string(fh.sequenceType));
+if nFreqs < 1 || abs(nFreqs - round(nFreqs)) > 1e-12
+    error("fh.nFreqs必须为正整数，当前为%g。", nFreqs);
+end
+nFreqs = round(nFreqs);
+
+if nFreqs == 1
+    freqIdx = ones(nHops, 1);
+    state = [];
+    return;
+end
 
 switch seqType
     case "pn"
@@ -35,12 +48,6 @@ switch seqType
 
         % 计算每个跳频索引需要的比特数
         bitsPerHop = ceil(log2(nFreqs));
-        if bitsPerHop == 0
-            % 仅一个频点时，无需生成PN比特
-            freqIdx = ones(nHops, 1);
-            state = initState(:).';
-            return;
-        end
 
         % 生成PN序列
         pn = comm.PNSequence( ...
@@ -48,12 +55,14 @@ switch seqType
             "InitialConditions", initState, ...
             "SamplesPerFrame", nHops * bitsPerHop);
         pnBits = uint8(pn());
-        state = [];
+        state = struct();
+        state.type = "pn";
+        state.currentState = [];
         if isprop(pn, "CurrentState")
-            state = uint8(pn.CurrentState(:)).';
+            state.currentState = uint8(pn.CurrentState(:)).';
         end
 
-        % 将比特转换为频率索引
+        % 将比特转换为频率索引（模nFreqs）
         freqIdx = zeros(nHops, 1);
         for k = 1:nHops
             startBit = (k-1) * bitsPerHop + 1;
@@ -68,6 +77,34 @@ switch seqType
 
             % 映射到有效频率索引 (1 到 nFreqs)
             freqIdx(k) = mod(idx, nFreqs) + 1;
+        end
+
+    case {"chaos", "chaotic"}
+        % 基于混沌序列生成跳频索引（与加密模块共用chaos_generate）
+        if ~isfield(fh, "chaosMethod") || strlength(string(fh.chaosMethod)) == 0
+            chaosMethod = "logistic";
+        else
+            chaosMethod = lower(string(fh.chaosMethod));
+        end
+        if isfield(fh, "chaosParams") && isstruct(fh.chaosParams)
+            chaosParams = fh.chaosParams;
+        else
+            chaosParams = struct();
+        end
+
+        chaosSeq = double(chaos_generate(nHops, chaosMethod, chaosParams));
+        chaosSeq = max(min(chaosSeq(:), 1 - eps), 0);
+        freqIdx = floor(chaosSeq * nFreqs) + 1;
+        freqIdx = min(max(freqIdx, 1), nFreqs);
+
+        state = struct();
+        state.type = "chaos";
+        state.chaosMethod = chaosMethod;
+        state.chaosParams = chaosParams;
+        if ~isempty(chaosSeq)
+            state.lastValue = chaosSeq(end);
+        else
+            state.lastValue = NaN;
         end
 
     case "linear"
