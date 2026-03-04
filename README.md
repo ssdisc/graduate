@@ -296,6 +296,14 @@ p.channel.impulseProb = 0.01;    % 脉冲概率(1%)
 p.channel.impulseToBgRatio = 50; % 脉冲功率比(50倍)
 ```
 
+### 分包参数
+```matlab
+p.packet.enable = true;                 % 启用分包
+p.packet.payloadBitsPerPacket = 2048;   % 每包载荷比特数（8比特对齐）
+p.packet.concealLostPackets = true;     % 丢包后图像/块域补偿（仅影响图像重建）
+p.packet.concealMode = "nearest";       % "nearest" | "blend"
+```
+
 ### 抑制方法
 ```matlab
 p.mitigation.methods = ["none" "blanking" "ml_cnn" "ml_gru"];

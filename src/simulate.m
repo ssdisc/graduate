@@ -62,30 +62,25 @@ else
 end
 
 [~, preambleSym] = make_preamble(p.frame.preambleLength);%生成PN前导
-[headerBits, ~] = build_header_bits(meta, p.frame.magic16);%构建帧头比特流
 
-dataBitsTx = [headerBits; payloadBits]; %帧头+载荷比特流
-dataBitsTxScr = scramble_bits(dataBitsTx, p.scramble);%扰码（白化/轻量加密）
-
-codedBits = fec_encode(dataBitsTxScr, p.fec);%信道编码（卷积码）
-[codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);%块交织
-
-[dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);%调制（BPSK/QPSK/16QAM等）
-% 跳频调制（仅对数据符号，前导不跳频以便同步）
-
-fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
-if fhEnabled
-    [dataSymTx, hopInfo] = fh_modulate(dataSymTx, p.fh);
-else
-    hopInfo = struct('enable', false);
+% 发送端按包构建（最小分包：pktIdx/totalPkts/payloadLen/CRC16）
+[txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, preambleSym);
+nPackets = numel(txPackets);
+fhEnabled = txPlan.fhEnabled;
+packetConcealEnable = false;
+packetConcealMode = "nearest";
+if isfield(p, "packet") && isstruct(p.packet)
+    if isfield(p.packet, "concealLostPackets")
+        packetConcealEnable = logical(p.packet.concealLostPackets);
+    end
+    if isfield(p.packet, "concealMode") && strlength(string(p.packet.concealMode)) > 0
+        packetConcealMode = lower(string(p.packet.concealMode));
+    end
 end
 
-txSym = [preambleSym; dataSymTx];%串联前导和数据符号形成完整帧
-if p.rf.enable
-    txSymForChannel = rf_upconvert(txSym, p.rf);
-else
-    txSymForChannel = txSym;
-end
+% 用于频谱/监视者评估的整段突发
+txSymForChannel = txPlan.txBurstForEval;
+modInfo = txPlan.modInfo;
 
 %% 仿真参数初始化与配置
 
@@ -102,7 +97,6 @@ klSym = nan(1, numel(EbN0dBList)); % 对称KL
 
 
 example = struct();
-headerLenBits = numel(headerBits);
 if isfield(p.sim, "exampleEbN0dB") && ~isempty(p.sim.exampleEbN0dB)
     exampleEbN0 = double(p.sim.exampleEbN0dB);
     if isfinite(exampleEbN0)
@@ -145,68 +139,12 @@ if eveEnabled
             error("Unknown eve.scrambleAssumption: %s", string(p.eve.scrambleAssumption));
     end
 
-    % Eve对跳频的知识
+    % Eve对跳频的知识（具体每包序列在后面统一预计算）
     if ~isfield(p.eve, 'fhAssumption'); p.eve.fhAssumption = "none"; end
-    switch lower(string(p.eve.fhAssumption))
-        case "known"
-            % Eve知道跳频序列，使用相同的hopInfo
-            hopInfoEve = hopInfo;
-        case "none"
-            % Eve不知道跳频，不解跳
-            hopInfoEve = struct('enable', false);
-        case "partial"
-            % Eve使用错误的跳频初始状态
-            if fhEnabled
-                fhEve = p.fh;
-                seqTypeEve = lower(string(fhEve.sequenceType));
-                switch seqTypeEve
-                    case "pn"
-                        if isfield(fhEve, "pnInit") && ~isempty(fhEve.pnInit)
-                            fhEve.pnInit = circshift(fhEve.pnInit, 2);
-                            if all(fhEve.pnInit == 0)
-                                fhEve.pnInit(1) = 1;
-                            end
-                        end
-
-                    case {"chaos", "chaotic"}
-                        if ~isfield(fhEve, "chaosMethod") || strlength(string(fhEve.chaosMethod)) == 0
-                            fhEve.chaosMethod = "logistic";
-                        end
-                        if ~isfield(fhEve, "chaosParams") || ~isstruct(fhEve.chaosParams)
-                            fhEve.chaosParams = struct();
-                        end
-                        chaosMethodEve = lower(string(fhEve.chaosMethod));
-                        switch chaosMethodEve
-                            case {"logistic", "tent"}
-                                if ~isfield(fhEve.chaosParams, "x0") || isempty(fhEve.chaosParams.x0)
-                                    fhEve.chaosParams.x0 = 0.1234567890123456;
-                                end
-                                fhEve.chaosParams.x0 = wrap_unit_interval(double(fhEve.chaosParams.x0) + 1e-10);
-                            case "henon"
-                                if ~isfield(fhEve.chaosParams, "x0") || isempty(fhEve.chaosParams.x0)
-                                    fhEve.chaosParams.x0 = 0.1;
-                                end
-                                if ~isfield(fhEve.chaosParams, "y0") || isempty(fhEve.chaosParams.y0)
-                                    fhEve.chaosParams.y0 = 0.1;
-                                end
-                                fhEve.chaosParams.x0 = wrap_unit_interval(double(fhEve.chaosParams.x0) + 1e-10);
-                                fhEve.chaosParams.y0 = wrap_unit_interval(double(fhEve.chaosParams.y0) + 2e-10);
-                            otherwise
-                                if isfield(fhEve.chaosParams, "x0") && ~isempty(fhEve.chaosParams.x0)
-                                    fhEve.chaosParams.x0 = wrap_unit_interval(double(fhEve.chaosParams.x0) + 1e-10);
-                                end
-                        end
-
-                    otherwise
-                        % 其他序列类型下，扰动频点排列以构造“部分已知”
-                        if isfield(fhEve, "freqSet") && numel(fhEve.freqSet) > 1
-                            fhEve.freqSet = circshift(fhEve.freqSet, 1);
-                        end
-                end
-                [~, hopInfoEve] = fh_modulate(dataSymTx, fhEve);
-            else
-                hopInfoEve = struct('enable', false);
-            end
+    fhAssumptionEve = lower(string(p.eve.fhAssumption));
+    switch fhAssumptionEve
+        case {"known", "none", "partial"}
+            % 有效配置
         otherwise
             error("Unknown eve.fhAssumption: %s", string(p.eve.fhAssumption));
     end
@@ -243,6 +181,34 @@ if wardenEnabled
     wardenNObs = nan(1, numel(EbN0dBList)); %每点观测符号数
     wardenPfaTarget = NaN; %目标虚警率（如果仿真中未指定，则使用实测值）
     wardenNTrials = NaN; %蒙特卡洛试验次数（如果仿真中未指定，则使用仿真中实际的试验次数）
+end
+
+% Eve逐包解跳配置（与发送端分包序列对齐）
+if eveEnabled
+    hopInfoEveList = cell(nPackets, 1);
+    if ~fhEnabled
+        for ip = 1:nPackets
+            hopInfoEveList{ip} = struct('enable', false);
+        end
+    else
+        switch fhAssumptionEve
+            case "known"
+                for ip = 1:nPackets
+                    hopInfoEveList{ip} = txPackets(ip).hopInfo;
+                end
+            case "none"
+                for ip = 1:nPackets
+                    hopInfoEveList{ip} = struct('enable', false);
+                end
+            case "partial"
+                fhEve = make_partial_fh_config(p.fh);
+                for ip = 1:nPackets
+                    [~, hopInfoEveList{ip}] = fh_modulate(txPackets(ip).dataSymTx, fhEve);
+                end
+            otherwise
+                error("Unknown eve.fhAssumption: %s", fhAssumptionEve);
+        end
+    end
 end
 
 totalEbN0Points = numel(EbN0dBList);
@@ -322,6 +288,7 @@ for ie = 1:numel(EbN0dBList)
     end
 
     % --- 帧循环：每个Eb/N0点仿真多帧 ---
+    totalPayloadBits = numel(payloadBits);
     for frameIdx = 1:p.sim.nFramesPerPoint
         globalFrameIdx = globalFrameIdx + 1;
         syncCfgUse = p.rxSync;
@@ -339,179 +306,217 @@ for ie = 1:numel(EbN0dBList)
                 syncCfgUse.maxSearchIndex = inf;
             end
         end
+
         if p.sim.nFramesPerPoint <= 20 || frameIdx == 1 || frameIdx == p.sim.nFramesPerPoint || mod(frameIdx, frameLogStep) == 0
             fprintf('[SIM]     帧 %d/%d (总进度 %d/%d, %.1f%%)\n', ...
                 frameIdx, p.sim.nFramesPerPoint, globalFrameIdx, totalFrames, ...
                 100 * globalFrameIdx / max(totalFrames, 1));
         end
 
-        % ============ 信道（CHANNEL） ============
-        delay = randi([0, p.channel.maxDelaySymbols], 1, 1);
-        tx = [zeros(delay, 1); txSymForChannel];
-
-        rxCh = channel_bg_impulsive(tx, N0, p.channel);
-        if p.rf.enable
-            rx = rf_downconvert(rxCh, p.rf);
-        else
-            rx = rxCh;
+        % 当前帧的重组缓存（按方法分开）
+        bobPayloadFrame = cell(numel(methods), 1);
+        bobPacketOk = false(numel(methods), nPackets);
+        for im = 1:numel(methods)
+            bobPayloadFrame{im} = zeros(totalPayloadBits, 1, "uint8");
         end
         if eveEnabled
-            rxEveCh = channel_bg_impulsive(tx, N0Eve, p.channel);
+            evePayloadFrame = cell(numel(methods), 1);
+            evePacketOk = false(numel(methods), nPackets);
+            for im = 1:numel(methods)
+                evePayloadFrame{im} = zeros(totalPayloadBits, 1, "uint8");
+            end
+        end
+
+        % ============ 分包发收 ============
+        for pktIdx = 1:nPackets
+            pkt = txPackets(pktIdx);
+
+            % 信道
+            delay = randi([0, p.channel.maxDelaySymbols], 1, 1);
+            tx = [zeros(delay, 1); pkt.txSymForChannel];
+
+            rxCh = channel_bg_impulsive(tx, N0, p.channel);
             if p.rf.enable
-                rfEve = p.rf;
-                rfEve.rxFreqNorm = p.rf.rxFreqNorm + double(p.eve.rfFreqOffsetNorm);
-                rxEve = rf_downconvert(rxEveCh, rfEve);
+                rx = rf_downconvert(rxCh, p.rf);
             else
-                rxEve = rxEveCh;
+                rx = rxCh;
             end
-        end
-        % ============ 接收端（RECEIVER）：Bob（合法接收方） ============
-        bobOk = true;
-        [startIdx, rxBobSync] = frame_sync(rx, preambleSym, syncCfgUse);
-        if isempty(startIdx)
-            bobOk = false;
-        else
-            dataStart = startIdx + numel(preambleSym);
-            [rData, bobOk] = extract_fractional_block(rxBobSync, dataStart, numel(dataSymTx));
-        end
-        if bobOk
-            % 跳频解调（Bob知道跳频序列）
-            if fhEnabled
-                rData = fh_demodulate(rData, hopInfo);
-            end
-            % 决策导向载波PLL跟踪残余相位/频偏
-            if p.rxSync.carrierPll.enable
-                rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
-            end
-        else
-            fprintf('[SIM][WARN] Bob帧同步失败: Eb/N0=%.2f dB, frame=%d\n', EbN0dB, frameIdx);
-            nErr = nErr + numel(payloadBits);
-            nTot = nTot + numel(payloadBits);
-        end
 
-        % ============ 接收端（RECEIVER）：Eve（窃听方） ============
-        eveOk = false;
-        if eveEnabled
-            eveOk = true;
-            [startIdxEve, rxEveSync] = frame_sync(rxEve, preambleSym, syncCfgUse);
-            if isempty(startIdxEve)
-                eveOk = false;
-            else
-                dataStartEve = startIdxEve + numel(preambleSym);
-                [rDataEve, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, numel(dataSymTx));
+            if eveEnabled
+                rxEveCh = channel_bg_impulsive(tx, N0Eve, p.channel);
+                if p.rf.enable
+                    rfEve = p.rf;
+                    rfEve.rxFreqNorm = p.rf.rxFreqNorm + double(p.eve.rfFreqOffsetNorm);
+                    rxEve = rf_downconvert(rxEveCh, rfEve);
+                else
+                    rxEve = rxEveCh;
+                end
             end
-            if eveOk
-                % Eve的跳频解调（根据Eve的知识假设）
+
+            % Bob同步与解跳
+            bobOk = true;
+            [startIdx, rxBobSync] = frame_sync(rx, preambleSym, syncCfgUse);
+            if isempty(startIdx)
+                bobOk = false;
+                rData = complex(zeros(numel(pkt.dataSymTx), 1));
+            else
+                dataStart = startIdx + numel(preambleSym);
+                [rData, bobOk] = extract_fractional_block(rxBobSync, dataStart, numel(pkt.dataSymTx));
+            end
+            if bobOk
                 if fhEnabled
-                    rDataEve = fh_demodulate(rDataEve, hopInfoEve);
+                    rData = fh_demodulate(rData, pkt.hopInfo);
                 end
                 if p.rxSync.carrierPll.enable
-                    rDataEve = carrier_pll_sync(rDataEve, p.mod, p.rxSync.carrierPll);
+                    rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
                 end
-            else
-                fprintf('[SIM][WARN] Eve帧同步失败: Eb/N0=%.2f dB(Eve=%.2f dB), frame=%d\n', ...
-                    EbN0dB, EbN0dBEve, frameIdx);
-                nErrEve = nErrEve + numel(payloadBits);
-                nTotEve = nTotEve + numel(payloadBits);
+            end
+
+            % Eve同步与解跳
+            eveOk = false;
+            if eveEnabled
+                eveOk = true;
+                [startIdxEve, rxEveSync] = frame_sync(rxEve, preambleSym, syncCfgUse);
+                if isempty(startIdxEve)
+                    eveOk = false;
+                    rDataEve = complex(zeros(numel(pkt.dataSymTx), 1));
+                else
+                    dataStartEve = startIdxEve + numel(preambleSym);
+                    [rDataEve, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, numel(pkt.dataSymTx));
+                end
+                if eveOk
+                    if fhEnabled
+                        rDataEve = fh_demodulate(rDataEve, hopInfoEveList{pktIdx});
+                    end
+                    if p.rxSync.carrierPll.enable
+                        rDataEve = carrier_pll_sync(rDataEve, p.mod, p.rxSync.carrierPll);
+                    end
+                end
+            end
+
+            % 各抑制方法解调与分包重组
+            for im = 1:numel(methods)
+                if bobOk
+                    [rMit, reliability] = mitigate_impulses(rData, methods(im), p.mitigation);
+                    demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
+                    demodDeint = deinterleave_bits(demodSoft, pkt.intState, p.interleaver);
+                    dataBitsRxScr = fec_decode(demodDeint, p.fec);
+                    dataBitsRx = descramble_bits(dataBitsRxScr, p.scramble);
+
+                    [payloadPktRx, metaRx, okHeader] = parse_frame_bits(dataBitsRx, p.frame.magic16);
+                    okPacket = okHeader ...
+                        && packet_header_valid(metaRx, pktIdx, nPackets, pkt.payloadBytes, meta.payloadBytes) ...
+                        && packet_crc_valid(payloadPktRx, metaRx);
+                    if okPacket
+                        payloadPktRx = payloadPktRx(1:min(end, numel(pkt.payloadBits)));
+                        payloadPktTx = pkt.payloadBits(1:numel(payloadPktRx));
+                        nErr(im) = nErr(im) + sum(payloadPktRx ~= payloadPktTx);
+                        nTot(im) = nTot(im) + numel(payloadPktTx);
+                        if numel(payloadPktRx) < numel(pkt.payloadBits)
+                            nErr(im) = nErr(im) + (numel(pkt.payloadBits) - numel(payloadPktRx));
+                            nTot(im) = nTot(im) + (numel(pkt.payloadBits) - numel(payloadPktRx));
+                        end
+                        bobPayloadFrame{im}(pkt.startBit:pkt.endBit) = fit_bits_length(payloadPktRx, numel(pkt.payloadBits));
+                        bobPacketOk(im, pktIdx) = true;
+                    else
+                        nErr(im) = nErr(im) + numel(pkt.payloadBits);
+                        nTot(im) = nTot(im) + numel(pkt.payloadBits);
+                    end
+                else
+                    nErr(im) = nErr(im) + numel(pkt.payloadBits);
+                    nTot(im) = nTot(im) + numel(pkt.payloadBits);
+                end
+
+                if eveEnabled
+                    if eveOk
+                        [rMitEve, reliabilityEve] = mitigate_impulses(rDataEve, methods(im), p.mitigation);
+                        demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
+                        demodDeintEve = deinterleave_bits(demodSoftEve, pkt.intState, p.interleaver);
+                        dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
+                        dataBitsEve = descramble_bits(dataBitsEveScr, scrambleEve);
+
+                        [payloadPktEve, metaEve, okHeaderEve] = parse_frame_bits(dataBitsEve, p.frame.magic16);
+                        okPacketEve = okHeaderEve ...
+                            && packet_header_valid(metaEve, pktIdx, nPackets, pkt.payloadBytes, meta.payloadBytes) ...
+                            && packet_crc_valid(payloadPktEve, metaEve);
+                        if okPacketEve
+                            payloadPktEve = payloadPktEve(1:min(end, numel(pkt.payloadBits)));
+                            payloadPktTx = pkt.payloadBits(1:numel(payloadPktEve));
+                            nErrEve(im) = nErrEve(im) + sum(payloadPktEve ~= payloadPktTx);
+                            nTotEve(im) = nTotEve(im) + numel(payloadPktTx);
+                            if numel(payloadPktEve) < numel(pkt.payloadBits)
+                                nErrEve(im) = nErrEve(im) + (numel(pkt.payloadBits) - numel(payloadPktEve));
+                                nTotEve(im) = nTotEve(im) + (numel(pkt.payloadBits) - numel(payloadPktEve));
+                            end
+                            evePayloadFrame{im}(pkt.startBit:pkt.endBit) = fit_bits_length(payloadPktEve, numel(pkt.payloadBits));
+                            evePacketOk(im, pktIdx) = true;
+                        else
+                            nErrEve(im) = nErrEve(im) + numel(pkt.payloadBits);
+                            nTotEve(im) = nTotEve(im) + numel(pkt.payloadBits);
+                        end
+                    else
+                        nErrEve(im) = nErrEve(im) + numel(pkt.payloadBits);
+                        nTotEve(im) = nTotEve(im) + numel(pkt.payloadBits);
+                    end
+                end
             end
         end
 
-        % --- 遍历不同脉冲抑制方法进行接收端处理 ---
+        % 帧级图像重建与质量评价（分包重组后）
         for im = 1:numel(methods)
-            if bobOk
-                % -- Bob接收端：脉冲抑制、解调、解码、解密 --
-                [rMit, reliability] = mitigate_impulses(rData, methods(im), p.mitigation);
-                demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);%软判决解调，生成带可靠性加权的Viterbi输入度量
-                demodDeint = deinterleave_bits(demodSoft, intState, p.interleaver);%逆交织
-                dataBitsRxScr = fec_decode(demodDeint, p.fec);%FEC解码（卷积码）
-                dataBitsRx = descramble_bits(dataBitsRxScr, p.scramble);%解扰（与发送端相同的扰码配置）
-
-
-                [payloadBitsRx, metaRx, okHeader] = parse_frame_bits(dataBitsRx, p.frame.magic16);%解析帧比特流，提取载荷比特和元数据（如图像尺寸等），并验证帧头（使用magic16作为同步标志）
-                if ~okHeader
-                    nErr(im) = nErr(im) + numel(payloadBits);
-                    nTot(im) = nTot(im) + numel(payloadBits);
+            payloadBitsRxFrame = bobPayloadFrame{im};
+            if chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
+                if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
+                    payloadBitsRxDec = chaos_decrypt_bits(payloadBitsRxFrame, chaosEncInfo);
+                    imgRx = payload_bits_to_image(payloadBitsRxDec, meta, p.payload);
                 else
-                    payloadBitsRx = payloadBitsRx(1:min(end, numel(payloadBits)));%截断接收的载荷比特以匹配发送的载荷比特长度
-                    payloadBitsTxTrunc = payloadBits(1:numel(payloadBitsRx));%截断发送的载荷比特以匹配接收的载荷比特长度（如果接收的载荷比特较少）
-
-                    nErr(im) = nErr(im) + sum(payloadBitsRx ~= payloadBitsTxTrunc);
-                    nTot(im) = nTot(im) + numel(payloadBitsTxTrunc);
-
-                    % 混沌解密（Bob知道密钥）
-                    if chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
-                        if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
-                            payloadBitsRxDec = chaos_decrypt_bits(payloadBitsRx, chaosEncInfo);
-                            imgRx = payload_bits_to_image(payloadBitsRxDec, metaRx, p.payload);
-                        else
-                            imgRxEnc = payload_bits_to_image(payloadBitsRx, metaRx, p.payload);
-                            imgRx = chaos_decrypt(imgRxEnc, chaosEncInfo);
-                        end
-                    else
-                        imgRx = payload_bits_to_image(payloadBitsRx, metaRx, p.payload);
-                    end
-
-                    [psnrNow, ssimNow, mseNow] = image_quality(imgTx, imgRx);
-                    if isfinite(mseNow)
-                        mseAcc(im) = mseAcc(im) + mseNow;
-                        nMse(im) = nMse(im) + 1;
-                    end
-                    if ~isnan(psnrNow)
-                        psnrAcc(im) = psnrAcc(im) + psnrNow;
-                        nPsnr(im) = nPsnr(im) + 1;
-                    end
-                    if isfinite(ssimNow)
-                        ssimAcc(im) = ssimAcc(im) + ssimNow;
-                        nSsim(im) = nSsim(im) + 1;
-                    end
-
-
-                    if frameIdx == 1 && ie == exampleIdx
-                        example.(methods(im)).EbN0dB = EbN0dB;
-                        example.(methods(im)).imgRx = imgRx;
-                    end
+                    imgRxEnc = payload_bits_to_image(payloadBitsRxFrame, meta, p.payload);
+                    imgRx = chaos_decrypt(imgRxEnc, chaosEncInfo);
                 end
+            else
+                imgRx = payload_bits_to_image(payloadBitsRxFrame, meta, p.payload);
+            end
+            if packetConcealEnable && nPackets > 1
+                imgRx = conceal_image_from_packets(imgRx, bobPacketOk(im, :), txPackets, meta, p.payload, packetConcealMode);
             end
 
-            if eveEnabled && eveOk
-                % -- Eve接收端：脉冲抑制、解调、解码（使用其知识假设） --
-                [rMitEve, reliabilityEve] = mitigate_impulses(rDataEve, methods(im), p.mitigation);
+            [psnrNow, ssimNow, mseNow] = image_quality(imgTx, imgRx);
+            if isfinite(mseNow)
+                mseAcc(im) = mseAcc(im) + mseNow;
+                nMse(im) = nMse(im) + 1;
+            end
+            if ~isnan(psnrNow)
+                psnrAcc(im) = psnrAcc(im) + psnrNow;
+                nPsnr(im) = nPsnr(im) + 1;
+            end
+            if isfinite(ssimNow)
+                ssimAcc(im) = ssimAcc(im) + ssimNow;
+                nSsim(im) = nSsim(im) + 1;
+            end
 
-                demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
-                demodDeintEve = deinterleave_bits(demodSoftEve, intState, p.interleaver);
+            if frameIdx == 1 && ie == exampleIdx
+                example.(methods(im)).EbN0dB = EbN0dB;
+                example.(methods(im)).imgRx = imgRx;
+                example.(methods(im)).packetSuccessRate = mean(bobPacketOk(im, :));
+            end
+        end
 
-                dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
-                dataBitsEve = descramble_bits(dataBitsEveScr, scrambleEve);
-
-                [payloadBitsEve, metaEve, okHeaderEve] = parse_frame_bits(dataBitsEve, p.frame.magic16);
-                if okHeaderEve
-                    metaUse = metaEve;
-                else
-                    metaUse = meta;
-                    if numel(dataBitsEve) > headerLenBits
-                        payloadBitsEve = dataBitsEve(headerLenBits+1:end);
-                    else
-                        payloadBitsEve = uint8([]);
-                    end
-                end
-
-                payloadBitsEve = payloadBitsEve(1:min(end, numel(payloadBits)));
-                payloadBitsTxTrunc = payloadBits(1:numel(payloadBitsEve));
-
-                nErrEve(im) = nErrEve(im) + sum(payloadBitsEve ~= payloadBitsTxTrunc);
-                nTotEve(im) = nTotEve(im) + numel(payloadBitsTxTrunc);
-
-                % Eve的混沌解密（根据Eve的知识假设）
+        if eveEnabled
+            for im = 1:numel(methods)
+                payloadBitsEveFrame = evePayloadFrame{im};
                 if chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
                     if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
-                        payloadBitsEveDec = chaos_decrypt_bits(payloadBitsEve, chaosEncInfoEve);
-                        imgEve = payload_bits_to_image(payloadBitsEveDec, metaUse, p.payload);
+                        payloadBitsEveDec = chaos_decrypt_bits(payloadBitsEveFrame, chaosEncInfoEve);
+                        imgEve = payload_bits_to_image(payloadBitsEveDec, meta, p.payload);
                     else
-                        imgEveEnc = payload_bits_to_image(payloadBitsEve, metaUse, p.payload);
+                        imgEveEnc = payload_bits_to_image(payloadBitsEveFrame, meta, p.payload);
                         imgEve = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
                     end
                 else
-                    imgEve = payload_bits_to_image(payloadBitsEve, metaUse, p.payload);  % Eve不解密或不知道密钥
+                    imgEve = payload_bits_to_image(payloadBitsEveFrame, meta, p.payload);
+                end
+                if packetConcealEnable && nPackets > 1
+                    imgEve = conceal_image_from_packets(imgEve, evePacketOk(im, :), txPackets, meta, p.payload, packetConcealMode);
                 end
 
                 [psnrNowEve, ssimNowEve, mseNowEve] = image_quality(imgTx, imgEve);
@@ -530,7 +535,8 @@ for ie = 1:numel(EbN0dBList)
 
                 if frameIdx == 1 && ie == exampleIdx
                     exampleEve.(methods(im)).EbN0dB = EbN0dBEve;
-                    exampleEve.(methods(im)).headerOk = okHeaderEve;
+                    exampleEve.(methods(im)).headerOk = all(evePacketOk(im, :));
+                    exampleEve.(methods(im)).packetSuccessRate = mean(evePacketOk(im, :));
                     exampleEve.(methods(im)).imgRx = imgEve;
                 end
             end
@@ -691,6 +697,440 @@ switch codec
         codec = "dct";
     otherwise
         codec = "raw";
+end
+end
+
+function [txPackets, plan] = build_tx_packets(payloadBits, meta, p, preambleSym)
+% 按配置将整图载荷切分为多个分包并构建发送符号。
+payloadBits = uint8(payloadBits(:) ~= 0);
+totalBits = numel(payloadBits);
+
+packetEnable = false;
+pktBitsPerPacket = totalBits;
+if isfield(p, "packet") && isstruct(p.packet) && isfield(p.packet, "enable") && p.packet.enable
+    packetEnable = true;
+    if isfield(p.packet, "payloadBitsPerPacket") && ~isempty(p.packet.payloadBitsPerPacket)
+        pktBitsPerPacket = max(8, round(double(p.packet.payloadBitsPerPacket)));
+    else
+        pktBitsPerPacket = 4096;
+    end
+end
+
+% 分包以字节对齐，便于payloadBytes/CRC统计
+pktBitsPerPacket = 8 * floor(pktBitsPerPacket / 8);
+if pktBitsPerPacket <= 0
+    pktBitsPerPacket = 8;
+end
+if ~packetEnable
+    pktBitsPerPacket = max(pktBitsPerPacket, totalBits);
+end
+
+nPackets = max(1, ceil(totalBits / pktBitsPerPacket));
+if nPackets > 65535
+    error("分包数量过大(%d)，超出uint16可表示范围。", nPackets);
+end
+
+fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
+txPackets = repmat(struct(), nPackets, 1);
+txBurstParts = cell(nPackets, 1);
+modInfoRef = struct();
+headerLenBits = 0;
+
+for pktIdx = 1:nPackets
+    startBit = (pktIdx - 1) * pktBitsPerPacket + 1;
+    endBit = min(pktIdx * pktBitsPerPacket, totalBits);
+    payloadPkt = payloadBits(startBit:endBit);
+    payloadPktBytes = ceil(numel(payloadPkt) / 8);
+    if payloadPktBytes > 65535
+        error("单包payload过大(%d bytes)，超出uint16可表示范围。", payloadPktBytes);
+    end
+
+    metaPkt = meta;
+    metaPkt.totalPayloadBytes = uint32(meta.payloadBytes);
+    metaPkt.packetIndex = uint16(pktIdx);
+    metaPkt.totalPackets = uint16(nPackets);
+    metaPkt.packetPayloadBytes = uint16(payloadPktBytes);
+    metaPkt.packetCrc16 = crc16_ccitt_bits(payloadPkt);
+    [headerBits, ~] = build_header_bits(metaPkt, p.frame.magic16);
+    headerLenBits = numel(headerBits);
+
+    dataBitsTx = [headerBits; payloadPkt];
+    dataBitsTxScr = scramble_bits(dataBitsTx, p.scramble);
+    codedBits = fec_encode(dataBitsTxScr, p.fec);
+    [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
+    [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);
+    modInfoRef = modInfo;
+
+    if fhEnabled
+        [dataSymHop, hopInfo] = fh_modulate(dataSymTx, p.fh);
+    else
+        dataSymHop = dataSymTx;
+        hopInfo = struct('enable', false);
+    end
+
+    txSymPkt = [preambleSym; dataSymHop];
+    if isfield(p, "rf") && isfield(p.rf, "enable") && p.rf.enable
+        txSymForChannel = rf_upconvert(txSymPkt, p.rf);
+    else
+        txSymForChannel = txSymPkt;
+    end
+
+    txPackets(pktIdx).startBit = startBit;
+    txPackets(pktIdx).endBit = endBit;
+    txPackets(pktIdx).payloadBits = payloadPkt;
+    txPackets(pktIdx).payloadBytes = payloadPktBytes;
+    txPackets(pktIdx).dataSymTx = dataSymTx;
+    txPackets(pktIdx).hopInfo = hopInfo;
+    txPackets(pktIdx).intState = intState;
+    txPackets(pktIdx).txSymForChannel = txSymForChannel;
+    txBurstParts{pktIdx} = txSymForChannel;
+end
+
+plan = struct();
+plan.packetEnable = packetEnable;
+plan.nPackets = nPackets;
+plan.headerLenBits = headerLenBits;
+plan.fhEnabled = fhEnabled;
+plan.modInfo = modInfoRef;
+plan.txBurstForEval = vertcat(txBurstParts{:});
+end
+
+function ok = packet_header_valid(metaRx, packetIndex, totalPackets, packetPayloadBytes, totalPayloadBytes)
+% 校验分包头关键信息是否与当前上下文一致。
+ok = true;
+needFields = ["packetIndex", "totalPackets", "packetPayloadBytes", "totalPayloadBytes"];
+for k = 1:numel(needFields)
+    if ~isfield(metaRx, needFields(k))
+        ok = false;
+        return;
+    end
+end
+
+if double(metaRx.packetIndex) ~= double(packetIndex)
+    ok = false;
+    return;
+end
+if double(metaRx.totalPackets) ~= double(totalPackets)
+    ok = false;
+    return;
+end
+if double(metaRx.packetPayloadBytes) ~= double(packetPayloadBytes)
+    ok = false;
+    return;
+end
+if double(metaRx.totalPayloadBytes) ~= double(totalPayloadBytes)
+    ok = false;
+    return;
+end
+end
+
+function ok = packet_crc_valid(payloadBitsRx, metaRx)
+% 校验分包CRC16。
+if ~isfield(metaRx, "packetCrc16") || ~isfield(metaRx, "packetPayloadBytes")
+    ok = true; % 兼容旧头
+    return;
+end
+needBits = double(metaRx.packetPayloadBytes) * 8;
+if numel(payloadBitsRx) < needBits
+    ok = false;
+    return;
+end
+payloadUse = payloadBitsRx(1:needBits);
+crcNow = crc16_ccitt_bits(payloadUse);
+ok = uint16(metaRx.packetCrc16) == uint16(crcNow);
+end
+
+function bitsOut = fit_bits_length(bitsIn, targetLen)
+bitsIn = uint8(bitsIn(:) ~= 0);
+targetLen = max(0, round(double(targetLen)));
+if numel(bitsIn) >= targetLen
+    bitsOut = bitsIn(1:targetLen);
+else
+    bitsOut = [bitsIn; zeros(targetLen - numel(bitsIn), 1, "uint8")];
+end
+end
+
+function imgOut = conceal_image_from_packets(imgIn, packetOk, txPackets, meta, payload, mode)
+% 在图像域/块域做丢包补偿，避免直接在密文比特流上估计。
+img = uint8(imgIn);
+mode = lower(string(mode));
+
+nPacketsLocal = numel(txPackets);
+ok = normalize_packet_ok(packetOk, nPacketsLocal);
+if nPacketsLocal <= 1 || all(ok)
+    imgOut = img;
+    return;
+end
+
+codec = get_payload_codec(payload);
+if codec == "dct"
+    mask = build_dct_pixel_mask_from_packets(ok, txPackets, meta, payload);
+else
+    mask = build_raw_pixel_mask_from_packets(ok, txPackets, meta);
+end
+
+imgOut = inpaint_image_by_mask(img, mask, mode);
+end
+
+function ok = normalize_packet_ok(packetOk, nPacketsLocal)
+ok = logical(packetOk(:).');
+if numel(ok) < nPacketsLocal
+    ok = [ok, false(1, nPacketsLocal - numel(ok))];
+elseif numel(ok) > nPacketsLocal
+    ok = ok(1:nPacketsLocal);
+end
+end
+
+function mask = build_raw_pixel_mask_from_packets(packetOk, txPackets, meta)
+rows = double(meta.rows);
+cols = double(meta.cols);
+ch = double(meta.channels);
+nElems = rows * cols * ch;
+
+maskLinear = false(nElems, 1);
+for pktIdx = 1:numel(txPackets)
+    if packetOk(pktIdx)
+        continue;
+    end
+    startByte = floor((double(txPackets(pktIdx).startBit) - 1) / 8) + 1;
+    endByte = ceil(double(txPackets(pktIdx).endBit) / 8);
+    startByte = max(1, min(nElems, startByte));
+    endByte = max(1, min(nElems, endByte));
+    if endByte >= startByte
+        maskLinear(startByte:endByte) = true;
+    end
+end
+
+if ch == 1
+    mask = reshape(maskLinear, rows, cols);
+else
+    mask = reshape(maskLinear, rows, cols, ch);
+end
+end
+
+function mask = build_dct_pixel_mask_from_packets(packetOk, txPackets, meta, payload)
+rows = double(meta.rows);
+cols = double(meta.cols);
+ch = double(meta.channels);
+
+dctCfg = struct();
+if isfield(payload, "dct") && isstruct(payload.dct)
+    dctCfg = payload.dct;
+end
+if ~isfield(dctCfg, "blockSize"); dctCfg.blockSize = 8; end
+if ~isfield(dctCfg, "keepRows"); dctCfg.keepRows = 4; end
+if ~isfield(dctCfg, "keepCols"); dctCfg.keepCols = 4; end
+dctCfg.blockSize = max(2, round(double(dctCfg.blockSize)));
+dctCfg.keepRows = max(1, round(double(dctCfg.keepRows)));
+dctCfg.keepCols = max(1, round(double(dctCfg.keepCols)));
+dctCfg.keepRows = min(dctCfg.keepRows, dctCfg.blockSize);
+dctCfg.keepCols = min(dctCfg.keepCols, dctCfg.blockSize);
+
+B = dctCfg.blockSize;
+nBr = ceil(rows / B);
+nBc = ceil(cols / B);
+nBlocksPerCh = nBr * nBc;
+totalBlocks = nBlocksPerCh * ch;
+bytesPerBlock = dctCfg.keepRows * dctCfg.keepCols * 2;
+
+maskBlocks = false(nBr, nBc, ch);
+for pktIdx = 1:numel(txPackets)
+    if packetOk(pktIdx)
+        continue;
+    end
+    startByte = floor((double(txPackets(pktIdx).startBit) - 1) / 8) + 1;
+    endByte = ceil(double(txPackets(pktIdx).endBit) / 8);
+    startBlk = floor((startByte - 1) / bytesPerBlock) + 1;
+    endBlk = floor((endByte - 1) / bytesPerBlock) + 1;
+    startBlk = max(1, min(totalBlocks, startBlk));
+    endBlk = max(1, min(totalBlocks, endBlk));
+
+    for blk = startBlk:endBlk
+        cc = floor((blk - 1) / nBlocksPerCh) + 1;
+        local = mod(blk - 1, nBlocksPerCh) + 1;
+        br = floor((local - 1) / nBc) + 1;
+        bc = mod(local - 1, nBc) + 1;
+        maskBlocks(br, bc, cc) = true;
+    end
+end
+
+if ch == 1
+    mask = false(rows, cols);
+else
+    mask = false(rows, cols, ch);
+end
+
+for cc = 1:ch
+    for br = 1:nBr
+        rIdx = (br-1)*B + (1:B);
+        rIdx = rIdx(rIdx <= rows);
+        for bc = 1:nBc
+            if ~maskBlocks(br, bc, cc)
+                continue;
+            end
+            cIdx = (bc-1)*B + (1:B);
+            cIdx = cIdx(cIdx <= cols);
+            if ch == 1
+                mask(rIdx, cIdx) = true;
+            else
+                mask(rIdx, cIdx, cc) = true;
+            end
+        end
+    end
+end
+end
+
+function imgOut = inpaint_image_by_mask(imgIn, mask, mode)
+img = double(imgIn);
+if ndims(img) == 2
+    img = reshape(img, size(img, 1), size(img, 2), 1);
+end
+if ndims(mask) == 2
+    mask = reshape(mask, size(mask, 1), size(mask, 2), 1);
+end
+
+ch = size(img, 3);
+for cc = 1:ch
+    img(:, :, cc) = inpaint_plane(img(:, :, cc), logical(mask(:, :, min(cc, size(mask, 3)))), mode);
+end
+
+img = uint8(min(max(round(img), 0), 255));
+if size(imgIn, 3) == 1
+    imgOut = img(:, :, 1);
+else
+    imgOut = img;
+end
+end
+
+function planeOut = inpaint_plane(planeIn, missingMask, mode)
+known = ~missingMask;
+plane = double(planeIn);
+if all(known(:))
+    planeOut = plane;
+    return;
+end
+if ~any(known(:))
+    planeOut = plane;
+    return;
+end
+
+mode = lower(string(mode));
+maxIter = size(plane, 1) + size(plane, 2);
+
+for it = 1:maxIter
+    missing = ~known;
+    if ~any(missing(:))
+        break;
+    end
+
+    leftKnown = [known(:, 1), known(:, 1:end-1)];
+    rightKnown = [known(:, 2:end), known(:, end)];
+    upKnown = [known(1, :); known(1:end-1, :)];
+    downKnown = [known(2:end, :); known(end, :)];
+
+    leftVal = [plane(:, 1), plane(:, 1:end-1)];
+    rightVal = [plane(:, 2:end), plane(:, end)];
+    upVal = [plane(1, :); plane(1:end-1, :)];
+    downVal = [plane(2:end, :); plane(end, :)];
+
+    neighCount = double(leftKnown) + double(rightKnown) + double(upKnown) + double(downKnown);
+    canFill = missing & (neighCount > 0);
+    if ~any(canFill(:))
+        break;
+    end
+
+    fillVals = zeros(size(plane));
+    switch mode
+        case "nearest"
+            assigned = false(size(plane));
+            cand = canFill & leftKnown;
+            fillVals(cand) = leftVal(cand);
+            assigned = assigned | cand;
+
+            cand = canFill & ~assigned & rightKnown;
+            fillVals(cand) = rightVal(cand);
+            assigned = assigned | cand;
+
+            cand = canFill & ~assigned & upKnown;
+            fillVals(cand) = upVal(cand);
+            assigned = assigned | cand;
+
+            cand = canFill & ~assigned & downKnown;
+            fillVals(cand) = downVal(cand);
+            assigned = assigned | cand;
+
+            rem = canFill & ~assigned;
+            if any(rem(:))
+                sumVals = double(leftKnown) .* leftVal + double(rightKnown) .* rightVal + ...
+                    double(upKnown) .* upVal + double(downKnown) .* downVal;
+                fillVals(rem) = sumVals(rem) ./ max(neighCount(rem), 1);
+            end
+
+        otherwise % "blend"
+            sumVals = double(leftKnown) .* leftVal + double(rightKnown) .* rightVal + ...
+                double(upKnown) .* upVal + double(downKnown) .* downVal;
+            fillVals(canFill) = sumVals(canFill) ./ max(neighCount(canFill), 1);
+    end
+
+    plane(canFill) = fillVals(canFill);
+    known(canFill) = true;
+end
+
+if any(~known(:))
+    fillVal = mean(plane(known));
+    plane(~known) = fillVal;
+end
+
+planeOut = plane;
+end
+
+function fhOut = make_partial_fh_config(fhIn)
+% 构造Eve“部分已知”场景：扰动序列种子/频点映射。
+fhOut = fhIn;
+seqType = "pn";
+if isfield(fhOut, "sequenceType")
+    seqType = lower(string(fhOut.sequenceType));
+end
+switch seqType
+    case "pn"
+        if isfield(fhOut, "pnInit") && ~isempty(fhOut.pnInit)
+            fhOut.pnInit = circshift(fhOut.pnInit, 2);
+            if all(fhOut.pnInit == 0)
+                fhOut.pnInit(1) = 1;
+            end
+        end
+    case {"chaos", "chaotic"}
+        if ~isfield(fhOut, "chaosMethod") || strlength(string(fhOut.chaosMethod)) == 0
+            fhOut.chaosMethod = "logistic";
+        end
+        if ~isfield(fhOut, "chaosParams") || ~isstruct(fhOut.chaosParams)
+            fhOut.chaosParams = struct();
+        end
+        chaosMethod = lower(string(fhOut.chaosMethod));
+        switch chaosMethod
+            case {"logistic", "tent"}
+                if ~isfield(fhOut.chaosParams, "x0") || isempty(fhOut.chaosParams.x0)
+                    fhOut.chaosParams.x0 = 0.1234567890123456;
+                end
+                fhOut.chaosParams.x0 = wrap_unit_interval(double(fhOut.chaosParams.x0) + 1e-10);
+            case "henon"
+                if ~isfield(fhOut.chaosParams, "x0") || isempty(fhOut.chaosParams.x0)
+                    fhOut.chaosParams.x0 = 0.1;
+                end
+                if ~isfield(fhOut.chaosParams, "y0") || isempty(fhOut.chaosParams.y0)
+                    fhOut.chaosParams.y0 = 0.1;
+                end
+                fhOut.chaosParams.x0 = wrap_unit_interval(double(fhOut.chaosParams.x0) + 1e-10);
+                fhOut.chaosParams.y0 = wrap_unit_interval(double(fhOut.chaosParams.y0) + 2e-10);
+            otherwise
+                if isfield(fhOut.chaosParams, "x0") && ~isempty(fhOut.chaosParams.x0)
+                    fhOut.chaosParams.x0 = wrap_unit_interval(double(fhOut.chaosParams.x0) + 1e-10);
+                end
+        end
+    otherwise
+        if isfield(fhOut, "freqSet") && numel(fhOut.freqSet) > 1
+            fhOut.freqSet = circshift(fhOut.freqSet, 1);
+        end
 end
 end
 
