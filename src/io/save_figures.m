@@ -1,11 +1,12 @@
 function save_figures(outDir, imgTx, results)
-%SAVE_FIGURES  将标准图形（BER/PSNR/PSD/图像）保存到磁盘。
+%SAVE_FIGURES  将标准图形（BER/MSE/PSNR/KL/PSD/图像）保存到磁盘。
 %
 % 输入:
 %   outDir  - 输出目录
 %   imgTx   - 发送端原图
 %   results - 仿真结果结构体
-%             .methods, .ebN0dB, .ber, .psnr, .ssim
+%             .methods, .ebN0dB, .ber, .mse, .psnr, .ssim
+%             .kl（含signalVsNoise/noiseVsSignal/symmetric）
 %             .spectrum（freqHz, psd, bw99Hz, etaBpsHz）
 %             .example（按方法名的动态字段保存示例接收图）
 %                 .<method>.EbN0dB - 示例图对应的Eb/N0（dB）
@@ -37,6 +38,28 @@ legend(methods, "Location", "southeast");
 exportgraphics(fig2, fullfile(outDir, "psnr.png"));
 close(fig2);
 
+fig2m = figure("Name", "MSE");
+semilogy(EbN0dB, results.mse.', "o-");
+grid on;
+xlabel("E_b/N_0 (dB)");
+ylabel("MSE");
+legend(methods, "Location", "northeast");
+exportgraphics(fig2m, fullfile(outDir, "mse.png"));
+close(fig2m);
+
+if isfield(results, "kl")
+    fig2k = figure("Name", "KL Divergence");
+    plot(results.kl.ebN0dB, results.kl.signalVsNoise, "o-");
+    hold on;
+    plot(results.kl.ebN0dB, results.kl.symmetric, "s-");
+    grid on;
+    xlabel("E_b/N_0 (dB)");
+    ylabel("KL divergence");
+    legend("KL(P_{sig}||P_{noise})", "Symmetric KL", "Location", "best");
+    exportgraphics(fig2k, fullfile(outDir, "kl.png"));
+    close(fig2k);
+end
+
 
 if isfield(results, "eve")
     fig2b = figure("Name", "PSNR (Eve)");
@@ -47,6 +70,17 @@ if isfield(results, "eve")
     legend(methods, "Location", "southeast");
     exportgraphics(fig2b, fullfile(outDir, "psnr_eve.png"));
     close(fig2b);
+
+    if isfield(results.eve, "mse")
+        fig2bm = figure("Name", "MSE (Eve)");
+        semilogy(results.eve.ebN0dB, results.eve.mse.', "o-");
+        grid on;
+        xlabel("E_b/N_0 at Eve (dB)");
+        ylabel("MSE");
+        legend(methods, "Location", "northeast");
+        exportgraphics(fig2bm, fullfile(outDir, "mse_eve.png"));
+        close(fig2bm);
+    end
 
     fig1b = figure("Name", "BER (Eve)");
     semilogy(results.eve.ebN0dB, results.eve.ber.', "o-");
@@ -87,6 +121,7 @@ for k = 1:numel(methods)
         figRx = figure("Name", sprintf("RX - %s", methods(k)), "Visible", "off");
         
         % 获取该方法的PSNR和SSIM
+        mseVal = results.mse(k, :);
         psnrVal = results.psnr(k, :);
         ssimVal = results.ssim(k, :);
         % 与example图像保持一致的Eb/N0索引
@@ -97,13 +132,14 @@ for k = 1:numel(methods)
             exampleIdx = numel(results.ebN0dB);
             ebN0Sel = results.ebN0dB(exampleIdx);
         end
+        mseMid = mseVal(exampleIdx);
         psnrMid = psnrVal(exampleIdx);
         ssimMid = ssimVal(exampleIdx);
         ebN0Mid = ebN0Sel;
         
         imshow(results.example.(methods(k)).imgRx);
-        titleStr = sprintf("RX - %s\nEb/N0=%.0fdB, PSNR=%.2fdB, SSIM=%.3f", ...
-            methods(k), ebN0Mid, psnrMid, ssimMid);
+        titleStr = sprintf("RX - %s\nEb/N0=%.0fdB, MSE=%.3g, PSNR=%.2fdB, SSIM=%.3f", ...
+            methods(k), ebN0Mid, mseMid, psnrMid, ssimMid);
         title(titleStr, "FontSize", 12);
         
         % 文件名带序号，方便排序
@@ -135,9 +171,10 @@ for k = 1:numel(methods)
         else
             exampleIdx = numel(results.ebN0dB);
         end
+        mseMid = results.mse(k, exampleIdx);
         psnrMid = results.psnr(k, exampleIdx);
         ssimMid = results.ssim(k, exampleIdx);
-        title(sprintf("RX - %s\nPSNR=%.2fdB, SSIM=%.3f", methods(k), psnrMid, ssimMid), "FontSize", 12);
+        title(sprintf("RX - %s\nMSE=%.3g, PSNR=%.2fdB, SSIM=%.3f", methods(k), mseMid, psnrMid, ssimMid), "FontSize", 12);
         
         filename = sprintf("compare_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
         exportgraphics(figCmp, fullfile(imagesDir, filename), 'Resolution', 200);
@@ -206,14 +243,19 @@ if isfield(results, "eve") && isfield(results.eve, "example")
             % 中：Bob接收
             nexttile;
             imshow(results.example.(methods(k)).imgRx);
+            mseBob = results.mse(k, exampleIdx);
             psnrBob = results.psnr(k, exampleIdx);
             ssimBob = results.ssim(k, exampleIdx);
             ebN0Bob = results.ebN0dB(exampleIdx);
-            title(sprintf("Bob - %s\nEb/N0=%.0fdB, PSNR=%.2fdB", methods(k), ebN0Bob, psnrBob), "FontSize", 12);
+            title(sprintf("Bob - %s\nEb/N0=%.0fdB, MSE=%.3g, PSNR=%.2fdB", methods(k), ebN0Bob, mseBob, psnrBob), "FontSize", 12);
             
             % 右：Eve截获
             nexttile;
             imshow(results.eve.example.(methods(k)).imgRx);
+            mseEve = NaN;
+            if isfield(results.eve, "mse")
+                mseEve = results.eve.mse(k, exampleIdx);
+            end
             psnrEve = results.eve.psnr(k, exampleIdx);
             ssimEve = results.eve.ssim(k, exampleIdx);
             ebN0Eve = results.eve.ebN0dB(exampleIdx);
@@ -225,7 +267,7 @@ if isfield(results, "eve") && isfield(results.eve, "example")
                     hdrTxt = " (hdr fail)";
                 end
             end
-            title(sprintf("Eve - %s%s\nEb/N0=%.0fdB, PSNR=%.2fdB", methods(k), hdrTxt, ebN0Eve, psnrEve), "FontSize", 12);
+            title(sprintf("Eve - %s%s\nEb/N0=%.0fdB, MSE=%.3g, PSNR=%.2fdB", methods(k), hdrTxt, ebN0Eve, mseEve, psnrEve), "FontSize", 12);
             
             filename = sprintf("bob_vs_eve_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
             exportgraphics(figEve, fullfile(eveDir, filename), 'Resolution', 200);

@@ -6,8 +6,9 @@
 
 - 随机脉冲干扰（Bernoulli-Gaussian）下的BER曲线
 - 基于机器学习的脉冲检测与抑制（CNN/GRU/逻辑回归）
-- 接收端图像重建与PSNR/SSIM质量评估
+- 接收端图像重建与MSE/PSNR/SSIM质量评估
 - 频谱分析（PSD）与99%占用带宽（OBW）
+- KL散度隐蔽性指标（信号与背景噪声统计差异）
 - 窃听者（Eve）截获分析与监视者（Warden）检测仿真
 
 ---
@@ -30,10 +31,13 @@ run_demo
 |------|------|
 | `results.mat` | 全部仿真结果与参数 |
 | `ber.png` | BER-Eb/N0曲线 |
+| `mse.png` | MSE-Eb/N0曲线 |
 | `psnr.png` | PSNR-Eb/N0曲线 |
+| `kl.png` | KL散度-Eb/N0曲线 |
 | `psd.png` | 功率谱密度图 |
 | `images.png` | 发送/接收图像对比 |
 | `ber_eve.png` | Eve的BER曲线（启用时） |
+| `mse_eve.png` | Eve的MSE曲线（启用时） |
 | `psnr_eve.png` | Eve的PSNR曲线（启用时） |
 | `intercept.png` | Bob与Eve图像对比（启用时） |
 | `warden.png` | 监视者检测性能（启用时） |

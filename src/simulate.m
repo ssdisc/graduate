@@ -8,7 +8,7 @@
 %       .rf, .channel, .mitigation, .softMetric, .rxSync
 %       .eve（可选）, .covert（可选）
 %
-% 返回包含BER/PSNR/PSD结果的结构体，启用时保存图形。
+% 返回包含BER/MSE/PSNR/SSIM/KL/PSD结果的结构体，启用时保存图形。
 
 arguments
     p (1,1) struct
@@ -93,8 +93,12 @@ EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
 methods = string(p.mitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
 ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
+mseVals = nan(numel(methods), numel(EbN0dBList)); %均方误差（MSE）评估图像质量
 psnrVals = nan(numel(methods), numel(EbN0dBList));%峰值信噪比（PSNR）评估图像质量
 ssimVals = nan(numel(methods), numel(EbN0dBList));%结构相似性指数（SSIM）评估图像质量
+klSigVsNoise = nan(1, numel(EbN0dBList)); % KL(P_signal || P_noise)
+klNoiseVsSig = nan(1, numel(EbN0dBList)); % KL(P_noise || P_signal)
+klSym = nan(1, numel(EbN0dBList)); % 对称KL
 
 
 example = struct();
@@ -120,6 +124,7 @@ if eveEnabled
 
     eveEbN0dBList = EbN0dBList + double(p.eve.ebN0dBOffset);
     berEve = nan(numel(methods), numel(EbN0dBList));
+    mseEveVals = nan(numel(methods), numel(EbN0dBList));
     psnrEveVals = nan(numel(methods), numel(EbN0dBList));
     ssimEveVals = nan(numel(methods), numel(EbN0dBList));
     exampleEve = struct();
@@ -268,6 +273,7 @@ for ie = 1:numel(EbN0dBList)
     EbN0dB = EbN0dBList(ie);
     EbN0 = 10.^(EbN0dB/10);
     N0 = ebn0_to_n0(EbN0, modInfo.codeRate, modInfo.bitsPerSymbol, 1.0);
+    [klSigVsNoise(ie), klNoiseVsSig(ie), klSym(ie)] = signal_noise_kl(txSymForChannel, N0, 128);
 
     fprintf('[SIM] >>> Eb/N0点 %d/%d: %.2f dB\n', ie, totalEbN0Points, EbN0dB);
 
@@ -296,8 +302,10 @@ for ie = 1:numel(EbN0dBList)
 
     nErr = zeros(numel(methods), 1);
     nTot = zeros(numel(methods), 1);
+    mseAcc = zeros(numel(methods), 1);
     psnrAcc = zeros(numel(methods), 1);
     ssimAcc = zeros(numel(methods), 1);
+    nMse = zeros(numel(methods), 1);
     nPsnr = zeros(numel(methods), 1);
     nSsim = zeros(numel(methods), 1);
 
@@ -305,8 +313,10 @@ for ie = 1:numel(EbN0dBList)
     if eveEnabled
         nErrEve = zeros(numel(methods), 1);
         nTotEve = zeros(numel(methods), 1);
+        mseAccEve = zeros(numel(methods), 1);
         psnrAccEve = zeros(numel(methods), 1);
         ssimAccEve = zeros(numel(methods), 1);
+        nMseEve = zeros(numel(methods), 1);
         nPsnrEve = zeros(numel(methods), 1);
         nSsimEve = zeros(numel(methods), 1);
     end
@@ -441,7 +451,11 @@ for ie = 1:numel(EbN0dBList)
                         imgRx = payload_bits_to_image(payloadBitsRx, metaRx, p.payload);
                     end
 
-                    [psnrNow, ssimNow] = image_quality(imgTx, imgRx);
+                    [psnrNow, ssimNow, mseNow] = image_quality(imgTx, imgRx);
+                    if isfinite(mseNow)
+                        mseAcc(im) = mseAcc(im) + mseNow;
+                        nMse(im) = nMse(im) + 1;
+                    end
                     if ~isnan(psnrNow)
                         psnrAcc(im) = psnrAcc(im) + psnrNow;
                         nPsnr(im) = nPsnr(im) + 1;
@@ -500,7 +514,11 @@ for ie = 1:numel(EbN0dBList)
                     imgEve = payload_bits_to_image(payloadBitsEve, metaUse, p.payload);  % Eve不解密或不知道密钥
                 end
 
-                [psnrNowEve, ssimNowEve] = image_quality(imgTx, imgEve);
+                [psnrNowEve, ssimNowEve, mseNowEve] = image_quality(imgTx, imgEve);
+                if isfinite(mseNowEve)
+                    mseAccEve(im) = mseAccEve(im) + mseNowEve;
+                    nMseEve(im) = nMseEve(im) + 1;
+                end
                 if ~isnan(psnrNowEve)
                     psnrAccEve(im) = psnrAccEve(im) + psnrNowEve;
                     nPsnrEve(im) = nPsnrEve(im) + 1;
@@ -522,12 +540,16 @@ for ie = 1:numel(EbN0dBList)
     % --- 当前Eb/N0点的性能统计 ---
     ber(:, ie) = nErr ./ max(nTot, 1);
 
+    mseOut = nan(numel(methods), 1);
     psnrOut = nan(numel(methods), 1);
     ssimOut = nan(numel(methods), 1);
+    validMse = nMse > 0;
     validPsnr = nPsnr > 0;
     validSsim = nSsim > 0;
+    mseOut(validMse) = mseAcc(validMse) ./ nMse(validMse);
     psnrOut(validPsnr) = psnrAcc(validPsnr) ./ nPsnr(validPsnr);
     ssimOut(validSsim) = ssimAcc(validSsim) ./ nSsim(validSsim);
+    mseVals(:, ie) = mseOut;
     psnrVals(:, ie) = psnrOut;
     ssimVals(:, ie) = ssimOut;
 
@@ -535,12 +557,16 @@ for ie = 1:numel(EbN0dBList)
     if eveEnabled
         berEve(:, ie) = nErrEve ./ max(nTotEve, 1);
 
+        mseOutEve = nan(numel(methods), 1);
         psnrOutEve = nan(numel(methods), 1);
         ssimOutEve = nan(numel(methods), 1);
+        validMseEve = nMseEve > 0;
         validPsnrEve = nPsnrEve > 0;
         validSsimEve = nSsimEve > 0;
+        mseOutEve(validMseEve) = mseAccEve(validMseEve) ./ nMseEve(validMseEve);
         psnrOutEve(validPsnrEve) = psnrAccEve(validPsnrEve) ./ nPsnrEve(validPsnrEve);
         ssimOutEve(validSsimEve) = ssimAccEve(validSsimEve) ./ nSsimEve(validSsimEve);
+        mseEveVals(:, ie) = mseOutEve;
         psnrEveVals(:, ie) = psnrOutEve;
         ssimEveVals(:, ie) = ssimOutEve;
     end
@@ -564,16 +590,22 @@ results.params = p;
 results.ebN0dB = EbN0dBList;
 results.methods = methods;
 results.ber = ber;
+results.mse = mseVals;
 results.psnr = psnrVals;
 results.ssim = ssimVals;
 results.example = example;
 results.spectrum = struct("freqHz", freqHz, "psd", psd, "bw99Hz", bw99Hz, "etaBpsHz", etaBpsHz);
+results.kl = struct("ebN0dB", EbN0dBList, ...
+    "signalVsNoise", klSigVsNoise, ...
+    "noiseVsSignal", klNoiseVsSig, ...
+    "symmetric", klSym);
 
 
 if eveEnabled
     results.eve = struct();
     results.eve.ebN0dB = eveEbN0dBList;
     results.eve.ber = berEve;
+    results.eve.mse = mseEveVals;
     results.eve.psnr = psnrEveVals;
     results.eve.ssim = ssimEveVals;
     results.eve.example = exampleEve;
@@ -669,4 +701,58 @@ if x <= 0
 elseif x >= 1
     x = 1 - eps;
 end
+end
+
+function [klSN, klNS, klSymVal] = signal_noise_kl(sig, N0, nBins)
+% 比较跳频信号幅度分布与背景噪声幅度（Rayleigh）分布。
+sig = sig(:);
+if isempty(sig) || ~isfinite(N0) || N0 <= 0
+    klSN = NaN;
+    klNS = NaN;
+    klSymVal = NaN;
+    return;
+end
+
+magSig = abs(double(sig));
+if all(~isfinite(magSig))
+    klSN = NaN;
+    klNS = NaN;
+    klSymVal = NaN;
+    return;
+end
+magSig = magSig(isfinite(magSig));
+if isempty(magSig)
+    klSN = NaN;
+    klNS = NaN;
+    klSymVal = NaN;
+    return;
+end
+
+sigma = sqrt(max(double(N0), eps) / 2);
+rMax = max(max(magSig) * 1.05, 6 * sigma);
+if ~isfinite(rMax) || rMax <= 0
+    klSN = NaN;
+    klNS = NaN;
+    klSymVal = NaN;
+    return;
+end
+
+nBins = max(16, round(double(nBins)));
+edges = linspace(0, rMax, nBins + 1);
+pSig = histcounts(magSig, edges, "Normalization", "probability");
+
+centers = 0.5 * (edges(1:end-1) + edges(2:end));
+binWidth = diff(edges);
+pNoisePdf = (centers ./ (sigma.^2)) .* exp(-(centers.^2) ./ (2 * sigma.^2));
+pNoise = pNoisePdf .* binWidth;
+
+epsProb = 1e-12;
+pSig = pSig + epsProb;
+pNoise = pNoise + epsProb;
+pSig = pSig / sum(pSig);
+pNoise = pNoise / sum(pNoise);
+
+klSN = sum(pSig .* log(pSig ./ pNoise));
+klNS = sum(pNoise .* log(pNoise ./ pSig));
+klSymVal = 0.5 * (klSN + klNS);
 end

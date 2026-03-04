@@ -3,7 +3,8 @@ function s = make_summary(results)
 %
 % 输入:
 %   results - 仿真结果结构体
-%             .methods, .ebN0dB, .ber, .psnr, .ssim
+%             .methods, .ebN0dB, .ber, .mse, .psnr, .ssim
+%             .kl（含signalVsNoise/noiseVsSignal/symmetric）
 %             .spectrum（含bw99Hz, etaBpsHz）
 %             .eve（可选）, .covert.warden（可选）
 %
@@ -14,11 +15,14 @@ s = struct();
 s.methods = results.methods;
 s.ebN0dB = results.ebN0dB;
 s.berAtMaxEbN0 = results.ber(:, end);
+s.mseAtMaxEbN0 = results.mse(:, end);
 s.psnrAtMaxEbN0 = results.psnr(:, end);
+s.klSymAtMaxEbN0 = results.kl.symmetric(end);
 
 if isfield(results, "eve")
     s.eveEbN0dB = results.eve.ebN0dB;
     s.eveBerAtMaxEbN0 = results.eve.ber(:, end);
+    s.eveMseAtMaxEbN0 = results.eve.mse(:, end);
     s.evePsnrAtMaxEbN0 = results.eve.psnr(:, end);
 end
 
