@@ -28,6 +28,7 @@ p.chaosEncrypt.enable = true;          % 是否启用混沌加密
 p.chaosEncrypt.arnoldIter = 5;         % Arnold置乱迭代次数
 p.chaosEncrypt.chaosMethod = 'logistic'; % 混沌映射: 'logistic', 'henon', 'tent'
 p.chaosEncrypt.diffusionRounds = 2;    % 扩散轮数
+p.chaosEncrypt.packetIndependent = true; % dct比特载荷: 先分包、再逐包独立加密
 % 混沌参数（密钥）- Logistic映射
 p.chaosEncrypt.chaosParams = struct();
 p.chaosEncrypt.chaosParams.mu = 3.9999;              % Logistic参数 (3.57 < mu <= 4)

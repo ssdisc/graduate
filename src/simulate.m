@@ -44,6 +44,7 @@ imgTx = load_source_image(p.source);
 
 payloadCodec = get_payload_codec(p.payload);
 usePayloadBitChaos = payloadCodec == "dct";
+packetIndependentBitChaos = false;
 
 % 混沌加密
 chaosEnabled = isfield(p, 'chaosEncrypt') && isfield(p.chaosEncrypt, 'enable') && p.chaosEncrypt.enable;
@@ -55,16 +56,24 @@ if chaosEnabled && ~usePayloadBitChaos
 end
 
 [payloadBitsPlain, meta] = image_to_payload_bits(imgForPayload, p.payload);%将图像转换为比特流载荷，并生成元数据（尺寸等）
+payloadBits = payloadBitsPlain;
 if chaosEnabled && usePayloadBitChaos
-    [payloadBits, chaosEncInfo] = chaos_encrypt_bits(payloadBitsPlain, p.chaosEncrypt);
-else
-    payloadBits = payloadBitsPlain;
+    if ~isfield(p.chaosEncrypt, "packetIndependent")
+        p.chaosEncrypt.packetIndependent = true;
+    end
+    packetIndependentBitChaos = logical(p.chaosEncrypt.packetIndependent);
+    if packetIndependentBitChaos
+        chaosEncInfo.enabled = true;
+        chaosEncInfo.mode = "payload_bits_packet";
+    else
+        [payloadBits, chaosEncInfo] = chaos_encrypt_bits(payloadBitsPlain, p.chaosEncrypt);
+    end
 end
 
 [~, preambleSym] = make_preamble(p.frame.preambleLength);%生成PN前导
 
 % 发送端按包构建（最小分包：pktIdx/totalPkts/payloadLen/CRC16）
-[txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, preambleSym);
+[txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos);
 nPackets = numel(txPackets);
 fhEnabled = txPlan.fhEnabled;
 packetConcealEnable = false;
@@ -111,6 +120,8 @@ else
 end %示例图默认取最高Eb/N0点；设为具体值时取最近点
 
 eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
+chaosAssumptionEve = "none";
+chaosEncInfoEve = struct('enabled', false, 'mode', "none");
 if eveEnabled
     if ~isfield(p.eve, "ebN0dBOffset"); p.eve.ebN0dBOffset = -6; end
     if ~isfield(p.eve, "scrambleAssumption"); p.eve.scrambleAssumption = "wrong_key"; end
@@ -151,18 +162,27 @@ if eveEnabled
 
     % Eve对混沌加密的知识
     if ~isfield(p.eve, 'chaosAssumption'); p.eve.chaosAssumption = "none"; end
-    switch lower(string(p.eve.chaosAssumption))
+    chaosAssumptionEve = lower(string(p.eve.chaosAssumption));
+    switch chaosAssumptionEve
         case "known"
-            % Eve知道混沌密钥（最佳截获情况）
-            chaosEncInfoEve = chaosEncInfo;
+            if packetIndependentBitChaos
+                chaosEncInfoEve = struct('enabled', true, 'mode', "payload_bits_packet");
+            else
+                % Eve知道混沌密钥（最佳截获情况）
+                chaosEncInfoEve = chaosEncInfo;
+            end
         case "none"
             % Eve不知道混沌加密，不解密（看到的是加密图像）
             chaosEncInfoEve = struct('enabled', false);
         case "wrong_key"
-            % Eve使用错误的混沌密钥
             if chaosEnabled
-                chaosEncInfoEve = chaosEncInfo;
-                chaosEncInfoEve.chaosParams.x0 = chaosEncInfo.chaosParams.x0 + 1e-10;  % 微小扰动
+                if packetIndependentBitChaos
+                    chaosEncInfoEve = struct('enabled', true, 'mode', "payload_bits_packet");
+                else
+                    % Eve使用错误的混沌密钥
+                    chaosEncInfoEve = chaosEncInfo;
+                    chaosEncInfoEve.chaosParams.x0 = chaosEncInfo.chaosParams.x0 + 1e-10;  % 微小扰动
+                end
             else
                 chaosEncInfoEve = struct('enabled', false);
             end
@@ -465,7 +485,10 @@ for ie = 1:numel(EbN0dBList)
         % 帧级图像重建与质量评价（分包重组后）
         for im = 1:numel(methods)
             payloadBitsRxFrame = bobPayloadFrame{im};
-            if chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
+            if packetIndependentBitChaos && chaosEnabled
+                payloadBitsRxDec = decrypt_payload_packets(payloadBitsRxFrame, bobPacketOk(im, :), txPackets, "known");
+                imgRx = payload_bits_to_image(payloadBitsRxDec, meta, p.payload);
+            elseif chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
                 if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
                     payloadBitsRxDec = chaos_decrypt_bits(payloadBitsRxFrame, chaosEncInfo);
                     imgRx = payload_bits_to_image(payloadBitsRxDec, meta, p.payload);
@@ -504,7 +527,10 @@ for ie = 1:numel(EbN0dBList)
         if eveEnabled
             for im = 1:numel(methods)
                 payloadBitsEveFrame = evePayloadFrame{im};
-                if chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
+                if packetIndependentBitChaos && chaosEnabled && chaosAssumptionEve ~= "none"
+                    payloadBitsEveDec = decrypt_payload_packets(payloadBitsEveFrame, evePacketOk(im, :), txPackets, chaosAssumptionEve);
+                    imgEve = payload_bits_to_image(payloadBitsEveDec, meta, p.payload);
+                elseif chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
                     if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
                         payloadBitsEveDec = chaos_decrypt_bits(payloadBitsEveFrame, chaosEncInfoEve);
                         imgEve = payload_bits_to_image(payloadBitsEveDec, meta, p.payload);
@@ -700,10 +726,13 @@ switch codec
 end
 end
 
-function [txPackets, plan] = build_tx_packets(payloadBits, meta, p, preambleSym)
+function [txPackets, plan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos)
 % 按配置将整图载荷切分为多个分包并构建发送符号。
 payloadBits = uint8(payloadBits(:) ~= 0);
 totalBits = numel(payloadBits);
+if nargin < 5
+    packetIndependentBitChaos = false;
+end
 
 packetEnable = false;
 pktBitsPerPacket = totalBits;
@@ -731,6 +760,8 @@ if nPackets > 65535
 end
 
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
+packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...
+    && isfield(p.chaosEncrypt, "enable") && p.chaosEncrypt.enable;
 txPackets = repmat(struct(), nPackets, 1);
 txBurstParts = cell(nPackets, 1);
 modInfoRef = struct();
@@ -739,7 +770,13 @@ headerLenBits = 0;
 for pktIdx = 1:nPackets
     startBit = (pktIdx - 1) * pktBitsPerPacket + 1;
     endBit = min(pktIdx * pktBitsPerPacket, totalBits);
-    payloadPkt = payloadBits(startBit:endBit);
+    payloadPktPlain = payloadBits(startBit:endBit);
+    payloadPkt = payloadPktPlain;
+    chaosEncInfoPkt = struct('enabled', false, 'mode', "none");
+    if packetChaosEnable
+        chaosPktCfg = derive_packet_chaos_cfg(p.chaosEncrypt, pktIdx);
+        [payloadPkt, chaosEncInfoPkt] = chaos_encrypt_bits(payloadPktPlain, chaosPktCfg);
+    end
     payloadPktBytes = ceil(numel(payloadPkt) / 8);
     if payloadPktBytes > 65535
         error("单包payload过大(%d bytes)，超出uint16可表示范围。", payloadPktBytes);
@@ -777,8 +814,10 @@ for pktIdx = 1:nPackets
 
     txPackets(pktIdx).startBit = startBit;
     txPackets(pktIdx).endBit = endBit;
+    txPackets(pktIdx).payloadBitsPlain = payloadPktPlain;
     txPackets(pktIdx).payloadBits = payloadPkt;
     txPackets(pktIdx).payloadBytes = payloadPktBytes;
+    txPackets(pktIdx).chaosEncInfo = chaosEncInfoPkt;
     txPackets(pktIdx).dataSymTx = dataSymTx;
     txPackets(pktIdx).hopInfo = hopInfo;
     txPackets(pktIdx).intState = intState;
@@ -791,6 +830,7 @@ plan.packetEnable = packetEnable;
 plan.nPackets = nPackets;
 plan.headerLenBits = headerLenBits;
 plan.fhEnabled = fhEnabled;
+plan.packetChaosEnable = packetChaosEnable;
 plan.modInfo = modInfoRef;
 plan.txBurstForEval = vertcat(txBurstParts{:});
 end
@@ -847,6 +887,76 @@ if numel(bitsIn) >= targetLen
     bitsOut = bitsIn(1:targetLen);
 else
     bitsOut = [bitsIn; zeros(targetLen - numel(bitsIn), 1, "uint8")];
+end
+end
+
+function encPkt = derive_packet_chaos_cfg(encBase, pktIdx)
+% 从主混沌密钥派生每包独立参数，避免包间复用同一初值。
+encPkt = encBase;
+if ~isfield(encPkt, "enable")
+    encPkt.enable = true;
+end
+if ~isfield(encPkt, "chaosMethod") || strlength(string(encPkt.chaosMethod)) == 0
+    encPkt.chaosMethod = "logistic";
+end
+if ~isfield(encPkt, "chaosParams") || ~isstruct(encPkt.chaosParams)
+    encPkt.chaosParams = struct();
+end
+
+delta = 1e-10 * (double(pktIdx) + 1);
+if ~isfield(encPkt.chaosParams, "x0") || isempty(encPkt.chaosParams.x0)
+    encPkt.chaosParams.x0 = 0.1234567890123456;
+end
+encPkt.chaosParams.x0 = wrap_unit_interval(double(encPkt.chaosParams.x0) + delta);
+if isfield(encPkt.chaosParams, "y0") && ~isempty(encPkt.chaosParams.y0)
+    encPkt.chaosParams.y0 = wrap_unit_interval(double(encPkt.chaosParams.y0) + 2 * delta);
+end
+end
+
+function payloadBitsOut = decrypt_payload_packets(payloadBitsIn, packetOk, txPackets, assumption)
+% 逐包独立解密，避免密文扩散跨包影响。
+payloadBitsOut = uint8(payloadBitsIn(:) ~= 0);
+nPacketsLocal = numel(txPackets);
+ok = normalize_packet_ok(packetOk, nPacketsLocal);
+assumption = lower(string(assumption));
+
+for pktIdx = 1:nPacketsLocal
+    if ~ok(pktIdx)
+        continue;
+    end
+    pkt = txPackets(pktIdx);
+    if ~isfield(pkt, "chaosEncInfo") || ~isfield(pkt.chaosEncInfo, "enabled") || ~pkt.chaosEncInfo.enabled
+        continue;
+    end
+    if assumption == "none"
+        continue;
+    end
+
+    infoUse = pkt.chaosEncInfo;
+    if assumption == "wrong_key"
+        infoUse = perturb_chaos_enc_info(infoUse, pktIdx);
+    elseif assumption ~= "known"
+        error("Unknown chaos assumption: %s", assumption);
+    end
+
+    seg = payloadBitsOut(pkt.startBit:pkt.endBit);
+    segDec = chaos_decrypt_bits(seg, infoUse);
+    payloadBitsOut(pkt.startBit:pkt.endBit) = fit_bits_length(segDec, numel(seg));
+end
+end
+
+function infoOut = perturb_chaos_enc_info(infoIn, pktIdx)
+% Eve错钥场景：对每包混沌初值施加轻微扰动。
+infoOut = infoIn;
+if ~isfield(infoOut, "chaosParams") || ~isstruct(infoOut.chaosParams)
+    infoOut.chaosParams = struct();
+end
+delta = 7e-10 * (double(pktIdx) + 1);
+if isfield(infoOut.chaosParams, "x0") && ~isempty(infoOut.chaosParams.x0)
+    infoOut.chaosParams.x0 = wrap_unit_interval(double(infoOut.chaosParams.x0) + delta);
+end
+if isfield(infoOut.chaosParams, "y0") && ~isempty(infoOut.chaosParams.y0)
+    infoOut.chaosParams.y0 = wrap_unit_interval(double(infoOut.chaosParams.y0) + 2 * delta);
 end
 end
 
