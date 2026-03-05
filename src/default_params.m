@@ -99,15 +99,6 @@ p.fh.chaosParams.y0 = 0.123456789;           % henon初值y0
 % 例如：8个频点均匀分布在 [-0.35, 0.35]
 p.fh.freqSet = linspace(-0.35, 0.35, p.fh.nFreqs);
 
-% 9.5) 射频等效上下变频（复包络建模）
-p.rf = struct();
-p.rf.enable = true;               % 启用发送端上变频 + 接收端下变频
-p.rf.ifFreqNorm = 0.18;           % 归一化中频（cycles/sample）
-p.rf.txFreqNorm = p.rf.ifFreqNorm;
-p.rf.rxFreqNorm = p.rf.ifFreqNorm;
-p.rf.txPhaseOffsetRad = 0.0;      % TX本振初相
-p.rf.rxPhaseOffsetRad = 0.0;      % RX本振初相
-
 %% 信道
 % AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/衰落）
 p.channel = struct();
@@ -226,9 +217,6 @@ p.eve.fhAssumption = "none";
 %   "none"      : 不知道混沌加密（看到加密图像）
 %   "wrong_key" : 使用错误的混沌密钥（解密失败）
 p.eve.chaosAssumption = "none";
-% Eve捕获频点偏差（归一化，cycles/sample）
-p.eve.rfFreqOffsetNorm = 0.0;
-
 % 隐蔽/低截获概率支持（监视者检测）
 p.covert = struct();
 p.covert.enable = true;

@@ -5,7 +5,7 @@
 %   p - 仿真参数结构体（建议由default_params()生成）
 %       .rngSeed, .sim, .source, .chaosEncrypt, .payload
 %       .frame, .scramble, .fec, .interleaver, .mod, .fh
-%       .rf, .channel, .mitigation, .softMetric, .rxSync
+%       .channel, .mitigation, .softMetric, .rxSync
 %       .eve（可选）, .covert（可选）
 %
 % 返回包含BER/MSE/PSNR/SSIM/KL/PSD结果的结构体，启用时保存图形。
@@ -30,13 +30,6 @@ if ~isfield(p.rxSync.carrierPll, "enable"); p.rxSync.carrierPll.enable = false; 
 if ~isfield(p.rxSync.carrierPll, "alpha"); p.rxSync.carrierPll.alpha = 0.02; end
 if ~isfield(p.rxSync.carrierPll, "beta"); p.rxSync.carrierPll.beta = 3e-4; end
 if ~isfield(p.rxSync.carrierPll, "maxFreq"); p.rxSync.carrierPll.maxFreq = 0.1; end
-if ~isfield(p, "rf"); p.rf = struct(); end
-if ~isfield(p.rf, "enable"); p.rf.enable = false; end
-if ~isfield(p.rf, "ifFreqNorm"); p.rf.ifFreqNorm = 0.18; end
-if ~isfield(p.rf, "txFreqNorm"); p.rf.txFreqNorm = p.rf.ifFreqNorm; end
-if ~isfield(p.rf, "rxFreqNorm"); p.rf.rxFreqNorm = p.rf.ifFreqNorm; end
-if ~isfield(p.rf, "txPhaseOffsetRad"); p.rf.txPhaseOffsetRad = 0; end
-if ~isfield(p.rf, "rxPhaseOffsetRad"); p.rf.rxPhaseOffsetRad = 0; end
 
 %% 发送端（TRANSMITTER）
 
@@ -125,7 +118,6 @@ chaosEncInfoEve = struct('enabled', false, 'mode', "none");
 if eveEnabled
     if ~isfield(p.eve, "ebN0dBOffset"); p.eve.ebN0dBOffset = -6; end
     if ~isfield(p.eve, "scrambleAssumption"); p.eve.scrambleAssumption = "wrong_key"; end
-    if ~isfield(p.eve, "rfFreqOffsetNorm"); p.eve.rfFreqOffsetNorm = 0.0; end
 
     eveEbN0dBList = EbN0dBList + double(p.eve.ebN0dBOffset);
     berEve = nan(numel(methods), numel(EbN0dBList));
@@ -247,9 +239,9 @@ syncEnabled = p.rxSync.compensateCarrier || p.rxSync.fineSearchRadius > 0 || ...
 mpEnabled = isfield(p.channel, "multipath") && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable;
 dopplerEnabled = isfield(p.channel, "doppler") && isfield(p.channel.doppler, "enable") && p.channel.doppler.enable;
 pathLossEnabled = isfield(p.channel, "pathLoss") && isfield(p.channel.pathLoss, "enable") && p.channel.pathLoss.enable;
-fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, RF=%s, RxSync=%s, MP=%s, Doppler=%s, PathLoss=%s\n', ...
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, RxSync=%s, MP=%s, Doppler=%s, PathLoss=%s\n', ...
     on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
-    on_off_text(chaosEnabled), on_off_text(p.rf.enable), on_off_text(syncEnabled), ...
+    on_off_text(chaosEnabled), on_off_text(syncEnabled), ...
     on_off_text(mpEnabled), on_off_text(dopplerEnabled), on_off_text(pathLossEnabled));
 fprintf('========================================\n\n');
 
@@ -355,22 +347,10 @@ for ie = 1:numel(EbN0dBList)
             delay = randi([0, p.channel.maxDelaySymbols], 1, 1);
             tx = [zeros(delay, 1); pkt.txSymForChannel];
 
-            rxCh = channel_bg_impulsive(tx, N0, p.channel);
-            if p.rf.enable
-                rx = rf_downconvert(rxCh, p.rf);
-            else
-                rx = rxCh;
-            end
+            rx = channel_bg_impulsive(tx, N0, p.channel);
 
             if eveEnabled
-                rxEveCh = channel_bg_impulsive(tx, N0Eve, p.channel);
-                if p.rf.enable
-                    rfEve = p.rf;
-                    rfEve.rxFreqNorm = p.rf.rxFreqNorm + double(p.eve.rfFreqOffsetNorm);
-                    rxEve = rf_downconvert(rxEveCh, rfEve);
-                else
-                    rxEve = rxEveCh;
-                end
+                rxEve = channel_bg_impulsive(tx, N0Eve, p.channel);
             end
 
             % Bob同步与解跳
@@ -805,12 +785,7 @@ for pktIdx = 1:nPackets
         hopInfo = struct('enable', false);
     end
 
-    txSymPkt = [preambleSym; dataSymHop];
-    if isfield(p, "rf") && isfield(p.rf, "enable") && p.rf.enable
-        txSymForChannel = rf_upconvert(txSymPkt, p.rf);
-    else
-        txSymForChannel = txSymPkt;
-    end
+    txSymForChannel = [preambleSym; dataSymHop];
 
     txPackets(pktIdx).startBit = startBit;
     txPackets(pktIdx).endBit = endBit;
