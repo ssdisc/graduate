@@ -309,6 +309,15 @@ p.packet.concealMode = "nearest";       % "nearest" | "blend"
 p.chaosEncrypt.packetIndependent = true; % dct载荷时先分包，再逐包独立加密
 ```
 
+### 波形成型参数
+```matlab
+p.waveform.enable = true;          % 启用RRC成型+匹配滤波
+p.waveform.sps = 4;                % 过采样倍数
+p.waveform.rolloff = 0.25;         % 滚降系数
+p.waveform.spanSymbols = 10;       % 滤波器跨度（符号）
+p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
+```
+
 ### 抑制方法
 ```matlab
 p.mitigation.methods = ["none" "blanking" "ml_cnn" "ml_gru"];
@@ -347,19 +356,22 @@ graduate/
 ├── src/
 │   ├── default_params.m           # 默认参数配置
 │   ├── simulate.m                 # 端到端仿真主函数
-│   ├── source/                    # 图像信源与重建
+│   ├── tx/                        # 发送端链路装配（分包->编码->调制->波形成型）
+│   ├── frame/                     # 前导、帧头、CRC与帧解析
+│   ├── payload/                   # 载荷格式辅助
+│   ├── source/                    # 图像信源编码/重建与质量评估
+│   ├── recovery/                  # 丢包图像域补偿/修复
 │   ├── security/                  # 混沌加密/解密
-│   ├── frame/                     # 前导、帧头、帧解析
 │   ├── coding/                    # 扰码/FEC/交织/比特工具
 │   ├── modem/                     # 调制解调
 │   ├── fh/                        # 跳频
-│   ├── rf/                        # 射频上下变频
 │   ├── sync/                      # 帧同步与载波跟踪
 │   ├── channel/                   # 信道与噪声参数换算
 │   ├── mitigation/                # 脉冲抑制
 │   │   └── ml/                    # ML检测与训练
 │   ├── covert/                    # 监视者检测
 │   ├── analysis/                  # 频谱估计与结果汇总
+│   ├── util/                      # simulate辅助通用工具
 │   └── io/                        # 结果目录与图像保存
 ├── models/                        # 训练好的ML模型
 ├── results/                       # 仿真结果输出

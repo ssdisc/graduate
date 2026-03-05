@@ -1,9 +1,9 @@
-﻿function results = simulate(p)
+function results = simulate(p)
 %SIMULATE  端到端链路仿真，包含脉冲噪声抑制。
 %
 % 输入:
 %   p - 仿真参数结构体（建议由default_params()生成）
-%       .rngSeed, .sim, .source, .chaosEncrypt, .payload
+%       .rngSeed, .sim, .source, .chaosEncrypt, .payload, .waveform
 %       .frame, .scramble, .fec, .interleaver, .mod, .fh
 %       .channel, .mitigation, .softMetric, .rxSync
 %       .eve（可选）, .covert（可选）
@@ -30,6 +30,7 @@ if ~isfield(p.rxSync.carrierPll, "enable"); p.rxSync.carrierPll.enable = false; 
 if ~isfield(p.rxSync.carrierPll, "alpha"); p.rxSync.carrierPll.alpha = 0.02; end
 if ~isfield(p.rxSync.carrierPll, "beta"); p.rxSync.carrierPll.beta = 3e-4; end
 if ~isfield(p.rxSync.carrierPll, "maxFreq"); p.rxSync.carrierPll.maxFreq = 0.1; end
+waveform = resolve_waveform_cfg(p);
 
 %% 发送端（TRANSMITTER）
 
@@ -66,7 +67,7 @@ end
 [~, preambleSym] = make_preamble(p.frame.preambleLength);%生成PN前导
 
 % 发送端按包构建（最小分包：pktIdx/totalPkts/payloadLen/CRC16）
-[txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos);
+[txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos, waveform);
 nPackets = numel(txPackets);
 fhEnabled = txPlan.fhEnabled;
 packetConcealEnable = false;
@@ -80,8 +81,9 @@ if isfield(p, "packet") && isstruct(p.packet)
     end
 end
 
-% 用于频谱/监视者评估的整段突发
-txSymForChannel = txPlan.txBurstForEval;
+% 用于信道/频谱/监视者评估的整段突发
+txSymForChannel = txPlan.txBurstForChannel;
+txSymForSpectrum = txPlan.txBurstForSpectrum;
 modInfo = txPlan.modInfo;
 
 %% 仿真参数初始化与配置
@@ -195,6 +197,10 @@ if wardenEnabled
     wardenNTrials = NaN; %蒙特卡洛试验次数（如果仿真中未指定，则使用仿真中实际的试验次数）
 end
 
+% 波形成型启用时，将“按符号配置”的信道参数映射到“按采样配置”。
+channelSample = adapt_channel_for_sps(p.channel, waveform.sps);
+maxDelaySamples = max(0, round(double(p.channel.maxDelaySymbols) * waveform.sps));
+
 % Eve逐包解跳配置（与发送端分包序列对齐）
 if eveEnabled
     hopInfoEveList = cell(nPackets, 1);
@@ -239,9 +245,14 @@ syncEnabled = p.rxSync.compensateCarrier || p.rxSync.fineSearchRadius > 0 || ...
 mpEnabled = isfield(p.channel, "multipath") && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable;
 dopplerEnabled = isfield(p.channel, "doppler") && isfield(p.channel.doppler, "enable") && p.channel.doppler.enable;
 pathLossEnabled = isfield(p.channel, "pathLoss") && isfield(p.channel.pathLoss, "enable") && p.channel.pathLoss.enable;
-fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, RxSync=%s, MP=%s, Doppler=%s, PathLoss=%s\n', ...
+if waveform.enable
+    pulseTxt = sprintf('ON(sps=%d)', waveform.sps);
+else
+    pulseTxt = 'OFF';
+end
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, Pulse=%s, RxSync=%s, MP=%s, Doppler=%s, PathLoss=%s\n', ...
     on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
-    on_off_text(chaosEnabled), on_off_text(syncEnabled), ...
+    on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabled), ...
     on_off_text(mpEnabled), on_off_text(dopplerEnabled), on_off_text(pathLossEnabled));
 fprintf('========================================\n\n');
 
@@ -264,9 +275,9 @@ for ie = 1:numel(EbN0dBList)
 
     if wardenEnabled
         if eveEnabled
-            det = warden_energy_detector(txSymForChannel, N0Eve, p.channel, p.channel.maxDelaySymbols, p.covert.warden);
+            det = warden_energy_detector(txSymForChannel, N0Eve, channelSample, maxDelaySamples, p.covert.warden);
         else
-            det = warden_energy_detector(txSymForChannel, N0, p.channel, p.channel.maxDelaySymbols, p.covert.warden);
+            det = warden_energy_detector(txSymForChannel, N0, channelSample, maxDelaySamples, p.covert.warden);
         end
         if isnan(wardenPfaTarget); wardenPfaTarget = det.pfaTarget; end
         if isnan(wardenNTrials); wardenNTrials = det.nTrials; end
@@ -344,13 +355,16 @@ for ie = 1:numel(EbN0dBList)
             pkt = txPackets(pktIdx);
 
             % 信道
-            delay = randi([0, p.channel.maxDelaySymbols], 1, 1);
+            delaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
+            delay = round(double(delaySym) * waveform.sps);
             tx = [zeros(delay, 1); pkt.txSymForChannel];
 
-            rx = channel_bg_impulsive(tx, N0, p.channel);
+            rx = channel_bg_impulsive(tx, N0, channelSample);
+            rx = pulse_rx_to_symbol_rate(rx, waveform);
 
             if eveEnabled
-                rxEve = channel_bg_impulsive(tx, N0Eve, p.channel);
+                rxEve = channel_bg_impulsive(tx, N0Eve, channelSample);
+                rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
             end
 
             % Bob同步与解跳
@@ -595,7 +609,7 @@ end
 fprintf('[SIM] 开始频谱估计与结果汇总...\n');
 
 % 波形/频谱（单次突发，无信道）
-[psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum(txSymForChannel, modInfo);
+[psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum(txSymForSpectrum, modInfo);
 
 results = struct();
 results.params = p;
@@ -654,630 +668,3 @@ fprintf('[SIM] 链路仿真结束，总耗时 %.2fs\n', toc(simTic));
 
 end
 
-function txt = on_off_text(flag)
-if flag
-    txt = 'ON';
-else
-    txt = 'OFF';
-end
-end
-
-function txt = format_metric_pairs(methods, values)
-pairs = cell(1, numel(methods));
-for k = 1:numel(methods)
-    pairs{k} = sprintf('%s=%.3e', char(methods(k)), values(k));
-end
-txt = strjoin(pairs, ', ');
-end
-
-function [blk, ok] = extract_fractional_block(x, startPos, nSamp)
-% 从可能带分数起点的位置提取定长序列。
-x = x(:);
-if nSamp <= 0 || isempty(x)
-    blk = complex(zeros(0, 1));
-    ok = false;
-    return;
-end
-t = startPos + (0:nSamp-1).';
-% 允许轻微越界（线性外推为0），避免分数定时下末尾判定失败
-guard = 2;
-if t(1) < 1 - guard || t(end) > numel(x) + guard
-    blk = complex(zeros(nSamp, 1));
-    ok = false;
-    return;
-end
-idx = (1:numel(x)).';
-blk = interp1(idx, x, t, "linear", 0);
-ok = all(isfinite(blk)) && any(abs(blk) > 0);
-end
-
-function codec = get_payload_codec(payload)
-codec = "raw";
-if isfield(payload, "codec") && strlength(string(payload.codec)) > 0
-    codec = lower(string(payload.codec));
-end
-switch codec
-    case {"raw", "none"}
-        codec = "raw";
-    case {"dct", "dct8", "dct_lossy"}
-        codec = "dct";
-    otherwise
-        codec = "raw";
-end
-end
-
-function [txPackets, plan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos)
-% 按配置将整图载荷切分为多个分包并构建发送符号。
-payloadBits = uint8(payloadBits(:) ~= 0);
-totalBits = numel(payloadBits);
-if nargin < 5
-    packetIndependentBitChaos = false;
-end
-
-packetEnable = false;
-pktBitsPerPacket = totalBits;
-if isfield(p, "packet") && isstruct(p.packet) && isfield(p.packet, "enable") && p.packet.enable
-    packetEnable = true;
-    if isfield(p.packet, "payloadBitsPerPacket") && ~isempty(p.packet.payloadBitsPerPacket)
-        pktBitsPerPacket = max(8, round(double(p.packet.payloadBitsPerPacket)));
-    else
-        pktBitsPerPacket = 4096;
-    end
-end
-
-% 分包以字节对齐，便于payloadBytes/CRC统计
-pktBitsPerPacket = 8 * floor(pktBitsPerPacket / 8);
-if pktBitsPerPacket <= 0
-    pktBitsPerPacket = 8;
-end
-if ~packetEnable
-    pktBitsPerPacket = max(pktBitsPerPacket, totalBits);
-end
-
-nPackets = max(1, ceil(totalBits / pktBitsPerPacket));
-if nPackets > 65535
-    error("分包数量过大(%d)，超出uint16可表示范围。", nPackets);
-end
-
-fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
-packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...
-    && isfield(p.chaosEncrypt, "enable") && p.chaosEncrypt.enable;
-txPackets = repmat(struct(), nPackets, 1);
-txBurstParts = cell(nPackets, 1);
-modInfoRef = struct();
-headerLenBits = 0;
-
-for pktIdx = 1:nPackets
-    startBit = (pktIdx - 1) * pktBitsPerPacket + 1;
-    endBit = min(pktIdx * pktBitsPerPacket, totalBits);
-    payloadPktPlain = payloadBits(startBit:endBit);
-    payloadPkt = payloadPktPlain;
-    chaosEncInfoPkt = struct('enabled', false, 'mode', "none");
-    if packetChaosEnable
-        chaosPktCfg = derive_packet_chaos_cfg(p.chaosEncrypt, pktIdx);
-        [payloadPkt, chaosEncInfoPkt] = chaos_encrypt_bits(payloadPktPlain, chaosPktCfg);
-    end
-    payloadPktBytes = ceil(numel(payloadPkt) / 8);
-    if payloadPktBytes > 65535
-        error("单包payload过大(%d bytes)，超出uint16可表示范围。", payloadPktBytes);
-    end
-
-    metaPkt = meta;
-    metaPkt.totalPayloadBytes = uint32(meta.payloadBytes);
-    metaPkt.packetIndex = uint16(pktIdx);
-    metaPkt.totalPackets = uint16(nPackets);
-    metaPkt.packetPayloadBytes = uint16(payloadPktBytes);
-    metaPkt.packetCrc16 = crc16_ccitt_bits(payloadPkt);
-    [headerBits, ~] = build_header_bits(metaPkt, p.frame.magic16);
-    headerLenBits = numel(headerBits);
-
-    dataBitsTx = [headerBits; payloadPkt];
-    dataBitsTxScr = scramble_bits(dataBitsTx, p.scramble);
-    codedBits = fec_encode(dataBitsTxScr, p.fec);
-    [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
-    [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);
-    modInfoRef = modInfo;
-
-    if fhEnabled
-        [dataSymHop, hopInfo] = fh_modulate(dataSymTx, p.fh);
-    else
-        dataSymHop = dataSymTx;
-        hopInfo = struct('enable', false);
-    end
-
-    txSymForChannel = [preambleSym; dataSymHop];
-
-    txPackets(pktIdx).startBit = startBit;
-    txPackets(pktIdx).endBit = endBit;
-    txPackets(pktIdx).payloadBitsPlain = payloadPktPlain;
-    txPackets(pktIdx).payloadBits = payloadPkt;
-    txPackets(pktIdx).payloadBytes = payloadPktBytes;
-    txPackets(pktIdx).chaosEncInfo = chaosEncInfoPkt;
-    txPackets(pktIdx).dataSymTx = dataSymTx;
-    txPackets(pktIdx).hopInfo = hopInfo;
-    txPackets(pktIdx).intState = intState;
-    txPackets(pktIdx).txSymForChannel = txSymForChannel;
-    txBurstParts{pktIdx} = txSymForChannel;
-end
-
-plan = struct();
-plan.packetEnable = packetEnable;
-plan.nPackets = nPackets;
-plan.headerLenBits = headerLenBits;
-plan.fhEnabled = fhEnabled;
-plan.packetChaosEnable = packetChaosEnable;
-plan.modInfo = modInfoRef;
-plan.txBurstForEval = vertcat(txBurstParts{:});
-end
-
-function ok = packet_header_valid(metaRx, packetIndex, totalPackets, packetPayloadBytes, totalPayloadBytes)
-% 校验分包头关键信息是否与当前上下文一致。
-ok = true;
-needFields = ["packetIndex", "totalPackets", "packetPayloadBytes", "totalPayloadBytes"];
-for k = 1:numel(needFields)
-    if ~isfield(metaRx, needFields(k))
-        ok = false;
-        return;
-    end
-end
-
-if double(metaRx.packetIndex) ~= double(packetIndex)
-    ok = false;
-    return;
-end
-if double(metaRx.totalPackets) ~= double(totalPackets)
-    ok = false;
-    return;
-end
-if double(metaRx.packetPayloadBytes) ~= double(packetPayloadBytes)
-    ok = false;
-    return;
-end
-if double(metaRx.totalPayloadBytes) ~= double(totalPayloadBytes)
-    ok = false;
-    return;
-end
-end
-
-function ok = packet_crc_valid(payloadBitsRx, metaRx)
-% 校验分包CRC16。
-if ~isfield(metaRx, "packetCrc16") || ~isfield(metaRx, "packetPayloadBytes")
-    ok = true; % 兼容旧头
-    return;
-end
-needBits = double(metaRx.packetPayloadBytes) * 8;
-if numel(payloadBitsRx) < needBits
-    ok = false;
-    return;
-end
-payloadUse = payloadBitsRx(1:needBits);
-crcNow = crc16_ccitt_bits(payloadUse);
-ok = uint16(metaRx.packetCrc16) == uint16(crcNow);
-end
-
-function bitsOut = fit_bits_length(bitsIn, targetLen)
-bitsIn = uint8(bitsIn(:) ~= 0);
-targetLen = max(0, round(double(targetLen)));
-if numel(bitsIn) >= targetLen
-    bitsOut = bitsIn(1:targetLen);
-else
-    bitsOut = [bitsIn; zeros(targetLen - numel(bitsIn), 1, "uint8")];
-end
-end
-
-function encPkt = derive_packet_chaos_cfg(encBase, pktIdx)
-% 从主混沌密钥派生每包独立参数，避免包间复用同一初值。
-encPkt = encBase;
-if ~isfield(encPkt, "enable")
-    encPkt.enable = true;
-end
-if ~isfield(encPkt, "chaosMethod") || strlength(string(encPkt.chaosMethod)) == 0
-    encPkt.chaosMethod = "logistic";
-end
-if ~isfield(encPkt, "chaosParams") || ~isstruct(encPkt.chaosParams)
-    encPkt.chaosParams = struct();
-end
-
-delta = 1e-10 * (double(pktIdx) + 1);
-if ~isfield(encPkt.chaosParams, "x0") || isempty(encPkt.chaosParams.x0)
-    encPkt.chaosParams.x0 = 0.1234567890123456;
-end
-encPkt.chaosParams.x0 = wrap_unit_interval(double(encPkt.chaosParams.x0) + delta);
-if isfield(encPkt.chaosParams, "y0") && ~isempty(encPkt.chaosParams.y0)
-    encPkt.chaosParams.y0 = wrap_unit_interval(double(encPkt.chaosParams.y0) + 2 * delta);
-end
-end
-
-function payloadBitsOut = decrypt_payload_packets(payloadBitsIn, packetOk, txPackets, assumption)
-% 逐包独立解密，避免密文扩散跨包影响。
-payloadBitsOut = uint8(payloadBitsIn(:) ~= 0);
-nPacketsLocal = numel(txPackets);
-ok = normalize_packet_ok(packetOk, nPacketsLocal);
-assumption = lower(string(assumption));
-
-for pktIdx = 1:nPacketsLocal
-    if ~ok(pktIdx)
-        continue;
-    end
-    pkt = txPackets(pktIdx);
-    if ~isfield(pkt, "chaosEncInfo") || ~isfield(pkt.chaosEncInfo, "enabled") || ~pkt.chaosEncInfo.enabled
-        continue;
-    end
-    if assumption == "none"
-        continue;
-    end
-
-    infoUse = pkt.chaosEncInfo;
-    if assumption == "wrong_key"
-        infoUse = perturb_chaos_enc_info(infoUse, pktIdx);
-    elseif assumption ~= "known"
-        error("Unknown chaos assumption: %s", assumption);
-    end
-
-    seg = payloadBitsOut(pkt.startBit:pkt.endBit);
-    segDec = chaos_decrypt_bits(seg, infoUse);
-    payloadBitsOut(pkt.startBit:pkt.endBit) = fit_bits_length(segDec, numel(seg));
-end
-end
-
-function infoOut = perturb_chaos_enc_info(infoIn, pktIdx)
-% Eve错钥场景：对每包混沌初值施加轻微扰动。
-infoOut = infoIn;
-if ~isfield(infoOut, "chaosParams") || ~isstruct(infoOut.chaosParams)
-    infoOut.chaosParams = struct();
-end
-delta = 7e-10 * (double(pktIdx) + 1);
-if isfield(infoOut.chaosParams, "x0") && ~isempty(infoOut.chaosParams.x0)
-    infoOut.chaosParams.x0 = wrap_unit_interval(double(infoOut.chaosParams.x0) + delta);
-end
-if isfield(infoOut.chaosParams, "y0") && ~isempty(infoOut.chaosParams.y0)
-    infoOut.chaosParams.y0 = wrap_unit_interval(double(infoOut.chaosParams.y0) + 2 * delta);
-end
-end
-
-function imgOut = conceal_image_from_packets(imgIn, packetOk, txPackets, meta, payload, mode)
-% 在图像域/块域做丢包补偿，避免直接在密文比特流上估计。
-img = uint8(imgIn);
-mode = lower(string(mode));
-
-nPacketsLocal = numel(txPackets);
-ok = normalize_packet_ok(packetOk, nPacketsLocal);
-if nPacketsLocal <= 1 || all(ok)
-    imgOut = img;
-    return;
-end
-
-codec = get_payload_codec(payload);
-if codec == "dct"
-    mask = build_dct_pixel_mask_from_packets(ok, txPackets, meta, payload);
-else
-    mask = build_raw_pixel_mask_from_packets(ok, txPackets, meta);
-end
-
-imgOut = inpaint_image_by_mask(img, mask, mode);
-end
-
-function ok = normalize_packet_ok(packetOk, nPacketsLocal)
-ok = logical(packetOk(:).');
-if numel(ok) < nPacketsLocal
-    ok = [ok, false(1, nPacketsLocal - numel(ok))];
-elseif numel(ok) > nPacketsLocal
-    ok = ok(1:nPacketsLocal);
-end
-end
-
-function mask = build_raw_pixel_mask_from_packets(packetOk, txPackets, meta)
-rows = double(meta.rows);
-cols = double(meta.cols);
-ch = double(meta.channels);
-nElems = rows * cols * ch;
-
-maskLinear = false(nElems, 1);
-for pktIdx = 1:numel(txPackets)
-    if packetOk(pktIdx)
-        continue;
-    end
-    startByte = floor((double(txPackets(pktIdx).startBit) - 1) / 8) + 1;
-    endByte = ceil(double(txPackets(pktIdx).endBit) / 8);
-    startByte = max(1, min(nElems, startByte));
-    endByte = max(1, min(nElems, endByte));
-    if endByte >= startByte
-        maskLinear(startByte:endByte) = true;
-    end
-end
-
-if ch == 1
-    mask = reshape(maskLinear, rows, cols);
-else
-    mask = reshape(maskLinear, rows, cols, ch);
-end
-end
-
-function mask = build_dct_pixel_mask_from_packets(packetOk, txPackets, meta, payload)
-rows = double(meta.rows);
-cols = double(meta.cols);
-ch = double(meta.channels);
-
-dctCfg = struct();
-if isfield(payload, "dct") && isstruct(payload.dct)
-    dctCfg = payload.dct;
-end
-if ~isfield(dctCfg, "blockSize"); dctCfg.blockSize = 8; end
-if ~isfield(dctCfg, "keepRows"); dctCfg.keepRows = 4; end
-if ~isfield(dctCfg, "keepCols"); dctCfg.keepCols = 4; end
-dctCfg.blockSize = max(2, round(double(dctCfg.blockSize)));
-dctCfg.keepRows = max(1, round(double(dctCfg.keepRows)));
-dctCfg.keepCols = max(1, round(double(dctCfg.keepCols)));
-dctCfg.keepRows = min(dctCfg.keepRows, dctCfg.blockSize);
-dctCfg.keepCols = min(dctCfg.keepCols, dctCfg.blockSize);
-
-B = dctCfg.blockSize;
-nBr = ceil(rows / B);
-nBc = ceil(cols / B);
-nBlocksPerCh = nBr * nBc;
-totalBlocks = nBlocksPerCh * ch;
-bytesPerBlock = dctCfg.keepRows * dctCfg.keepCols * 2;
-
-maskBlocks = false(nBr, nBc, ch);
-for pktIdx = 1:numel(txPackets)
-    if packetOk(pktIdx)
-        continue;
-    end
-    startByte = floor((double(txPackets(pktIdx).startBit) - 1) / 8) + 1;
-    endByte = ceil(double(txPackets(pktIdx).endBit) / 8);
-    startBlk = floor((startByte - 1) / bytesPerBlock) + 1;
-    endBlk = floor((endByte - 1) / bytesPerBlock) + 1;
-    startBlk = max(1, min(totalBlocks, startBlk));
-    endBlk = max(1, min(totalBlocks, endBlk));
-
-    for blk = startBlk:endBlk
-        cc = floor((blk - 1) / nBlocksPerCh) + 1;
-        local = mod(blk - 1, nBlocksPerCh) + 1;
-        br = floor((local - 1) / nBc) + 1;
-        bc = mod(local - 1, nBc) + 1;
-        maskBlocks(br, bc, cc) = true;
-    end
-end
-
-if ch == 1
-    mask = false(rows, cols);
-else
-    mask = false(rows, cols, ch);
-end
-
-for cc = 1:ch
-    for br = 1:nBr
-        rIdx = (br-1)*B + (1:B);
-        rIdx = rIdx(rIdx <= rows);
-        for bc = 1:nBc
-            if ~maskBlocks(br, bc, cc)
-                continue;
-            end
-            cIdx = (bc-1)*B + (1:B);
-            cIdx = cIdx(cIdx <= cols);
-            if ch == 1
-                mask(rIdx, cIdx) = true;
-            else
-                mask(rIdx, cIdx, cc) = true;
-            end
-        end
-    end
-end
-end
-
-function imgOut = inpaint_image_by_mask(imgIn, mask, mode)
-img = double(imgIn);
-if ndims(img) == 2
-    img = reshape(img, size(img, 1), size(img, 2), 1);
-end
-if ndims(mask) == 2
-    mask = reshape(mask, size(mask, 1), size(mask, 2), 1);
-end
-
-ch = size(img, 3);
-for cc = 1:ch
-    img(:, :, cc) = inpaint_plane(img(:, :, cc), logical(mask(:, :, min(cc, size(mask, 3)))), mode);
-end
-
-img = uint8(min(max(round(img), 0), 255));
-if size(imgIn, 3) == 1
-    imgOut = img(:, :, 1);
-else
-    imgOut = img;
-end
-end
-
-function planeOut = inpaint_plane(planeIn, missingMask, mode)
-known = ~missingMask;
-plane = double(planeIn);
-if all(known(:))
-    planeOut = plane;
-    return;
-end
-if ~any(known(:))
-    planeOut = plane;
-    return;
-end
-
-mode = lower(string(mode));
-maxIter = size(plane, 1) + size(plane, 2);
-
-for it = 1:maxIter
-    missing = ~known;
-    if ~any(missing(:))
-        break;
-    end
-
-    leftKnown = [known(:, 1), known(:, 1:end-1)];
-    rightKnown = [known(:, 2:end), known(:, end)];
-    upKnown = [known(1, :); known(1:end-1, :)];
-    downKnown = [known(2:end, :); known(end, :)];
-
-    leftVal = [plane(:, 1), plane(:, 1:end-1)];
-    rightVal = [plane(:, 2:end), plane(:, end)];
-    upVal = [plane(1, :); plane(1:end-1, :)];
-    downVal = [plane(2:end, :); plane(end, :)];
-
-    neighCount = double(leftKnown) + double(rightKnown) + double(upKnown) + double(downKnown);
-    canFill = missing & (neighCount > 0);
-    if ~any(canFill(:))
-        break;
-    end
-
-    fillVals = zeros(size(plane));
-    switch mode
-        case "nearest"
-            assigned = false(size(plane));
-            cand = canFill & leftKnown;
-            fillVals(cand) = leftVal(cand);
-            assigned = assigned | cand;
-
-            cand = canFill & ~assigned & rightKnown;
-            fillVals(cand) = rightVal(cand);
-            assigned = assigned | cand;
-
-            cand = canFill & ~assigned & upKnown;
-            fillVals(cand) = upVal(cand);
-            assigned = assigned | cand;
-
-            cand = canFill & ~assigned & downKnown;
-            fillVals(cand) = downVal(cand);
-            assigned = assigned | cand;
-
-            rem = canFill & ~assigned;
-            if any(rem(:))
-                sumVals = double(leftKnown) .* leftVal + double(rightKnown) .* rightVal + ...
-                    double(upKnown) .* upVal + double(downKnown) .* downVal;
-                fillVals(rem) = sumVals(rem) ./ max(neighCount(rem), 1);
-            end
-
-        otherwise % "blend"
-            sumVals = double(leftKnown) .* leftVal + double(rightKnown) .* rightVal + ...
-                double(upKnown) .* upVal + double(downKnown) .* downVal;
-            fillVals(canFill) = sumVals(canFill) ./ max(neighCount(canFill), 1);
-    end
-
-    plane(canFill) = fillVals(canFill);
-    known(canFill) = true;
-end
-
-if any(~known(:))
-    fillVal = mean(plane(known));
-    plane(~known) = fillVal;
-end
-
-planeOut = plane;
-end
-
-function fhOut = make_partial_fh_config(fhIn)
-% 构造Eve“部分已知”场景：扰动序列种子/频点映射。
-fhOut = fhIn;
-seqType = "pn";
-if isfield(fhOut, "sequenceType")
-    seqType = lower(string(fhOut.sequenceType));
-end
-switch seqType
-    case "pn"
-        if isfield(fhOut, "pnInit") && ~isempty(fhOut.pnInit)
-            fhOut.pnInit = circshift(fhOut.pnInit, 2);
-            if all(fhOut.pnInit == 0)
-                fhOut.pnInit(1) = 1;
-            end
-        end
-    case {"chaos", "chaotic"}
-        if ~isfield(fhOut, "chaosMethod") || strlength(string(fhOut.chaosMethod)) == 0
-            fhOut.chaosMethod = "logistic";
-        end
-        if ~isfield(fhOut, "chaosParams") || ~isstruct(fhOut.chaosParams)
-            fhOut.chaosParams = struct();
-        end
-        chaosMethod = lower(string(fhOut.chaosMethod));
-        switch chaosMethod
-            case {"logistic", "tent"}
-                if ~isfield(fhOut.chaosParams, "x0") || isempty(fhOut.chaosParams.x0)
-                    fhOut.chaosParams.x0 = 0.1234567890123456;
-                end
-                fhOut.chaosParams.x0 = wrap_unit_interval(double(fhOut.chaosParams.x0) + 1e-10);
-            case "henon"
-                if ~isfield(fhOut.chaosParams, "x0") || isempty(fhOut.chaosParams.x0)
-                    fhOut.chaosParams.x0 = 0.1;
-                end
-                if ~isfield(fhOut.chaosParams, "y0") || isempty(fhOut.chaosParams.y0)
-                    fhOut.chaosParams.y0 = 0.1;
-                end
-                fhOut.chaosParams.x0 = wrap_unit_interval(double(fhOut.chaosParams.x0) + 1e-10);
-                fhOut.chaosParams.y0 = wrap_unit_interval(double(fhOut.chaosParams.y0) + 2e-10);
-            otherwise
-                if isfield(fhOut.chaosParams, "x0") && ~isempty(fhOut.chaosParams.x0)
-                    fhOut.chaosParams.x0 = wrap_unit_interval(double(fhOut.chaosParams.x0) + 1e-10);
-                end
-        end
-    otherwise
-        if isfield(fhOut, "freqSet") && numel(fhOut.freqSet) > 1
-            fhOut.freqSet = circshift(fhOut.freqSet, 1);
-        end
-end
-end
-
-function x = wrap_unit_interval(x)
-x = mod(double(x), 1.0);
-if x <= 0
-    x = x + eps;
-elseif x >= 1
-    x = 1 - eps;
-end
-end
-
-function [klSN, klNS, klSymVal] = signal_noise_kl(sig, N0, nBins)
-% 比较跳频信号幅度分布与背景噪声幅度（Rayleigh）分布。
-sig = sig(:);
-if isempty(sig) || ~isfinite(N0) || N0 <= 0
-    klSN = NaN;
-    klNS = NaN;
-    klSymVal = NaN;
-    return;
-end
-
-magSig = abs(double(sig));
-if all(~isfinite(magSig))
-    klSN = NaN;
-    klNS = NaN;
-    klSymVal = NaN;
-    return;
-end
-magSig = magSig(isfinite(magSig));
-if isempty(magSig)
-    klSN = NaN;
-    klNS = NaN;
-    klSymVal = NaN;
-    return;
-end
-
-sigma = sqrt(max(double(N0), eps) / 2);
-rMax = max(max(magSig) * 1.05, 6 * sigma);
-if ~isfinite(rMax) || rMax <= 0
-    klSN = NaN;
-    klNS = NaN;
-    klSymVal = NaN;
-    return;
-end
-
-nBins = max(16, round(double(nBins)));
-edges = linspace(0, rMax, nBins + 1);
-pSig = histcounts(magSig, edges, "Normalization", "probability");
-
-centers = 0.5 * (edges(1:end-1) + edges(2:end));
-binWidth = diff(edges);
-pNoisePdf = (centers ./ (sigma.^2)) .* exp(-(centers.^2) ./ (2 * sigma.^2));
-pNoise = pNoisePdf .* binWidth;
-
-epsProb = 1e-12;
-pSig = pSig + epsProb;
-pNoise = pNoise + epsProb;
-pSig = pSig / sum(pSig);
-pNoise = pNoise / sum(pNoise);
-
-klSN = sum(pSig .* log(pSig ./ pNoise));
-klNS = sum(pNoise .* log(pNoise ./ pSig));
-klSymVal = 0.5 * (klSN + klNS);
-end

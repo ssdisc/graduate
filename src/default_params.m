@@ -99,6 +99,14 @@ p.fh.chaosParams.y0 = 0.123456789;           % henon初值y0
 % 例如：8个频点均匀分布在 [-0.35, 0.35]
 p.fh.freqSet = linspace(-0.35, 0.35, p.fh.nFreqs);
 
+% 9.5) 波形成型与过采样（复基带）
+p.waveform = struct();
+p.waveform.enable = true;        % 启用Tx/Rx根升余弦成型与匹配滤波
+p.waveform.sps = 4;              % 每符号采样数
+p.waveform.rolloff = 0.25;       % RRC滚降系数
+p.waveform.spanSymbols = 10;     % RRC滤波器长度（单位：符号）
+p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
+
 %% 信道
 % AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/衰落）
 p.channel = struct();
@@ -227,23 +235,4 @@ p.covert.warden.pfaTarget = 0.01;
 p.covert.warden.nObs = 4096;   % 观测窗口（符号数）
 p.covert.warden.nTrials = 200; % 蒙特卡洛试验次数用于估计Pd/Pfa
 
-end
-
-function model = load_pretrained_model(modelPath, defaultFactory)
-if ~exist(modelPath, 'file')
-    [modelDir, baseName, ~] = fileparts(modelPath);
-    candidates = dir(fullfile(modelDir, strcat(baseName, "_*.mat")));
-    if ~isempty(candidates)
-        [~, idx] = max([candidates.datenum]);
-        modelPath = fullfile(modelDir, candidates(idx).name);
-    end
-end
-if exist(modelPath, 'file')
-    s = load(modelPath, 'model');
-    if isfield(s, 'model') && ~isempty(s.model)
-        model = s.model;
-        return;
-    end
-end
-model = defaultFactory();
 end
