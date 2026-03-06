@@ -14,7 +14,7 @@ model.type = "gru_dl";
 model.trained = false;
 
 % 网络参数
-model.inputChannels = 4;  % [幅度, 归一化幅度, 幅度差分, 相位]
+model.inputChannels = 4;  % [实部, 虚部, 幅度, 幅度差分]
 model.hiddenSize = 32;    % GRU隐藏状态大小
 model.outputSize = 4;     % [p_impulse, reliability, clean_real, clean_imag]
 
@@ -22,8 +22,8 @@ model.outputSize = 4;     % [p_impulse, reliability, clean_real, clean_imag]
 layers = [
     sequenceInputLayer(model.inputChannels, 'Name', 'input', 'Normalization', 'none')
 
-    % 双向GRU层 - 可以同时利用过去和未来的上下文
-    bilstmLayer(model.hiddenSize, 'OutputMode', 'sequence', 'Name', 'bigru')
+    % GRU层
+    gruLayer(model.hiddenSize, 'OutputMode', 'sequence', 'Name', 'gru')
 
     % 全连接输出层
     fullyConnectedLayer(model.outputSize, 'Name', 'fc_out')

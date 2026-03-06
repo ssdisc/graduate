@@ -13,6 +13,7 @@ function [y, impMask, chState] = channel_bg_impulsive(x, N0, ch)
 %        .pathLoss.enable/.model（可选）
 %        .singleTone.enable/.toBgRatio/.normFreq（可选）
 %        .narrowband.enable/.toBgRatio/.centerFreq/.bandwidth（可选）
+%        .sweep.enable/.toBgRatio/.startFreq/.stopFreq/.periodSamples（可选）
 %        .syncImpairment.enable/.timingOffset/.cfoNorm/.phaseOffsetRad（可选）
 %
 % 输出:
@@ -219,6 +220,49 @@ if isfield(ch, "narrowband") && isfield(ch.narrowband, "enable") && ch.narrowban
     jammer = jammer + nb;
 end
 
+% 可选扫频干扰（线性chirp，可重复）
+sweepEnable = false;
+if isfield(ch, "sweep") && isfield(ch.sweep, "enable") && ch.sweep.enable
+    sweepEnable = true;
+    swRatio = 8;
+    swF0 = -0.2;
+    swF1 = 0.2;
+    swPeriod = numel(x);
+    swRandomPhase = true;
+
+    if isfield(ch.sweep, "toBgRatio"); swRatio = ch.sweep.toBgRatio; end
+    if isfield(ch.sweep, "startFreq"); swF0 = ch.sweep.startFreq; end
+    if isfield(ch.sweep, "stopFreq"); swF1 = ch.sweep.stopFreq; end
+    if isfield(ch.sweep, "periodSymbols"); swPeriod = ch.sweep.periodSymbols; end
+    if isfield(ch.sweep, "periodSamples"); swPeriod = ch.sweep.periodSamples; end
+    if isfield(ch.sweep, "randomPhase"); swRandomPhase = logical(ch.sweep.randomPhase); end
+
+    swF0 = double(swF0);
+    swF1 = double(swF1);
+    swPeriod = max(2, round(double(swPeriod)));
+    if abs(swF0) >= 0.5 || abs(swF1) >= 0.5
+        error("sweep.startFreq和sweep.stopFreq必须在(-0.5, 0.5)范围。");
+    end
+
+    phi0 = 0;
+    if swRandomPhase
+        phi0 = 2*pi*rand();
+    end
+
+    k = mod(n, swPeriod);
+    frac = k / max(swPeriod - 1, 1);
+    instFreq = swF0 + (swF1 - swF0) .* frac;
+    sweepPhase = phi0 + 2*pi*cumsum(instFreq);
+    sweepJam = exp(1j * sweepPhase);
+
+    targetPow = max(swRatio, 0) * N0;
+    nowPow = mean(abs(sweepJam).^2);
+    if nowPow > 0
+        sweepJam = sweepJam * sqrt(targetPow / nowPow);
+    end
+    jammer = jammer + sweepJam;
+end
+
 y = xCh + nBg + impMask .* nImp + jammer;
 
 if nargout >= 3
@@ -227,6 +271,7 @@ if nargout >= 3
     chState.fadingType = char(fadingType);
     chState.singleToneEnable = singleToneEnable;
     chState.narrowbandEnable = narrowbandEnable;
+    chState.sweepEnable = sweepEnable;
     chState.multipathEnable = mpEnable;
     chState.multipathTaps = mpTaps;
     chState.dopplerEnable = dopplerEnable;

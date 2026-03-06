@@ -8,6 +8,8 @@ function [rOut, reliability] = mitigate_impulses(rIn, method, mit)
 %            .thresholdStrategy - 'median' 或 'fixed'
 %            .thresholdAlpha    - 中值阈值系数（median策略）
 %            .thresholdFixed    - 固定阈值（fixed策略）
+%            .fftNotch          - FFT变换域陷波参数（可选）
+%            .adaptiveNotch     - 自适应陷波参数（可选）
 %            .ml, .mlCnn, .mlGru- 对应ML模型（可选）
 %
 % 输出:
@@ -33,6 +35,20 @@ end
 switch lower(string(method))
     case "none"
         rOut = r;
+
+    case "fft_notch"
+        cfg = struct();
+        if isfield(mit, "fftNotch") && isstruct(mit.fftNotch)
+            cfg = mit.fftNotch;
+        end
+        [rOut, ~] = fft_domain_notch_filter(r, cfg);
+
+    case "adaptive_notch"
+        cfg = struct();
+        if isfield(mit, "adaptiveNotch") && isstruct(mit.adaptiveNotch)
+            cfg = mit.adaptiveNotch;
+        end
+        [rOut, ~] = adaptive_notch_filter(r, cfg);
 
     case "blanking"
         rOut = r;

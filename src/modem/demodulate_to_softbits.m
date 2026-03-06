@@ -4,7 +4,7 @@ function soft = demodulate_to_softbits(r, mod, fec, softCfg, reliability)
 % 输入:
 %   r          - 接收符号（复数或实数）
 %   mod        - 调制参数结构体
-%                .type - 调制类型（支持"BPSK"/"QPSK"）
+%                .type - 调制类型（支持"BPSK"/"QPSK"/"MSK"）
 %   fec        - FEC参数结构体
 %                .decisionType - 'hard' 或 'soft'
 %                .softBits     - 软判决量化位数（soft模式）
@@ -27,6 +27,19 @@ switch upper(string(mod.type))
         metricQ = imag(r) * sqrt(2);
         metric = reshape([metricI.'; metricQ.'], [], 1); %按列展开，交错I/Q分量以匹配软比特顺序（I1,Q1,I2,Q2,...）
         bitsPerSym = 2;
+    case "MSK"
+        r = r(:);
+        nSym = numel(r);
+        if nSym >= 2
+            d = r(2:end) .* conj(r(1:end-1));
+            dMag = max(abs(d), 1e-8);
+            metricDiff = imag(d) ./ dMag;
+            % 首符号复用首个差分度量，避免固定擦除位。
+            metric = [metricDiff(1); metricDiff];
+        else
+            metric = zeros(nSym, 1);
+        end
+        bitsPerSym = 1;
     otherwise
         error("不支持的调制方式: %s", mod.type);
 end

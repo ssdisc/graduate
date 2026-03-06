@@ -4,7 +4,7 @@ function [sym, info] = modulate_bits(bits, mod)
 % 输入:
 %   bits - 输入比特流
 %   mod  - 调制参数结构体
-%          .type - 调制类型（目前支持"BPSK"/"QPSK"）
+%          .type - 调制类型（支持"BPSK"/"QPSK"/"MSK"）
 %
 % 输出:
 %   sym  - 调制后的符号序列
@@ -25,6 +25,13 @@ switch upper(string(mod.type))
         bQ = double(bits2(2, :)).';
         sym = ((1 - 2*bI) + 1j*(1 - 2*bQ)) / sqrt(2);% 0->+1, 1->-1，归一化功率
         info.bitsPerSymbol = 2;
+    case "MSK"
+        % 最小频移键控（h=0.5）的离散相位实现：
+        % 每比特引入±pi/2相位增量，得到常包络连续相位序列。
+        dPhi = (1 - 2*double(bits)) * (pi/2); % bit0:+pi/2, bit1:-pi/2
+        phase = cumsum(dPhi);
+        sym = exp(1j * phase);
+        info.bitsPerSymbol = 1;
     otherwise
         error("不支持的调制方式: %s", mod.type);
 end

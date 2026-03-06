@@ -64,7 +64,7 @@ if chaosEnabled && usePayloadBitChaos
     end
 end
 
-[~, preambleSym] = make_preamble(p.frame.preambleLength);%生成PN前导
+[~, preambleSym] = make_preamble(p.frame.preambleLength, p.frame);%生成前导
 
 % 发送端按包构建（最小分包：pktIdx/totalPkts/payloadLen/CRC16）
 [txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos, waveform);
@@ -240,8 +240,10 @@ fprintf('[SIM] 链路仿真开始\n');
 fprintf('[SIM] Eb/N0点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
     totalEbN0Points, p.sim.nFramesPerPoint, totalFrames);
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
+dllEnabled = isfield(p.rxSync, "timingDll") && isfield(p.rxSync.timingDll, "enable") ...
+    && p.rxSync.timingDll.enable;
 syncEnabled = p.rxSync.compensateCarrier || p.rxSync.fineSearchRadius > 0 || ...
-    p.rxSync.enableFractionalTiming || p.rxSync.carrierPll.enable;
+    p.rxSync.enableFractionalTiming || p.rxSync.carrierPll.enable || dllEnabled;
 mpEnabled = isfield(p.channel, "multipath") && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable;
 dopplerEnabled = isfield(p.channel, "doppler") && isfield(p.channel.doppler, "enable") && p.channel.doppler.enable;
 pathLossEnabled = isfield(p.channel, "pathLoss") && isfield(p.channel.pathLoss, "enable") && p.channel.pathLoss.enable;
@@ -375,7 +377,7 @@ for ie = 1:numel(EbN0dBList)
                 rData = complex(zeros(numel(pkt.dataSymTx), 1));
             else
                 dataStart = startIdx + numel(preambleSym);
-                [rData, bobOk] = extract_fractional_block(rxBobSync, dataStart, numel(pkt.dataSymTx));
+                [rData, bobOk] = extract_fractional_block(rxBobSync, dataStart, numel(pkt.dataSymTx), syncCfgUse, p.mod);
             end
             if bobOk
                 if fhEnabled
@@ -396,7 +398,7 @@ for ie = 1:numel(EbN0dBList)
                     rDataEve = complex(zeros(numel(pkt.dataSymTx), 1));
                 else
                     dataStartEve = startIdxEve + numel(preambleSym);
-                    [rDataEve, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, numel(pkt.dataSymTx));
+                    [rDataEve, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, numel(pkt.dataSymTx), syncCfgUse, p.mod);
                 end
                 if eveOk
                     if fhEnabled

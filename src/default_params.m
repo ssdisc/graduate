@@ -53,7 +53,10 @@ p.packet.concealMode = "blend";      % "nearest" | "blend"
 
 % 4) 前导/帧
 p.frame = struct();
-p.frame.preambleLength = 127; % 比特（BPSK），PN序列
+p.frame.preambleLength = 127; % 比特（BPSK）
+p.frame.preambleType = "chaos"; % "pn" | "chaos"
+p.frame.preambleChaosMethod = "logistic";
+p.frame.preambleChaosParams = struct("mu", 3.9999, "x0", 0.2718281828459045);
 p.frame.magic16 = hex2dec('A55A');
 
 % 5) 扰码（用作白化/轻量加密）
@@ -77,7 +80,7 @@ p.interleaver.nRows = 64;
 
 % 8) 调制
 p.mod = struct();
-p.mod.type = 'BPSK'; % 'BPSK' | 'QPSK'（默认BPSK）
+p.mod.type = 'BPSK'; % 'BPSK' | 'QPSK' | 'MSK'（默认BPSK）
 
 % 9) 跳频（Frequency Hopping）
 p.fh = struct();
@@ -129,6 +132,14 @@ p.channel.narrowband.enable = false;
 p.channel.narrowband.toBgRatio = 8;     % 干扰功率与背景噪声功率比
 p.channel.narrowband.centerFreq = 0.12; % 归一化中心频率（cycles/sample）
 p.channel.narrowband.bandwidth = 0.08;  % 归一化双边带宽（0,1]
+% 可选：扫频干扰（线性chirp）
+p.channel.sweep = struct();
+p.channel.sweep.enable = false;
+p.channel.sweep.toBgRatio = 8;          % 扫频干扰功率与背景噪声功率比
+p.channel.sweep.startFreq = -0.20;      % 起始归一化频率（cycles/sample）
+p.channel.sweep.stopFreq = 0.20;        % 终止归一化频率（cycles/sample）
+p.channel.sweep.periodSymbols = 256;    % 单次扫频周期（符号数）
+p.channel.sweep.randomPhase = true;
 % 可选：同步失配（用于验证“完整同步链路”）
 p.channel.syncImpairment = struct();
 p.channel.syncImpairment.enable = false;
@@ -166,10 +177,20 @@ p.channel.pathLoss.fixedLossDb = 0.0;          % model='fixed_db'时使用
 %% 接收端（RX）
 % 10) 脉冲抑制
 p.mitigation = struct();
-p.mitigation.methods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru"]; % 运行并比较
+p.mitigation.methods = ["none" "fft_notch" "adaptive_notch" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru"]; % 运行并比较
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
 p.mitigation.thresholdAlpha = 4.0; % T = alpha * median(abs(r))
 p.mitigation.thresholdFixed = 3.0; % thresholdStrategy="fixed"时使用
+p.mitigation.fftNotch = struct();
+p.mitigation.fftNotch.peakRatio = 10.0;   % 峰值/噪声底比阈值
+p.mitigation.fftNotch.maxNotches = 2;     % 最大陷波个数
+p.mitigation.fftNotch.notchHalfWidth = 1; % 每个陷波半宽(bin)
+p.mitigation.fftNotch.minFreqAbs = 0.01;  % 忽略近DC分量
+p.mitigation.adaptiveNotch = struct();
+p.mitigation.adaptiveNotch.peakRatio = 8.0;
+p.mitigation.adaptiveNotch.radius = 0.97;     % 极点半径，越接近1越窄
+p.mitigation.adaptiveNotch.minFreqAbs = 0.01;
+p.mitigation.adaptiveNotch.stages = 1;
 
 modelDir = fullfile(pwd, "models");
 if ~exist(modelDir, 'dir')
@@ -203,6 +224,14 @@ p.rxSync.carrierPll.enable = true;
 p.rxSync.carrierPll.alpha = 0.02;   % 相位环比例增益
 p.rxSync.carrierPll.beta = 3e-4;    % 频率环积分增益
 p.rxSync.carrierPll.maxFreq = 0.1;  % 归一化角频率上限（rad/sample）
+% 早迟门DLL（用于维持符号定时对齐）
+p.rxSync.timingDll = struct();
+p.rxSync.timingDll.enable = true;
+p.rxSync.timingDll.earlyLateSpacing = 0.45;
+p.rxSync.timingDll.alpha = 0.03;
+p.rxSync.timingDll.beta = 5e-4;
+p.rxSync.timingDll.maxOffset = 0.75;
+p.rxSync.timingDll.decisionDirected = true;
 
 %% 截获/隐蔽分析
 % 窃听者/截获者（Eve）

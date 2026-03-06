@@ -42,6 +42,20 @@ if isfield(chOut, "narrowband") && isstruct(chOut.narrowband)
     end
 end
 
+if isfield(chOut, "sweep") && isstruct(chOut.sweep)
+    if isfield(chOut.sweep, "startFreq")
+        chOut.sweep.startFreq = double(chOut.sweep.startFreq) / sps;
+    end
+    if isfield(chOut.sweep, "stopFreq")
+        chOut.sweep.stopFreq = double(chOut.sweep.stopFreq) / sps;
+    end
+    if isfield(chOut.sweep, "periodSymbols")
+        chOut.sweep.periodSamples = max(2, round(double(chOut.sweep.periodSymbols) * sps));
+    elseif isfield(chOut.sweep, "periodSamples")
+        chOut.sweep.periodSamples = max(2, round(double(chOut.sweep.periodSamples)));
+    end
+end
+
 if isfield(chOut, "syncImpairment") && isstruct(chOut.syncImpairment) ...
         && isfield(chOut.syncImpairment, "cfoNorm")
     chOut.syncImpairment.cfoNorm = double(chOut.syncImpairment.cfoNorm) / sps;
