@@ -37,6 +37,8 @@ end
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
 packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...
     && isfield(p.chaosEncrypt, "enable") && p.chaosEncrypt.enable;
+scrambleCfgNext = p.scramble;
+fhCfgNext = p.fh;
 txPackets = repmat(struct(), nPackets, 1);
 txBurstChannelParts = cell(nPackets, 1);
 txBurstSpectrumParts = cell(nPackets, 1);
@@ -68,17 +70,37 @@ for pktIdx = 1:nPackets
     headerLenBits = numel(headerBits);
 
     dataBitsTx = [headerBits; payloadPkt];
-    dataBitsTxScr = scramble_bits(dataBitsTx, p.scramble);
+    scrambleCfgPkt = scrambleCfgNext;
+    dataBitsTxScr = scramble_bits(dataBitsTx, scrambleCfgPkt);
+    if isfield(scrambleCfgPkt, "enable") && scrambleCfgPkt.enable ...
+            && isfield(scrambleCfgPkt, "pnPolynomial") && isfield(scrambleCfgPkt, "pnInit")
+        scrambleCfgNext = scrambleCfgPkt;
+        scrambleCfgNext.pnInit = advance_pn_state( ...
+            scrambleCfgPkt.pnPolynomial, scrambleCfgPkt.pnInit, numel(dataBitsTx));
+    end
     codedBits = fec_encode(dataBitsTxScr, p.fec);
     [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
     [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);
     modInfoRef = modInfo;
 
     if fhEnabled
-        [dataSymHop, hopInfo] = fh_modulate(dataSymTx, p.fh);
+        fhCfgPkt = fhCfgNext;
+        [dataSymHop, hopInfo] = fh_modulate(dataSymTx, fhCfgPkt);
+        if isfield(fhCfgPkt, "sequenceType") && lower(string(fhCfgPkt.sequenceType)) == "pn"
+            fhCfgNext = fhCfgPkt;
+            if isfield(hopInfo, "pnState") && isstruct(hopInfo.pnState) ...
+                    && isfield(hopInfo.pnState, "currentState") && ~isempty(hopInfo.pnState.currentState)
+                fhCfgNext.pnInit = uint8(hopInfo.pnState.currentState(:)).';
+            else
+                bitsPerHop = ceil(log2(max(double(fhCfgPkt.nFreqs), 2)));
+                fhCfgNext.pnInit = advance_pn_state( ...
+                    fhCfgPkt.pnPolynomial, fhCfgPkt.pnInit, hopInfo.nHops * bitsPerHop);
+            end
+        end
     else
         dataSymHop = dataSymTx;
         hopInfo = struct('enable', false);
+        fhCfgPkt = struct('enable', false);
     end
 
     txSymPkt = [preambleSym; dataSymHop];
@@ -90,7 +112,9 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).payloadBits = payloadPkt;
     txPackets(pktIdx).payloadBytes = payloadPktBytes;
     txPackets(pktIdx).chaosEncInfo = chaosEncInfoPkt;
+    txPackets(pktIdx).scrambleCfg = scrambleCfgPkt;
     txPackets(pktIdx).dataSymTx = dataSymTx;
+    txPackets(pktIdx).fhCfg = fhCfgPkt;
     txPackets(pktIdx).hopInfo = hopInfo;
     txPackets(pktIdx).intState = intState;
     txPackets(pktIdx).txSymPkt = txSymPkt;

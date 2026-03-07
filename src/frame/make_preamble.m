@@ -12,11 +12,15 @@ end
 
 switch preambleType
     case "pn"
-        pn = comm.PNSequence( ...
-            "Polynomial", [1 0 0 1 1], ...
-            "InitialConditions", [0 0 0 1], ...
-            "SamplesPerFrame", L);
-        preambleBits = uint8(pn());
+        pnPolynomial = [1 0 0 0 1 0 0 1];
+        pnInit = [0 0 0 0 0 0 1];
+        if isfield(frameCfg, "preamblePnPolynomial") && ~isempty(frameCfg.preamblePnPolynomial)
+            pnPolynomial = frameCfg.preamblePnPolynomial;
+        end
+        if isfield(frameCfg, "preamblePnInit") && ~isempty(frameCfg.preamblePnInit)
+            pnInit = frameCfg.preamblePnInit;
+        end
+        [preambleBits, ~] = pn_generate_bits(pnPolynomial, pnInit, L);
     case {"chaos", "chaotic"}
         chaosMethod = "logistic";
         chaosParams = struct();

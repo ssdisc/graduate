@@ -42,7 +42,7 @@ end
 switch seqType
     case "pn"
         % 基于PN序列生成跳频序列
-        % 使用comm.PNSequence生成伪随机比特，然后映射到频率索引
+        % 使用LFSR生成伪随机比特，然后映射到频率索引
         poly = fh.pnPolynomial;
         initState = fh.pnInit;
 
@@ -50,17 +50,10 @@ switch seqType
         bitsPerHop = ceil(log2(nFreqs));
 
         % 生成PN序列
-        pn = comm.PNSequence( ...
-            "Polynomial", poly, ...
-            "InitialConditions", initState, ...
-            "SamplesPerFrame", nHops * bitsPerHop);
-        pnBits = uint8(pn());
+        [pnBits, nextState] = pn_generate_bits(poly, initState, nHops * bitsPerHop);
         state = struct();
         state.type = "pn";
-        state.currentState = [];
-        if isprop(pn, "CurrentState")
-            state.currentState = uint8(pn.CurrentState(:)).';
-        end
+        state.currentState = uint8(nextState(:)).';
 
         % 将比特转换为频率索引（模nFreqs）
         freqIdx = zeros(nHops, 1);

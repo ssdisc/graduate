@@ -128,18 +128,10 @@ if eveEnabled
     ssimEveVals = nan(numel(methods), numel(EbN0dBList));
     exampleEve = struct();
 
-    scrambleEve = p.scramble;
-    switch lower(string(p.eve.scrambleAssumption))
-        case "known"
-            % 最佳情况截获：Eve知道扰码密钥
-        case "none"
-            scrambleEve.enable = false;
-        case "wrong_key"
-            scrambleEve.enable = true;
-            scrambleEve.pnInit = circshift(scrambleEve.pnInit, 1);
-            if all(scrambleEve.pnInit == 0)
-                scrambleEve.pnInit(end) = 1;
-            end
+    scrambleAssumptionEve = lower(string(p.eve.scrambleAssumption));
+    switch scrambleAssumptionEve
+        case {"known", "none", "wrong_key"}
+            % 有效配置
         otherwise
             error("Unknown eve.scrambleAssumption: %s", string(p.eve.scrambleAssumption));
     end
@@ -219,8 +211,8 @@ if eveEnabled
                     hopInfoEveList{ip} = struct('enable', false);
                 end
             case "partial"
-                fhEve = make_partial_fh_config(p.fh);
                 for ip = 1:nPackets
+                    fhEve = make_partial_fh_config(txPackets(ip).fhCfg);
                     [~, hopInfoEveList{ip}] = fh_modulate(txPackets(ip).dataSymTx, fhEve);
                 end
             otherwise
@@ -355,6 +347,26 @@ for ie = 1:numel(EbN0dBList)
         % ============ 分包发收 ============
         for pktIdx = 1:nPackets
             pkt = txPackets(pktIdx);
+            scrambleCfgBob = pkt.scrambleCfg;
+            if eveEnabled
+                scrambleCfgEve = pkt.scrambleCfg;
+                switch scrambleAssumptionEve
+                    case "known"
+                        % Eve知道每包扰码状态
+                    case "none"
+                        scrambleCfgEve.enable = false;
+                    case "wrong_key"
+                        if isfield(scrambleCfgEve, "enable") && scrambleCfgEve.enable ...
+                                && isfield(scrambleCfgEve, "pnInit") && ~isempty(scrambleCfgEve.pnInit)
+                            scrambleCfgEve.pnInit = circshift(scrambleCfgEve.pnInit, 1);
+                            if all(scrambleCfgEve.pnInit == 0)
+                                scrambleCfgEve.pnInit(end) = 1;
+                            end
+                        else
+                            scrambleCfgEve.enable = false;
+                        end
+                end
+            end
 
             % 信道
             delaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
@@ -417,7 +429,7 @@ for ie = 1:numel(EbN0dBList)
                     demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
                     demodDeint = deinterleave_bits(demodSoft, pkt.intState, p.interleaver);
                     dataBitsRxScr = fec_decode(demodDeint, p.fec);
-                    dataBitsRx = descramble_bits(dataBitsRxScr, p.scramble);
+                    dataBitsRx = descramble_bits(dataBitsRxScr, scrambleCfgBob);
 
                     [payloadPktRx, metaRx, okHeader] = parse_frame_bits(dataBitsRx, p.frame.magic16);
                     okPacket = okHeader ...
@@ -449,7 +461,7 @@ for ie = 1:numel(EbN0dBList)
                         demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
                         demodDeintEve = deinterleave_bits(demodSoftEve, pkt.intState, p.interleaver);
                         dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
-                        dataBitsEve = descramble_bits(dataBitsEveScr, scrambleEve);
+                        dataBitsEve = descramble_bits(dataBitsEveScr, scrambleCfgEve);
 
                         [payloadPktEve, metaEve, okHeaderEve] = parse_frame_bits(dataBitsEve, p.frame.magic16);
                         okPacketEve = okHeaderEve ...

@@ -55,6 +55,8 @@ p.packet.concealMode = "blend";      % "nearest" | "blend"
 p.frame = struct();
 p.frame.preambleLength = 127; % 比特（BPSK）
 p.frame.preambleType = "pn"; % "pn" | "chaos"
+p.frame.preamblePnPolynomial = [1 0 0 0 1 0 0 1]; % x^7 + x^3 + 1（m序列，周期127）
+p.frame.preamblePnInit = [0 0 0 0 0 0 1];
 p.frame.preambleChaosMethod = "logistic";
 p.frame.preambleChaosParams = struct("mu", 3.9999, "x0", 0.2718281828459045);
 p.frame.magic16 = hex2dec('A55A');
@@ -62,8 +64,8 @@ p.frame.magic16 = hex2dec('A55A');
 % 5) 扰码（用作白化/轻量加密）
 p.scramble = struct();
 p.scramble.enable = true;
-p.scramble.pnPolynomial = [1 0 0 1 1]; % x^4 + x + 1
-p.scramble.pnInit = [0 0 0 1];         % 非零初始值
+p.scramble.pnPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1]; % x^11 + x^2 + 1
+p.scramble.pnInit = [0 0 0 0 0 0 0 0 0 0 1];         % 非零初始值
 
 % 6) 信道编码（卷积码，码率1/2）
 p.fec = struct();
@@ -87,9 +89,9 @@ p.fh = struct();
 p.fh.enable = true;              % 是否启用跳频
 p.fh.nFreqs = 8;                 % 跳频频点数量
 p.fh.symbolsPerHop = 64;         % 每跳的符号数（跳频速率 = 符号率/symbolsPerHop）
-p.fh.sequenceType = 'chaos';        % 'pn' | 'chaos' | 'linear' | 'random'
-p.fh.pnPolynomial = [1 0 0 1 1]; % 跳频PN序列多项式 (x^4 + x + 1)
-p.fh.pnInit = [1 0 0 1];         % 跳频PN序列初始状态
+p.fh.sequenceType = 'pn';        % 'pn' | 'chaos' | 'linear' | 'random'
+p.fh.pnPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1]; % x^11 + x^2 + 1
+p.fh.pnInit = [0 0 0 0 0 0 0 0 0 1 1];         % 跳频PN序列初始状态
 % 混沌跳频参数（sequenceType='chaos'时使用）
 p.fh.chaosMethod = 'logistic';   % 'logistic' | 'henon' | 'tent'
 p.fh.chaosParams = struct();

@@ -15,11 +15,7 @@ if ~s.enable
     out = uint8(bits(:) ~= 0);
     return;
 end
-pn = comm.PNSequence( ...
-    "Polynomial", s.pnPolynomial, ...
-    "InitialConditions", s.pnInit, ...
-    "SamplesPerFrame", numel(bits));
-pnBits = uint8(pn());
+[pnBits, ~] = pn_generate_bits(s.pnPolynomial, s.pnInit, numel(bits));
 out = bitxor(uint8(bits(:) ~= 0), pnBits);
 end
 
