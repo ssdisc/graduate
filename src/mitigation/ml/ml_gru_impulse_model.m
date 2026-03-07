@@ -12,9 +12,11 @@ model = struct();
 model.name = "impulse_gru_dl";
 model.type = "gru_dl";
 model.trained = false;
+model.featureVersion = 2;
+model.featureNames = ["abs_r" "abs_over_median" "absdiff_abs" "phase_diff"];
 
 % 网络参数
-model.inputChannels = 4;  % [实部, 虚部, 幅度, 幅度差分]
+model.inputChannels = 4;  % [幅度, 归一化幅度, 幅度差分, 差分相位]
 model.hiddenSize = 32;    % GRU隐藏状态大小
 model.outputSize = 4;     % [p_impulse, reliability, clean_real, clean_imag]
 

@@ -54,7 +54,7 @@ p.packet.concealMode = "blend";      % "nearest" | "blend"
 % 4) 前导/帧
 p.frame = struct();
 p.frame.preambleLength = 127; % 比特（BPSK）
-p.frame.preambleType = "chaos"; % "pn" | "chaos"
+p.frame.preambleType = "pn"; % "pn" | "chaos"
 p.frame.preambleChaosMethod = "logistic";
 p.frame.preambleChaosParams = struct("mu", 3.9999, "x0", 0.2718281828459045);
 p.frame.magic16 = hex2dec('A55A');
@@ -226,7 +226,7 @@ p.rxSync.carrierPll.beta = 3e-4;    % 频率环积分增益
 p.rxSync.carrierPll.maxFreq = 0.1;  % 归一化角频率上限（rad/sample）
 % 早迟门DLL（用于维持符号定时对齐）
 p.rxSync.timingDll = struct();
-p.rxSync.timingDll.enable = true;
+p.rxSync.timingDll.enable = false;
 p.rxSync.timingDll.earlyLateSpacing = 0.45;
 p.rxSync.timingDll.alpha = 0.03;
 p.rxSync.timingDll.beta = 5e-4;

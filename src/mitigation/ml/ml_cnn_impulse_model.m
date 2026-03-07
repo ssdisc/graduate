@@ -12,9 +12,11 @@ model = struct();
 model.name = "impulse_cnn_1d";
 model.type = "cnn_dl";
 model.trained = false;
+model.featureVersion = 2;
+model.featureNames = ["abs_r" "abs_over_median" "absdiff_abs" "phase_diff"];
 
 % 网络参数
-model.inputChannels = 4;  % [实部, 虚部, 幅度, 幅度差分]
+model.inputChannels = 4;  % [幅度, 归一化幅度, 幅度差分, 差分相位]
 model.outputSize = 4;     % [p_impulse, reliability, clean_real, clean_imag]
 
 % 创建网络层

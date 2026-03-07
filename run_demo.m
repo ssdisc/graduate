@@ -30,15 +30,15 @@ fprintf('========================================\n\n');
 
 % 1) 逻辑回归模型（ml_blanking）
 lrModelPath = fullfile(modelDir, 'impulse_lr_model.mat');
-needTrainLr = forceRetrain || ~exist(lrModelPath, 'file');
-if ~needTrainLr
-    s = load(lrModelPath, 'model');
-    if isfield(s, 'model') && ~isempty(s.model)
-        p.mitigation.ml = s.model;
-        fprintf('已加载LR模型: %s\n\n', lrModelPath);
-    else
-        needTrainLr = true;
-    end
+if ~forceRetrain
+    [p.mitigation.ml, loadedLr, loadedLrPath] = load_pretrained_model(lrModelPath, @ml_impulse_lr_model);
+else
+    loadedLr = false;
+    loadedLrPath = "";
+end
+needTrainLr = forceRetrain || ~loadedLr;
+if loadedLr
+    fprintf('已加载LR模型: %s\n\n', char(loadedLrPath));
 end
 if needTrainLr
     fprintf('训练LR模型...\n');
@@ -56,15 +56,15 @@ end
 
 % 2) CNN模型（ml_cnn）
 cnnModelPath = fullfile(modelDir, 'impulse_cnn_model.mat');
-needTrainCnn = forceRetrain || ~exist(cnnModelPath, 'file');
-if ~needTrainCnn
-    s = load(cnnModelPath, 'model');
-    if isfield(s, 'model') && ~isempty(s.model)
-        p.mitigation.mlCnn = s.model;
-        fprintf('已加载CNN模型: %s\n\n', cnnModelPath);
-    else
-        needTrainCnn = true;
-    end
+if ~forceRetrain
+    [p.mitigation.mlCnn, loadedCnn, loadedCnnPath] = load_pretrained_model(cnnModelPath, @ml_cnn_impulse_model);
+else
+    loadedCnn = false;
+    loadedCnnPath = "";
+end
+needTrainCnn = forceRetrain || ~loadedCnn;
+if loadedCnn
+    fprintf('已加载CNN模型: %s\n\n', char(loadedCnnPath));
 end
 if needTrainCnn
     fprintf('训练CNN模型...\n');
@@ -82,15 +82,15 @@ end
 
 % 3) GRU模型（ml_gru）
 gruModelPath = fullfile(modelDir, 'impulse_gru_model.mat');
-needTrainGru = forceRetrain || ~exist(gruModelPath, 'file');
-if ~needTrainGru
-    s = load(gruModelPath, 'model');
-    if isfield(s, 'model') && ~isempty(s.model)
-        p.mitigation.mlGru = s.model;
-        fprintf('已加载GRU模型: %s\n\n', gruModelPath);
-    else
-        needTrainGru = true;
-    end
+if ~forceRetrain
+    [p.mitigation.mlGru, loadedGru, loadedGruPath] = load_pretrained_model(gruModelPath, @ml_gru_impulse_model);
+else
+    loadedGru = false;
+    loadedGruPath = "";
+end
+needTrainGru = forceRetrain || ~loadedGru;
+if loadedGru
+    fprintf('已加载GRU模型: %s\n\n', char(loadedGruPath));
 end
 if needTrainGru
     fprintf('训练GRU模型...\n');

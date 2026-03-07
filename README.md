@@ -235,7 +235,7 @@ p.eve.fhAssumption = "partial";  % Eve使用错误的序列
 1. `|r|` - 接收符号幅度
 2. `|r|/median(|r|)` - 归一化幅度
 3. `||r_i| - |r_{i-1}||` - 幅度差分
-4. `angle(r)` - 相位
+4. `angle(r_i·conj(r_{i-1}))` - 差分相位
 
 #### 训练ML模型
 
