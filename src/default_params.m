@@ -51,7 +51,7 @@ p.packet.payloadBitsPerPacket = 2048; % 每包载荷比特数（需为8的整数
 p.packet.concealLostPackets = true;    % 丢包后图像/块域补偿（仅影响重建图像）
 p.packet.concealMode = "blend";      % "nearest" | "blend"
 
-% 4) 前导/帧
+% 4) 前导/帧（默认保留PN前导，优先保证同步稳定性）
 p.frame = struct();
 p.frame.preambleLength = 127; % 比特（BPSK）
 p.frame.preambleType = "pn"; % "pn" | "chaos"
@@ -84,12 +84,12 @@ p.interleaver.nRows = 64;
 p.mod = struct();
 p.mod.type = 'BPSK'; % 'BPSK' | 'QPSK' | 'MSK'（默认BPSK）
 
-% 9) 跳频（Frequency Hopping）
+% 9) 跳频（Frequency Hopping，默认采用混沌跳频）
 p.fh = struct();
 p.fh.enable = true;              % 是否启用跳频
 p.fh.nFreqs = 8;                 % 跳频频点数量
 p.fh.symbolsPerHop = 64;         % 每跳的符号数（跳频速率 = 符号率/symbolsPerHop）
-p.fh.sequenceType = 'pn';        % 'pn' | 'chaos' | 'linear' | 'random'
+p.fh.sequenceType = 'chaos';     % 'pn' | 'chaos' | 'linear' | 'random'
 p.fh.pnPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1]; % x^11 + x^2 + 1
 p.fh.pnInit = [0 0 0 0 0 0 0 0 0 1 1];         % 跳频PN序列初始状态
 % 混沌跳频参数（sequenceType='chaos'时使用）

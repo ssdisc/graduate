@@ -23,6 +23,17 @@ addpath(genpath('src'));
 run_demo
 ```
 
+### 毕设主线配置
+
+```matlab
+addpath(genpath('src'));
+p = default_params_thesis_mainline();
+results = simulate(p);
+disp(results.summary);
+```
+
+该配置对应建议的毕设主线：混沌跳频 + 混沌加密 + `PN` 前导。
+
 ### 输出结果
 
 运行结束后在 `results/matlab_yyyyMMdd_HHmmss/` 下生成：
@@ -58,7 +69,7 @@ run_demo
 │                                              │                          │
 │                                              ▼                          │
 │              块交织 ──→ BPSK/QPSK/MSK调制 ──→ ★跳频调制★ ──→ 添加前导  │
-│               (抗突发)                  (可选,PN序列)   (PN序列)         │
+│               (抗突发)                  (默认混沌序列)   (PN序列)         │
 │                                              │                          │
 │                                              ▼                          │
 │                                         发送符号                         │
@@ -154,7 +165,7 @@ run_demo
 
 | 功能 | 文件 | 说明 |
 |------|------|------|
-| 跳频序列生成 | `fh_generate_sequence.m` | 基于PN序列的伪随机跳频序列 |
+| 跳频序列生成 | `fh_generate_sequence.m` | 支持PN/混沌/线性/随机跳频序列，默认混沌 |
 | 跳频调制 | `fh_modulate.m` | 对数据符号进行频率跳变 |
 | 跳频解调 | `fh_demodulate.m` | 接收端去除频率偏移 |
 
@@ -171,7 +182,7 @@ run_demo
 p.fh.enable = true;           % 启用跳频
 p.fh.nFreqs = 8;              % 跳频频点数量
 p.fh.symbolsPerHop = 64;      % 每跳符号数（跳频速率）
-p.fh.sequenceType = 'pn';     % 序列类型：'pn' | 'chaos' | 'linear' | 'random'
+p.fh.sequenceType = 'chaos';  % 序列类型：'pn' | 'chaos' | 'linear' | 'random'
 p.fh.freqSet = linspace(-0.35, 0.35, 8);  % 归一化频率集合
 ```
 
@@ -311,8 +322,8 @@ p.packet.concealMode = "nearest";       % "nearest" | "blend"
 
 ### 前导与同步参数
 ```matlab
-p.frame.preambleType = "chaos";           % "pn" | "chaos"
-p.frame.preambleChaosMethod = "logistic"; % 混沌前导类型
+p.frame.preambleType = "pn";                        % "pn" | "chaos"
+p.frame.preamblePnPolynomial = [1 0 0 0 1 0 0 1];   % 默认PN前导
 
 p.rxSync.timingDll.enable = true;         % 启用DLL定时跟踪
 p.rxSync.timingDll.earlyLateSpacing = 0.45;
