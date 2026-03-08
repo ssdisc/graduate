@@ -25,7 +25,7 @@ end
 t = startPos + (0:nSamp-1).';
 % 允许轻微越界（线性外推为0），避免分数定时下末尾判定失败
 guard = 2;
-if t(1) < 1 - guard || t(end) > numel(x) + guard
+if t(1) < 1 - guard
     blk = complex(zeros(nSamp, 1));
     ok = false;
     info = struct("dllEnabled", false);

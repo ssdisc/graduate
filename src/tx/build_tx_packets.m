@@ -1,4 +1,4 @@
-function [txPackets, plan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos, waveform)
+﻿function [txPackets, plan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos, waveform)
 % 按配置将整图载荷切分为多个分包并构建发送符号。
 payloadBits = uint8(payloadBits(:) ~= 0);
 totalBits = numel(payloadBits);
@@ -34,16 +34,33 @@ if nPackets > 65535
     error("分包数量过大(%d)，超出uint16可表示范围。", nPackets);
 end
 
+sessionMeta = meta;
+sessionMeta.totalPayloadBytes = uint32(meta.payloadBytes);
+sessionMeta.totalPackets = uint16(nPackets);
+[sessionHeaderBits, sessionHeader] = build_session_header_bits(sessionMeta, p.frame);
+sessionHeaderLenBits = numel(sessionHeaderBits);
+
+phyHeaderLenBits = 16 + 8 + 16 + 16 + 16 + 16;
+phyRepeat = phy_header_repeat_local(p.frame);
+phyHeaderSymLen = phyHeaderLenBits * phyRepeat;
+
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
 packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...
     && isfield(p.chaosEncrypt, "enable") && p.chaosEncrypt.enable;
-scrambleCfgNext = p.scramble;
-fhCfgNext = p.fh;
+
+if packetEnable
+    maxPacketDataBits = sessionHeaderLenBits + pktBitsPerPacket;
+else
+    maxPacketDataBits = sessionHeaderLenBits + totalBits;
+end
+packetStrideBits = maxPacketDataBits;
+maxPacketDataSym = n_symbols_for_info_bits_local(p, maxPacketDataBits);
+packetStrideHops = packet_stride_hops_local(p, maxPacketDataSym);
+
 txPackets = repmat(struct(), nPackets, 1);
 txBurstChannelParts = cell(nPackets, 1);
 txBurstSpectrumParts = cell(nPackets, 1);
 modInfoRef = struct();
-headerLenBits = 0;
 
 for pktIdx = 1:nPackets
     startBit = (pktIdx - 1) * pktBitsPerPacket + 1;
@@ -60,58 +77,60 @@ for pktIdx = 1:nPackets
         error("单包payload过大(%d bytes)，超出uint16可表示范围。", payloadPktBytes);
     end
 
-    metaPkt = meta;
-    metaPkt.totalPayloadBytes = uint32(meta.payloadBytes);
-    metaPkt.packetIndex = uint16(pktIdx);
-    metaPkt.totalPackets = uint16(nPackets);
-    metaPkt.packetPayloadBytes = uint16(payloadPktBytes);
-    metaPkt.packetCrc16 = crc16_ccitt_bits(payloadPkt);
-    [headerBits, ~] = build_header_bits(metaPkt, p.frame.magic16);
-    headerLenBits = numel(headerBits);
-
-    dataBitsTx = [headerBits; payloadPkt];
-    scrambleCfgPkt = scrambleCfgNext;
-    dataBitsTxScr = scramble_bits(dataBitsTx, scrambleCfgPkt);
-    if isfield(scrambleCfgPkt, "enable") && scrambleCfgPkt.enable ...
-            && isfield(scrambleCfgPkt, "pnPolynomial") && isfield(scrambleCfgPkt, "pnInit")
-        scrambleCfgNext = scrambleCfgPkt;
-        scrambleCfgNext.pnInit = advance_pn_state( ...
-            scrambleCfgPkt.pnPolynomial, scrambleCfgPkt.pnInit, numel(dataBitsTx));
+    hasSessionHeader = (pktIdx == 1);
+    if hasSessionHeader
+        packetDataBits = [sessionHeaderBits; payloadPkt];
+    else
+        packetDataBits = payloadPkt;
     end
+    packetDataBitsLen = numel(packetDataBits);
+    packetDataBytes = ceil(packetDataBitsLen / 8);
+    if packetDataBytes > 65535
+        error("单包受保护数据过大(%d bytes)，超出uint16可表示范围。", packetDataBytes);
+    end
+
+    phyMeta = struct();
+    phyMeta.hasSessionHeader = hasSessionHeader;
+    phyMeta.packetIndex = uint16(pktIdx);
+    phyMeta.packetDataBytes = uint16(packetDataBytes);
+    phyMeta.packetDataCrc16 = crc16_ccitt_bits(packetDataBits);
+    [phyHeaderBits, phyHeader] = build_phy_header_bits(phyMeta, p.frame);
+    phyHeaderSym = modulate_repeated_bpsk_bits_local(phyHeaderBits, phyRepeat);
+
+    scrambleCfgPkt = derive_packet_scramble_cfg(p.scramble, pktIdx, packetStrideBits);
+    dataBitsTxScr = scramble_bits(packetDataBits, scrambleCfgPkt);
     codedBits = fec_encode(dataBitsTxScr, p.fec);
     [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
     [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);
     modInfoRef = modInfo;
 
     if fhEnabled
-        fhCfgPkt = fhCfgNext;
+        fhCfgPkt = derive_packet_fh_cfg(p.fh, pktIdx, packetStrideHops, numel(dataSymTx));
         [dataSymHop, hopInfo] = fh_modulate(dataSymTx, fhCfgPkt);
-        if isfield(fhCfgPkt, "sequenceType") && lower(string(fhCfgPkt.sequenceType)) == "pn"
-            fhCfgNext = fhCfgPkt;
-            if isfield(hopInfo, "pnState") && isstruct(hopInfo.pnState) ...
-                    && isfield(hopInfo.pnState, "currentState") && ~isempty(hopInfo.pnState.currentState)
-                fhCfgNext.pnInit = uint8(hopInfo.pnState.currentState(:)).';
-            else
-                bitsPerHop = ceil(log2(max(double(fhCfgPkt.nFreqs), 2)));
-                fhCfgNext.pnInit = advance_pn_state( ...
-                    fhCfgPkt.pnPolynomial, fhCfgPkt.pnInit, hopInfo.nHops * bitsPerHop);
-            end
-        end
     else
         dataSymHop = dataSymTx;
         hopInfo = struct('enable', false);
         fhCfgPkt = struct('enable', false);
     end
 
-    txSymPkt = [preambleSym; dataSymHop];
+    txSymPkt = [preambleSym; phyHeaderSym; dataSymHop];
     txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
 
+    txPackets(pktIdx).packetIndex = pktIdx;
     txPackets(pktIdx).startBit = startBit;
     txPackets(pktIdx).endBit = endBit;
+    txPackets(pktIdx).hasSessionHeader = hasSessionHeader;
+    txPackets(pktIdx).sessionHeader = sessionHeader;
+    txPackets(pktIdx).sessionHeaderBits = ternary_bits_local(hasSessionHeader, sessionHeaderBits, uint8([]));
     txPackets(pktIdx).payloadBitsPlain = payloadPktPlain;
     txPackets(pktIdx).payloadBits = payloadPkt;
     txPackets(pktIdx).payloadBytes = payloadPktBytes;
-    txPackets(pktIdx).chaosEncInfo = chaosEncInfoPkt;
+    txPackets(pktIdx).packetDataBits = packetDataBits;
+    txPackets(pktIdx).packetDataBytes = packetDataBytes;
+    txPackets(pktIdx).packetDataCrc16 = phyMeta.packetDataCrc16;
+    txPackets(pktIdx).phyHeader = phyHeader;
+    txPackets(pktIdx).phyHeaderBits = phyHeaderBits;
+    txPackets(pktIdx).phyHeaderSym = phyHeaderSym;
     txPackets(pktIdx).scrambleCfg = scrambleCfgPkt;
     txPackets(pktIdx).dataSymTx = dataSymTx;
     txPackets(pktIdx).fhCfg = fhCfgPkt;
@@ -126,7 +145,11 @@ end
 plan = struct();
 plan.packetEnable = packetEnable;
 plan.nPackets = nPackets;
-plan.headerLenBits = headerLenBits;
+plan.sessionHeaderLenBits = sessionHeaderLenBits;
+plan.phyHeaderLenBits = phyHeaderLenBits;
+plan.phyHeaderSymLen = phyHeaderSymLen;
+plan.packetStrideBits = packetStrideBits;
+plan.packetStrideHops = packetStrideHops;
 plan.fhEnabled = fhEnabled;
 plan.packetChaosEnable = packetChaosEnable;
 plan.waveform = waveform;
@@ -135,3 +158,57 @@ plan.txBurstForChannel = vertcat(txBurstChannelParts{:});
 plan.txBurstForSpectrum = vertcat(txBurstSpectrumParts{:});
 end
 
+function nSym = n_symbols_for_info_bits_local(p, nInfoBits)
+bitsPerSym = bits_per_symbol_local(p.mod);
+codedBitsLen = coded_bits_length_local(nInfoBits, p.fec);
+nSym = ceil(codedBitsLen / bitsPerSym);
+end
+
+function nHops = packet_stride_hops_local(p, nSym)
+if ~isfield(p, "fh") || ~isstruct(p.fh) || ~isfield(p.fh, "enable") || ~p.fh.enable
+    nHops = 0;
+    return;
+end
+nHops = ceil(double(nSym) / double(p.fh.symbolsPerHop));
+end
+
+function repeat = phy_header_repeat_local(frameCfg)
+repeat = 3;
+if isfield(frameCfg, "phyHeaderRepeat") && ~isempty(frameCfg.phyHeaderRepeat)
+    repeat = max(1, round(double(frameCfg.phyHeaderRepeat)));
+end
+end
+
+function sym = modulate_repeated_bpsk_bits_local(bits, repeat)
+bits = uint8(bits(:) ~= 0);
+repeat = max(1, round(double(repeat)));
+sym = 1 - 2 * double(repelem(bits, repeat));
+sym = sym(:);
+end
+
+function nBits = coded_bits_length_local(nInfoBits, fec)
+numInputBits = log2(fec.trellis.numInputSymbols);
+numOutputBits = log2(fec.trellis.numOutputSymbols);
+nBits = round(double(nInfoBits) * numOutputBits / numInputBits);
+end
+
+function bitsPerSym = bits_per_symbol_local(mod)
+switch upper(string(mod.type))
+    case "BPSK"
+        bitsPerSym = 1;
+    case "QPSK"
+        bitsPerSym = 2;
+    case "MSK"
+        bitsPerSym = 1;
+    otherwise
+        error("Unsupported modulation for packet build: %s", mod.type);
+end
+end
+
+function bits = ternary_bits_local(cond, bitsTrue, bitsFalse)
+if cond
+    bits = bitsTrue;
+else
+    bits = bitsFalse;
+end
+end

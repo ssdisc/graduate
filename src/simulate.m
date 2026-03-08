@@ -193,34 +193,6 @@ end
 channelSample = adapt_channel_for_sps(p.channel, waveform.sps);
 maxDelaySamples = max(0, round(double(p.channel.maxDelaySymbols) * waveform.sps));
 
-% Eve逐包解跳配置（与发送端分包序列对齐）
-if eveEnabled
-    hopInfoEveList = cell(nPackets, 1);
-    if ~fhEnabled
-        for ip = 1:nPackets
-            hopInfoEveList{ip} = struct('enable', false);
-        end
-    else
-        switch fhAssumptionEve
-            case "known"
-                for ip = 1:nPackets
-                    hopInfoEveList{ip} = txPackets(ip).hopInfo;
-                end
-            case "none"
-                for ip = 1:nPackets
-                    hopInfoEveList{ip} = struct('enable', false);
-                end
-            case "partial"
-                for ip = 1:nPackets
-                    fhEve = make_partial_fh_config(txPackets(ip).fhCfg);
-                    [~, hopInfoEveList{ip}] = fh_modulate(txPackets(ip).dataSymTx, fhEve);
-                end
-            otherwise
-                error("Unknown eve.fhAssumption: %s", fhAssumptionEve);
-        end
-    end
-end
-
 totalEbN0Points = numel(EbN0dBList);
 totalFrames = totalEbN0Points * p.sim.nFramesPerPoint;
 globalFrameIdx = 0;
@@ -333,42 +305,26 @@ for ie = 1:numel(EbN0dBList)
         % 当前帧的重组缓存（按方法分开）
         bobPayloadFrame = cell(numel(methods), 1);
         bobPacketOk = false(numel(methods), nPackets);
+        bobSession = repmat(rx_session_empty_local(), numel(methods), 1);
         for im = 1:numel(methods)
             bobPayloadFrame{im} = zeros(totalPayloadBits, 1, "uint8");
         end
         if eveEnabled
             evePayloadFrame = cell(numel(methods), 1);
             evePacketOk = false(numel(methods), nPackets);
+            eveSession = repmat(rx_session_empty_local(), numel(methods), 1);
             for im = 1:numel(methods)
                 evePayloadFrame{im} = zeros(totalPayloadBits, 1, "uint8");
             end
         end
 
         % ============ 分包发收 ============
+        phyHeaderSymLen = phy_header_symbol_length_local(p.frame);
+
         for pktIdx = 1:nPackets
             pkt = txPackets(pktIdx);
-            scrambleCfgBob = pkt.scrambleCfg;
-            if eveEnabled
-                scrambleCfgEve = pkt.scrambleCfg;
-                switch scrambleAssumptionEve
-                    case "known"
-                        % Eve知道每包扰码状态
-                    case "none"
-                        scrambleCfgEve.enable = false;
-                    case "wrong_key"
-                        if isfield(scrambleCfgEve, "enable") && scrambleCfgEve.enable ...
-                                && isfield(scrambleCfgEve, "pnInit") && ~isempty(scrambleCfgEve.pnInit)
-                            scrambleCfgEve.pnInit = circshift(scrambleCfgEve.pnInit, 1);
-                            if all(scrambleCfgEve.pnInit == 0)
-                                scrambleCfgEve.pnInit(end) = 1;
-                            end
-                        else
-                            scrambleCfgEve.enable = false;
-                        end
-                end
-            end
 
-            % 信道
+            % ??
             delaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
             delay = round(double(delaySym) * waveform.sps);
             tx = [zeros(delay, 1); pkt.txSymForChannel];
@@ -381,71 +337,82 @@ for ie = 1:numel(EbN0dBList)
                 rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
             end
 
-            % Bob同步与解跳
-            bobOk = true;
+            bobOk = false;
+            bobPhy = struct();
+            rDataBobNominal = complex(zeros(0, 1));
             [startIdx, rxBobSync] = frame_sync(rx, preambleSym, syncCfgUse);
-            if isempty(startIdx)
-                bobOk = false;
-                rData = complex(zeros(numel(pkt.dataSymTx), 1));
-            else
-                dataStart = startIdx + numel(preambleSym);
-                [rData, bobOk] = extract_fractional_block(rxBobSync, dataStart, numel(pkt.dataSymTx), syncCfgUse, p.mod);
-            end
-            if bobOk
-                if fhEnabled
-                    rData = fh_demodulate(rData, pkt.hopInfo);
+            if ~isempty(startIdx)
+                phyStart = startIdx + numel(preambleSym);
+                [rPhyBob, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
+                if bobOk
+                    bobPhyBits = decode_phy_header_symbols_local(rPhyBob, p.frame);
+                    [bobPhy, bobOk] = parse_phy_header_bits(bobPhyBits, p.frame);
                 end
-                if p.rxSync.carrierPll.enable
-                    rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+                if bobOk
+                    rxStateBobNominal = derive_rx_packet_state_local(p, double(bobPhy.packetIndex), double(bobPhy.packetDataBytes) * 8);
+                    dataStart = phyStart + phyHeaderSymLen;
+                    [rDataBobNominal, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, syncCfgUse, p.mod);
                 end
             end
 
-            % Eve同步与解跳
             eveOk = false;
+            evePhy = struct();
+            rDataEveNominal = complex(zeros(0, 1));
             if eveEnabled
-                eveOk = true;
                 [startIdxEve, rxEveSync] = frame_sync(rxEve, preambleSym, syncCfgUse);
-                if isempty(startIdxEve)
-                    eveOk = false;
-                    rDataEve = complex(zeros(numel(pkt.dataSymTx), 1));
-                else
-                    dataStartEve = startIdxEve + numel(preambleSym);
-                    [rDataEve, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, numel(pkt.dataSymTx), syncCfgUse, p.mod);
-                end
-                if eveOk
-                    if fhEnabled
-                        rDataEve = fh_demodulate(rDataEve, hopInfoEveList{pktIdx});
+                if ~isempty(startIdxEve)
+                    phyStartEve = startIdxEve + numel(preambleSym);
+                    [rPhyEve, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
+                    if eveOk
+                        evePhyBits = decode_phy_header_symbols_local(rPhyEve, p.frame);
+                        [evePhy, eveOk] = parse_phy_header_bits(evePhyBits, p.frame);
                     end
-                    if p.rxSync.carrierPll.enable
-                        rDataEve = carrier_pll_sync(rDataEve, p.mod, p.rxSync.carrierPll);
+                    if eveOk
+                        rxStateEveNominal = derive_rx_packet_state_local(p, double(evePhy.packetIndex), double(evePhy.packetDataBytes) * 8);
+                        dataStartEve = phyStartEve + phyHeaderSymLen;
+                        [rDataEveNominal, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, syncCfgUse, p.mod);
                     end
                 end
             end
 
-            % 各抑制方法解调与分包重组
+            % ????????????
             for im = 1:numel(methods)
                 if bobOk
-                    [rMit, reliability] = mitigate_impulses(rData, methods(im), p.mitigation);
+                    rxStateBob = derive_rx_packet_state_local(p, double(bobPhy.packetIndex), double(bobPhy.packetDataBytes) * 8);
+                    rDataBob = fit_complex_length_local(rDataBobNominal, rxStateBob.nDataSym);
+                    if fhEnabled
+                        rDataBob = fh_demodulate(rDataBob, rxStateBob.hopInfo);
+                    end
+                    if p.rxSync.carrierPll.enable
+                        rDataBob = carrier_pll_sync(rDataBob, p.mod, p.rxSync.carrierPll);
+                    end
+                    [rMit, reliability] = mitigate_impulses(rDataBob, methods(im), p.mitigation);
                     demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
-                    demodDeint = deinterleave_bits(demodSoft, pkt.intState, p.interleaver);
+                    demodDeint = deinterleave_bits(demodSoft, rxStateBob.intState, p.interleaver);
                     dataBitsRxScr = fec_decode(demodDeint, p.fec);
-                    dataBitsRx = descramble_bits(dataBitsRxScr, scrambleCfgBob);
+                    packetDataBitsRx = descramble_bits(dataBitsRxScr, rxStateBob.scrambleCfg);
+                    packetDataBitsRx = fit_bits_length(packetDataBitsRx, rxStateBob.packetDataBitsLen);
 
-                    [payloadPktRx, metaRx, okHeader] = parse_frame_bits(dataBitsRx, p.frame.magic16);
-                    okPacket = okHeader ...
-                        && packet_header_valid(metaRx, pktIdx, nPackets, pkt.payloadBytes, meta.payloadBytes) ...
-                        && packet_crc_valid(payloadPktRx, metaRx);
+                    [payloadPktRx, bobSessionNext, packetInfoBob, okPacket] = recover_payload_packet_local(packetDataBitsRx, bobPhy, bobSession(im), p);
                     if okPacket
-                        payloadPktRx = payloadPktRx(1:min(end, numel(pkt.payloadBits)));
-                        payloadPktTx = pkt.payloadBits(1:numel(payloadPktRx));
-                        nErr(im) = nErr(im) + sum(payloadPktRx ~= payloadPktTx);
-                        nTot(im) = nTot(im) + numel(payloadPktTx);
-                        if numel(payloadPktRx) < numel(pkt.payloadBits)
-                            nErr(im) = nErr(im) + (numel(pkt.payloadBits) - numel(payloadPktRx));
-                            nTot(im) = nTot(im) + (numel(pkt.payloadBits) - numel(payloadPktRx));
+                        bobSession(im) = bobSessionNext;
+                        if packetInfoBob.packetIndex == pkt.packetIndex
+                            payloadPktTx = pkt.payloadBits;
+                            nCompare = min(numel(payloadPktRx), numel(payloadPktTx));
+                            if nCompare > 0
+                                nErr(im) = nErr(im) + sum(payloadPktRx(1:nCompare) ~= payloadPktTx(1:nCompare));
+                                nTot(im) = nTot(im) + nCompare;
+                            end
+                            if numel(payloadPktRx) < numel(payloadPktTx)
+                                nErr(im) = nErr(im) + (numel(payloadPktTx) - numel(payloadPktRx));
+                                nTot(im) = nTot(im) + (numel(payloadPktTx) - numel(payloadPktRx));
+                            end
+                        else
+                            nErr(im) = nErr(im) + numel(pkt.payloadBits);
+                            nTot(im) = nTot(im) + numel(pkt.payloadBits);
                         end
-                        bobPayloadFrame{im}(pkt.startBit:pkt.endBit) = fit_bits_length(payloadPktRx, numel(pkt.payloadBits));
-                        bobPacketOk(im, pktIdx) = true;
+                        bobPayloadFrame{im}(packetInfoBob.range.startBit:packetInfoBob.range.endBit) = fit_bits_length(payloadPktRx, packetInfoBob.range.nBits);
+                        bobPacketOk(im, packetInfoBob.packetIndex) = true;
                     else
                         nErr(im) = nErr(im) + numel(pkt.payloadBits);
                         nTot(im) = nTot(im) + numel(pkt.payloadBits);
@@ -457,27 +424,43 @@ for ie = 1:numel(EbN0dBList)
 
                 if eveEnabled
                     if eveOk
+                        rxStateEve = derive_rx_packet_state_local(p, double(evePhy.packetIndex), double(evePhy.packetDataBytes) * 8);
+                        rDataEve = fit_complex_length_local(rDataEveNominal, rxStateEve.nDataSym);
+                        if fhEnabled
+                            hopInfoEve = eve_hop_info_local(rxStateEve, fhAssumptionEve);
+                            rDataEve = fh_demodulate(rDataEve, hopInfoEve);
+                        end
+                        if p.rxSync.carrierPll.enable
+                            rDataEve = carrier_pll_sync(rDataEve, p.mod, p.rxSync.carrierPll);
+                        end
+                        scrambleCfgEve = eve_scramble_cfg_local(rxStateEve.scrambleCfg, scrambleAssumptionEve);
                         [rMitEve, reliabilityEve] = mitigate_impulses(rDataEve, methods(im), p.mitigation);
                         demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
-                        demodDeintEve = deinterleave_bits(demodSoftEve, pkt.intState, p.interleaver);
+                        demodDeintEve = deinterleave_bits(demodSoftEve, rxStateEve.intState, p.interleaver);
                         dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
-                        dataBitsEve = descramble_bits(dataBitsEveScr, scrambleCfgEve);
+                        packetDataBitsEve = descramble_bits(dataBitsEveScr, scrambleCfgEve);
+                        packetDataBitsEve = fit_bits_length(packetDataBitsEve, rxStateEve.packetDataBitsLen);
 
-                        [payloadPktEve, metaEve, okHeaderEve] = parse_frame_bits(dataBitsEve, p.frame.magic16);
-                        okPacketEve = okHeaderEve ...
-                            && packet_header_valid(metaEve, pktIdx, nPackets, pkt.payloadBytes, meta.payloadBytes) ...
-                            && packet_crc_valid(payloadPktEve, metaEve);
+                        [payloadPktEve, eveSessionNext, packetInfoEve, okPacketEve] = recover_payload_packet_local(packetDataBitsEve, evePhy, eveSession(im), p);
                         if okPacketEve
-                            payloadPktEve = payloadPktEve(1:min(end, numel(pkt.payloadBits)));
-                            payloadPktTx = pkt.payloadBits(1:numel(payloadPktEve));
-                            nErrEve(im) = nErrEve(im) + sum(payloadPktEve ~= payloadPktTx);
-                            nTotEve(im) = nTotEve(im) + numel(payloadPktTx);
-                            if numel(payloadPktEve) < numel(pkt.payloadBits)
-                                nErrEve(im) = nErrEve(im) + (numel(pkt.payloadBits) - numel(payloadPktEve));
-                                nTotEve(im) = nTotEve(im) + (numel(pkt.payloadBits) - numel(payloadPktEve));
+                            eveSession(im) = eveSessionNext;
+                            if packetInfoEve.packetIndex == pkt.packetIndex
+                                payloadPktTx = pkt.payloadBits;
+                                nCompareEve = min(numel(payloadPktEve), numel(payloadPktTx));
+                                if nCompareEve > 0
+                                    nErrEve(im) = nErrEve(im) + sum(payloadPktEve(1:nCompareEve) ~= payloadPktTx(1:nCompareEve));
+                                    nTotEve(im) = nTotEve(im) + nCompareEve;
+                                end
+                                if numel(payloadPktEve) < numel(payloadPktTx)
+                                    nErrEve(im) = nErrEve(im) + (numel(payloadPktTx) - numel(payloadPktEve));
+                                    nTotEve(im) = nTotEve(im) + (numel(payloadPktTx) - numel(payloadPktEve));
+                                end
+                            else
+                                nErrEve(im) = nErrEve(im) + numel(pkt.payloadBits);
+                                nTotEve(im) = nTotEve(im) + numel(pkt.payloadBits);
                             end
-                            evePayloadFrame{im}(pkt.startBit:pkt.endBit) = fit_bits_length(payloadPktEve, numel(pkt.payloadBits));
-                            evePacketOk(im, pktIdx) = true;
+                            evePayloadFrame{im}(packetInfoEve.range.startBit:packetInfoEve.range.endBit) = fit_bits_length(payloadPktEve, packetInfoEve.range.nBits);
+                            evePacketOk(im, packetInfoEve.packetIndex) = true;
                         else
                             nErrEve(im) = nErrEve(im) + numel(pkt.payloadBits);
                             nTotEve(im) = nTotEve(im) + numel(pkt.payloadBits);
@@ -490,25 +473,32 @@ for ie = 1:numel(EbN0dBList)
             end
         end
 
-        % 帧级图像重建与质量评价（分包重组后）
         for im = 1:numel(methods)
             payloadBitsRxFrame = bobPayloadFrame{im};
+            metaBobUse = meta;
+            totalPayloadBitsBob = totalPayloadBits;
+            rxLayoutBob = derive_packet_layout_local(totalPayloadBitsBob, p);
+            if bobSession(im).known
+                metaBobUse = bobSession(im).meta;
+                totalPayloadBitsBob = bobSession(im).totalPayloadBits;
+                rxLayoutBob = derive_packet_layout_local(totalPayloadBitsBob, p);
+            end
             if packetIndependentBitChaos && chaosEnabled
-                payloadBitsRxDec = decrypt_payload_packets(payloadBitsRxFrame, bobPacketOk(im, :), txPackets, "known");
-                imgRx = payload_bits_to_image(payloadBitsRxDec, meta, p.payload);
+                payloadBitsRxDec = decrypt_payload_packets_rx_local(payloadBitsRxFrame, bobPacketOk(im, :), p, totalPayloadBitsBob, "known");
+                imgRx = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
             elseif chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
                 if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
                     payloadBitsRxDec = chaos_decrypt_bits(payloadBitsRxFrame, chaosEncInfo);
-                    imgRx = payload_bits_to_image(payloadBitsRxDec, meta, p.payload);
+                    imgRx = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
                 else
-                    imgRxEnc = payload_bits_to_image(payloadBitsRxFrame, meta, p.payload);
+                    imgRxEnc = payload_bits_to_image(payloadBitsRxFrame, metaBobUse, p.payload);
                     imgRx = chaos_decrypt(imgRxEnc, chaosEncInfo);
                 end
             else
-                imgRx = payload_bits_to_image(payloadBitsRxFrame, meta, p.payload);
+                imgRx = payload_bits_to_image(payloadBitsRxFrame, metaBobUse, p.payload);
             end
             if packetConcealEnable && nPackets > 1
-                imgRx = conceal_image_from_packets(imgRx, bobPacketOk(im, :), txPackets, meta, p.payload, packetConcealMode);
+                imgRx = conceal_image_from_packets(imgRx, bobPacketOk(im, :), rxLayoutBob, metaBobUse, p.payload, packetConcealMode);
             end
 
             [psnrNow, ssimNow, mseNow] = image_quality(imgTx, imgRx);
@@ -535,22 +525,30 @@ for ie = 1:numel(EbN0dBList)
         if eveEnabled
             for im = 1:numel(methods)
                 payloadBitsEveFrame = evePayloadFrame{im};
+                metaEveUse = meta;
+                totalPayloadBitsEve = totalPayloadBits;
+                rxLayoutEve = derive_packet_layout_local(totalPayloadBitsEve, p);
+                if eveSession(im).known
+                    metaEveUse = eveSession(im).meta;
+                    totalPayloadBitsEve = eveSession(im).totalPayloadBits;
+                    rxLayoutEve = derive_packet_layout_local(totalPayloadBitsEve, p);
+                end
                 if packetIndependentBitChaos && chaosEnabled && chaosAssumptionEve ~= "none"
-                    payloadBitsEveDec = decrypt_payload_packets(payloadBitsEveFrame, evePacketOk(im, :), txPackets, chaosAssumptionEve);
-                    imgEve = payload_bits_to_image(payloadBitsEveDec, meta, p.payload);
+                    payloadBitsEveDec = decrypt_payload_packets_rx_local(payloadBitsEveFrame, evePacketOk(im, :), p, totalPayloadBitsEve, chaosAssumptionEve);
+                    imgEve = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
                 elseif chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
                     if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
                         payloadBitsEveDec = chaos_decrypt_bits(payloadBitsEveFrame, chaosEncInfoEve);
-                        imgEve = payload_bits_to_image(payloadBitsEveDec, meta, p.payload);
+                        imgEve = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
                     else
-                        imgEveEnc = payload_bits_to_image(payloadBitsEveFrame, meta, p.payload);
+                        imgEveEnc = payload_bits_to_image(payloadBitsEveFrame, metaEveUse, p.payload);
                         imgEve = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
                     end
                 else
-                    imgEve = payload_bits_to_image(payloadBitsEveFrame, meta, p.payload);
+                    imgEve = payload_bits_to_image(payloadBitsEveFrame, metaEveUse, p.payload);
                 end
                 if packetConcealEnable && nPackets > 1
-                    imgEve = conceal_image_from_packets(imgEve, evePacketOk(im, :), txPackets, meta, p.payload, packetConcealMode);
+                    imgEve = conceal_image_from_packets(imgEve, evePacketOk(im, :), rxLayoutEve, metaEveUse, p.payload, packetConcealMode);
                 end
 
                 [psnrNowEve, ssimNowEve, mseNowEve] = image_quality(imgTx, imgEve);
@@ -682,3 +680,328 @@ fprintf('[SIM] 链路仿真结束，总耗时 %.2fs\n', toc(simTic));
 
 end
 
+function session = rx_session_empty_local()
+session = struct();
+session.known = false;
+session.totalPayloadBits = NaN;
+session.totalPackets = NaN;
+session.meta = struct();
+end
+
+function session = learn_rx_session_local(metaRx)
+session = rx_session_empty_local();
+session.known = true;
+session.totalPayloadBits = double(metaRx.totalPayloadBytes) * 8;
+session.totalPackets = double(metaRx.totalPackets);
+session.meta = metaRx;
+end
+
+function state = derive_rx_packet_state_local(p, pktIdx, packetDataBitsLen)
+packetDataBitsLen = max(0, round(double(packetDataBitsLen)));
+bitsPerSym = bits_per_symbol_local(p.mod);
+codedBitsLen = coded_bits_length_local(packetDataBitsLen, p.fec);
+[~, intState] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
+nDataSym = ceil(codedBitsLen / bitsPerSym);
+
+state = struct();
+state.packetIndex = pktIdx;
+state.packetDataBitsLen = packetDataBitsLen;
+state.packetDataBytes = ceil(packetDataBitsLen / 8);
+state.codedBitsLen = codedBitsLen;
+state.nDataSym = nDataSym;
+state.intState = intState;
+state.scrambleCfg = derive_packet_scramble_cfg(p.scramble, pktIdx, max_packet_data_bits_local(p));
+state.fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, packet_stride_hops_local(p), nDataSym);
+state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nDataSym);
+end
+
+function [payloadPktRx, sessionOut, packetInfo, ok] = recover_payload_packet_local(packetDataBitsRx, phyHeader, sessionIn, p)
+payloadPktRx = uint8([]);
+sessionOut = sessionIn;
+packetInfo = struct();
+packetInfo.packetIndex = double(phyHeader.packetIndex);
+packetInfo.range = struct('startBit', 1, 'endBit', 0, 'nBits', 0);
+
+packetDataBitsLen = double(phyHeader.packetDataBytes) * 8;
+packetDataBitsRx = fit_bits_length(packetDataBitsRx, packetDataBitsLen);
+ok = packet_data_crc_valid_local(packetDataBitsRx, phyHeader);
+if ~ok
+    return;
+end
+
+packetIndex = double(phyHeader.packetIndex);
+if phyHeader.hasSessionHeader
+    [metaSession, payloadPktRx, okSession] = parse_session_header_bits(packetDataBitsRx, p.frame);
+    ok = ok && okSession && packetIndex == 1;
+    if ok && isfield(sessionIn, "known") && sessionIn.known
+        ok = session_meta_compatible_local(sessionIn.meta, metaSession);
+    end
+    if ~ok
+        return;
+    end
+    sessionOut = learn_rx_session_local(metaSession);
+else
+    if ~(isfield(sessionIn, "known") && sessionIn.known)
+        ok = false;
+        return;
+    end
+    payloadPktRx = packetDataBitsRx;
+end
+
+ok = ok && packet_index_valid_local(packetIndex, sessionOut);
+if ~ok
+    return;
+end
+
+packetInfo.packetIndex = packetIndex;
+packetInfo.range = derive_packet_range_from_meta_local(sessionOut.meta, packetIndex, p);
+if packetInfo.range.nBits <= 0
+    ok = false;
+    return;
+end
+payloadPktRx = fit_bits_length(payloadPktRx, packetInfo.range.nBits);
+end
+
+function ok = packet_data_crc_valid_local(packetDataBitsRx, phyHeader)
+needBits = double(phyHeader.packetDataBytes) * 8;
+if numel(packetDataBitsRx) < needBits
+    ok = false;
+    return;
+end
+crcNow = crc16_ccitt_bits(packetDataBitsRx(1:needBits));
+ok = uint16(phyHeader.packetDataCrc16) == uint16(crcNow);
+end
+
+function ok = packet_index_valid_local(packetIndex, session)
+ok = packetIndex >= 1;
+if ok && isfield(session, "known") && session.known
+    ok = packetIndex <= double(session.totalPackets);
+end
+end
+
+function ok = session_meta_compatible_local(metaA, metaB)
+fields = ["rows", "cols", "channels", "bitsPerPixel", "totalPayloadBytes", "totalPackets"];
+ok = true;
+for k = 1:numel(fields)
+    if ~isfield(metaA, fields(k)) || ~isfield(metaB, fields(k))
+        ok = false;
+        return;
+    end
+    ok = ok && double(metaA.(fields(k))) == double(metaB.(fields(k)));
+end
+end
+
+function range = derive_packet_range_from_meta_local(metaRx, pktIdx, p)
+nominalPayloadBits = nominal_payload_bits_local(p);
+totalPackets = double(metaRx.totalPackets);
+totalPayloadBits = double(metaRx.totalPayloadBytes) * 8;
+
+range = struct();
+if totalPackets <= 1 || nominalPayloadBits <= 0
+    range.startBit = 1;
+    range.nBits = totalPayloadBits;
+else
+    range.startBit = (pktIdx - 1) * nominalPayloadBits + 1;
+    if pktIdx < totalPackets
+        range.nBits = nominalPayloadBits;
+    else
+        range.nBits = totalPayloadBits - nominalPayloadBits * (totalPackets - 1);
+    end
+end
+range.nBits = max(0, round(double(range.nBits)));
+range.endBit = range.startBit + range.nBits - 1;
+end
+
+function layout = derive_packet_layout_local(totalPayloadBits, p)
+totalPayloadBits = max(0, round(double(totalPayloadBits)));
+nominalPayloadBits = nominal_payload_bits_local(p);
+if totalPayloadBits <= 0
+    layout = struct('startBit', 1, 'endBit', 0);
+    return;
+end
+if nominalPayloadBits <= 0
+    layout = struct('startBit', 1, 'endBit', totalPayloadBits);
+    return;
+end
+
+nPacketsLocal = max(1, ceil(totalPayloadBits / nominalPayloadBits));
+layout = repmat(struct('startBit', 1, 'endBit', 0), nPacketsLocal, 1);
+for pktIdx = 1:nPacketsLocal
+    startBit = (pktIdx - 1) * nominalPayloadBits + 1;
+    endBit = min(pktIdx * nominalPayloadBits, totalPayloadBits);
+    layout(pktIdx).startBit = startBit;
+    layout(pktIdx).endBit = endBit;
+end
+end
+
+function payloadBitsOut = decrypt_payload_packets_rx_local(payloadBitsIn, packetOk, p, totalPayloadBits, assumption)
+payloadBitsOut = uint8(payloadBitsIn(:) ~= 0);
+layout = derive_packet_layout_local(totalPayloadBits, p);
+ok = normalize_packet_ok(packetOk, numel(layout));
+assumption = lower(string(assumption));
+
+for pktIdx = 1:numel(layout)
+    if ~ok(pktIdx)
+        continue;
+    end
+    if assumption == "none"
+        continue;
+    end
+
+    seg = payloadBitsOut(layout(pktIdx).startBit:layout(pktIdx).endBit);
+    infoUse = packet_chaos_info_local(p.chaosEncrypt, pktIdx, numel(seg));
+    if assumption == "wrong_key"
+        infoUse = perturb_chaos_enc_info(infoUse, pktIdx);
+    elseif assumption ~= "known"
+        error("Unknown chaos assumption: %s", assumption);
+    end
+    segDec = chaos_decrypt_bits(seg, infoUse);
+    payloadBitsOut(layout(pktIdx).startBit:layout(pktIdx).endBit) = fit_bits_length(segDec, numel(seg));
+end
+end
+
+function infoUse = packet_chaos_info_local(encBase, pktIdx, nValidBits)
+encPkt = derive_packet_chaos_cfg(encBase, pktIdx);
+infoUse = struct();
+infoUse.enabled = true;
+infoUse.mode = "payload_bits";
+infoUse.chaosMethod = string(encPkt.chaosMethod);
+infoUse.chaosParams = encPkt.chaosParams;
+infoUse.diffusionRounds = encPkt.diffusionRounds;
+infoUse.nBytes = uint32(ceil(double(nValidBits) / 8));
+infoUse.nValidBits = uint32(nValidBits);
+end
+
+function scrambleCfg = eve_scramble_cfg_local(scrambleBase, assumption)
+scrambleCfg = scrambleBase;
+switch lower(string(assumption))
+    case "known"
+    case "none"
+        scrambleCfg.enable = false;
+    case "wrong_key"
+        if isfield(scrambleCfg, "enable") && scrambleCfg.enable && isfield(scrambleCfg, "pnInit") && ~isempty(scrambleCfg.pnInit)
+            scrambleCfg.pnInit = circshift(scrambleCfg.pnInit, 1);
+            if all(scrambleCfg.pnInit == 0)
+                scrambleCfg.pnInit(end) = 1;
+            end
+        else
+            scrambleCfg.enable = false;
+        end
+    otherwise
+        error("Unknown eve scramble assumption: %s", string(assumption));
+end
+end
+
+function hopInfo = hop_info_from_fh_cfg_local(fhCfg, nSym)
+if ~isfield(fhCfg, "enable") || ~fhCfg.enable
+    hopInfo = struct('enable', false);
+    return;
+end
+[~, hopInfo] = fh_modulate(complex(zeros(nSym, 1)), fhCfg);
+end
+
+function hopInfo = eve_hop_info_local(rxState, assumption)
+switch lower(string(assumption))
+    case "known"
+        hopInfo = rxState.hopInfo;
+    case "none"
+        hopInfo = struct('enable', false);
+    case "partial"
+        fhEve = make_partial_fh_config(rxState.fhCfg);
+        hopInfo = hop_info_from_fh_cfg_local(fhEve, rxState.nDataSym);
+    otherwise
+        error("Unknown eve fh assumption: %s", string(assumption));
+end
+end
+
+function y = fit_complex_length_local(x, targetLen)
+x = x(:);
+targetLen = max(0, round(double(targetLen)));
+if numel(x) >= targetLen
+    y = x(1:targetLen);
+else
+    y = [x; complex(zeros(targetLen - numel(x), 1))];
+end
+end
+
+function nBits = nominal_payload_bits_local(p)
+if isfield(p, "packet") && isstruct(p.packet) && isfield(p.packet, "enable") && p.packet.enable
+    if isfield(p.packet, "payloadBitsPerPacket") && ~isempty(p.packet.payloadBitsPerPacket)
+        nBits = max(8, round(double(p.packet.payloadBitsPerPacket)));
+    else
+        nBits = 4096;
+    end
+    nBits = 8 * floor(nBits / 8);
+else
+    nBits = 0;
+end
+end
+
+function repeat = phy_header_repeat_local(frameCfg)
+repeat = 3;
+if isfield(frameCfg, "phyHeaderRepeat") && ~isempty(frameCfg.phyHeaderRepeat)
+    repeat = max(1, round(double(frameCfg.phyHeaderRepeat)));
+end
+end
+
+function nBits = phy_header_length_bits_local(~)
+nBits = 16 + 8 + 16 + 16 + 16 + 16;
+end
+
+function nSym = phy_header_symbol_length_local(frameCfg)
+nSym = phy_header_length_bits_local(frameCfg) * phy_header_repeat_local(frameCfg);
+end
+
+function nBits = session_header_length_bits_local(~)
+nBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16;
+end
+
+function nBits = max_packet_data_bits_local(p)
+nBits = session_header_length_bits_local(p.frame) + max(0, nominal_payload_bits_local(p));
+end
+
+function nHops = packet_stride_hops_local(p)
+if ~isfield(p, "fh") || ~isstruct(p.fh) || ~isfield(p.fh, "enable") || ~p.fh.enable
+    nHops = 0;
+    return;
+end
+maxPacketBits = max_packet_data_bits_local(p);
+maxPacketSym = ceil(coded_bits_length_local(maxPacketBits, p.fec) / bits_per_symbol_local(p.mod));
+nHops = ceil(double(maxPacketSym) / double(p.fh.symbolsPerHop));
+end
+
+function bits = decode_phy_header_symbols_local(rSym, frameCfg)
+repeat = phy_header_repeat_local(frameCfg);
+rSym = rSym(:);
+if repeat <= 1
+    bits = uint8(real(rSym) < 0);
+else
+    nGroups = floor(numel(rSym) / repeat);
+    if nGroups <= 0
+        bits = uint8([]);
+        return;
+    end
+    votes = reshape(real(rSym(1:nGroups * repeat)) < 0, repeat, nGroups);
+    bits = uint8(sum(votes, 1) >= ceil(repeat / 2)).';
+end
+bits = fit_bits_length(bits, phy_header_length_bits_local(frameCfg));
+end
+
+function nBits = coded_bits_length_local(nInfoBits, fec)
+numInputBits = log2(fec.trellis.numInputSymbols);
+numOutputBits = log2(fec.trellis.numOutputSymbols);
+nBits = round(double(nInfoBits) * numOutputBits / numInputBits);
+end
+
+function bitsPerSym = bits_per_symbol_local(mod)
+switch upper(string(mod.type))
+    case "BPSK"
+        bitsPerSym = 1;
+    case "QPSK"
+        bitsPerSym = 2;
+    case "MSK"
+        bitsPerSym = 1;
+    otherwise
+        error("Unsupported modulation for receiver state derivation: %s", mod.type);
+end
+end

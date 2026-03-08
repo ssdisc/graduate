@@ -32,6 +32,8 @@ results = simulate(p);
 disp(results.summary);
 ```
 
+Recommended thesis mainline: chaotic FH + chaotic encryption + `PN` preamble, with "packet-1 session header + later PHY mini-header" receiver-side self-reconstruction.
+
 该配置对应建议的毕设主线：混沌跳频 + 混沌加密 + `PN` 前导。
 
 ### 输出结果
@@ -54,6 +56,21 @@ disp(results.summary);
 | `warden.png` | 监视者检测性能（启用时） |
 
 ---
+
+## Packet Framing
+
+Current packet structure is:
+
+```
+[PN preamble][PHY mini-header][protected data]
+```
+
+- `PHY mini-header` uses repeated `BPSK`, and is **not hopped** and **not scrambled**.
+- Packet 1 protected data is `[session header][encrypted payload chunk]`.
+- Later packets carry only `[encrypted payload chunk]`.
+- Bob first decodes the PHY mini-header to obtain `packetIndex`, `packetDataBytes`, and CRC, then locally derives packet-specific hopping and scrambling state.
+- Bob only learns image/session metadata after successfully decoding packet 1.
+- Main framing helpers: `src/frame/build_phy_header_bits.m`, `src/frame/parse_phy_header_bits.m`, `src/frame/build_session_header_bits.m`, `src/frame/parse_session_header_bits.m`.
 
 ## 系统架构
 
@@ -324,6 +341,9 @@ p.packet.concealMode = "nearest";       % "nearest" | "blend"
 ```matlab
 p.frame.preambleType = "pn";                        % "pn" | "chaos"
 p.frame.preamblePnPolynomial = [1 0 0 0 1 0 0 1];   % 默认PN前导
+p.frame.phyMagic16 = hex2dec('3AC5');
+p.frame.sessionMagic16 = hex2dec('C7E1');
+p.frame.phyHeaderRepeat = 3;
 
 p.rxSync.timingDll.enable = true;         % 启用DLL定时跟踪
 p.rxSync.timingDll.earlyLateSpacing = 0.45;

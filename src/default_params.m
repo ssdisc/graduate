@@ -60,6 +60,9 @@ p.frame.preamblePnInit = [0 0 0 0 0 0 1];
 p.frame.preambleChaosMethod = "logistic";
 p.frame.preambleChaosParams = struct("mu", 3.9999, "x0", 0.2718281828459045);
 p.frame.magic16 = hex2dec('A55A');
+p.frame.phyMagic16 = hex2dec('3AC5');      % PHY????
+p.frame.sessionMagic16 = hex2dec('C7E1');  % ???????
+p.frame.phyHeaderRepeat = 3;               % PHY?????????BPSK?
 
 % 5) 扰码（用作白化/轻量加密）
 p.scramble = struct();
