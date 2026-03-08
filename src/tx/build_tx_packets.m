@@ -1,11 +1,11 @@
-﻿function [txPackets, plan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos, waveform)
+﻿function [txPackets, plan] = build_tx_packets(payloadBits, meta, p, packetIndependentBitChaos, waveform)
 % 按配置将整图载荷切分为多个分包并构建发送符号。
 payloadBits = uint8(payloadBits(:) ~= 0);
 totalBits = numel(payloadBits);
-if nargin < 5
+if nargin < 4
     packetIndependentBitChaos = false;
 end
-if nargin < 6
+if nargin < 5
     waveform = resolve_waveform_cfg(struct());
 end
 
@@ -43,6 +43,8 @@ sessionHeaderLenBits = numel(sessionHeaderBits);
 phyHeaderLenBits = 16 + 8 + 16 + 16 + 16 + 16;
 phyRepeat = phy_header_repeat_local(p.frame);
 phyHeaderSymLen = phyHeaderLenBits * phyRepeat;
+[~, firstSyncSym] = make_packet_sync(p.frame, 1);
+[~, shortSyncSym] = make_packet_sync(p.frame, 2);
 
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
 packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...
@@ -77,7 +79,8 @@ for pktIdx = 1:nPackets
         error("单包payload过大(%d bytes)，超出uint16可表示范围。", payloadPktBytes);
     end
 
-    hasSessionHeader = (pktIdx == 1);
+    isLongSyncPkt = is_long_sync_packet(p.frame, pktIdx);
+    hasSessionHeader = (pktIdx == 1) || (isLongSyncPkt && repeat_session_header_on_resync_local(p.frame));
     if hasSessionHeader
         packetDataBits = [sessionHeaderBits; payloadPkt];
     else
@@ -113,10 +116,13 @@ for pktIdx = 1:nPackets
         fhCfgPkt = struct('enable', false);
     end
 
-    txSymPkt = [preambleSym; phyHeaderSym; dataSymHop];
+    [~, syncSymPkt, syncInfoPkt] = make_packet_sync(p.frame, pktIdx);
+    txSymPkt = [syncSymPkt; phyHeaderSym; dataSymHop];
     txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
 
     txPackets(pktIdx).packetIndex = pktIdx;
+    txPackets(pktIdx).syncKind = syncInfoPkt.kind;
+    txPackets(pktIdx).syncSym = syncSymPkt;
     txPackets(pktIdx).startBit = startBit;
     txPackets(pktIdx).endBit = endBit;
     txPackets(pktIdx).hasSessionHeader = hasSessionHeader;
@@ -148,6 +154,8 @@ plan.nPackets = nPackets;
 plan.sessionHeaderLenBits = sessionHeaderLenBits;
 plan.phyHeaderLenBits = phyHeaderLenBits;
 plan.phyHeaderSymLen = phyHeaderSymLen;
+plan.firstSyncSymLen = numel(firstSyncSym);
+plan.shortSyncSymLen = numel(shortSyncSym);
 plan.packetStrideBits = packetStrideBits;
 plan.packetStrideHops = packetStrideHops;
 plan.fhEnabled = fhEnabled;
@@ -202,6 +210,13 @@ switch upper(string(mod.type))
         bitsPerSym = 1;
     otherwise
         error("Unsupported modulation for packet build: %s", mod.type);
+end
+end
+
+function tf = repeat_session_header_on_resync_local(frameCfg)
+tf = false;
+if isfield(frameCfg, "repeatSessionHeaderOnResync") && ~isempty(frameCfg.repeatSessionHeaderOnResync)
+    tf = logical(frameCfg.repeatSessionHeaderOnResync);
 end
 end
 

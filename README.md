@@ -62,14 +62,18 @@ Recommended thesis mainline: chaotic FH + chaotic encryption + `PN` preamble, wi
 Current packet structure is:
 
 ```
-[PN preamble][PHY mini-header][protected data]
+[packet-1 long PN preamble / later short sync word][PHY mini-header][protected data]
 ```
 
+- Packet 1 uses a long `PN` preamble; later packets use a short sync word to reduce burst overhead.
+- The sync strategy is configurable; with `p.frame.resyncIntervalPackets = 1`, all packets use a long preamble.
+- The receiver falls back to long-preamble reacquisition after consecutive short-sync misses.
 - `PHY mini-header` uses repeated `BPSK`, and is **not hopped** and **not scrambled**.
 - Packet 1 protected data is `[session header][encrypted payload chunk]`.
-- Later packets carry only `[encrypted payload chunk]`.
+- When `p.frame.repeatSessionHeaderOnResync = false`, only packet 1 carries the session header even if all packets use a long preamble.
 - Bob first decodes the PHY mini-header to obtain `packetIndex`, `packetDataBytes`, and CRC, then locally derives packet-specific hopping and scrambling state.
-- Bob only learns image/session metadata after successfully decoding packet 1.
+- Bob initially learns image/session metadata from packet 1, and can refresh that metadata again on long-preamble resync packets when enabled.
+- Re-entry is therefore **not** done by blindly trusting transmitter-side variables; it is done by waiting for an on-air long-preamble resync packet and rebuilding state from the received PHY/session headers.
 - Main framing helpers: `src/frame/build_phy_header_bits.m`, `src/frame/parse_phy_header_bits.m`, `src/frame/build_session_header_bits.m`, `src/frame/parse_session_header_bits.m`.
 
 ## 系统架构
@@ -340,12 +344,18 @@ p.packet.concealMode = "nearest";       % "nearest" | "blend"
 ### 前导与同步参数
 ```matlab
 p.frame.preambleType = "pn";                        % "pn" | "chaos"
-p.frame.preamblePnPolynomial = [1 0 0 0 1 0 0 1];   % 默认PN前导
+p.frame.preamblePnPolynomial = [1 0 0 0 1 0 0 1];   % 默认PN长前导
+p.frame.packetSyncLength = 31;                      % 后续分包短同步字长度
+p.frame.packetSyncType = "pn";                      % 后续分包短同步字类型
+p.frame.packetSyncPnPolynomial = [1 0 0 1 0 1];      % 短同步字PN序列
+p.frame.resyncIntervalPackets = 1;                   % 设为1表示所有分包都使用长前导
+p.frame.repeatSessionHeaderOnResync = false;         % 长前导包默认不重复会话头
 p.frame.phyMagic16 = hex2dec('3AC5');
 p.frame.sessionMagic16 = hex2dec('C7E1');
 p.frame.phyHeaderRepeat = 3;
 
-p.rxSync.timingDll.enable = true;         % 启用DLL定时跟踪
+p.rxSync.maxShortSyncMisses = 2;                     % 连续短同步失配后切回长前导重捕获
+p.rxSync.timingDll.enable = true;                    % 启用DLL定时跟踪
 p.rxSync.timingDll.earlyLateSpacing = 0.45;
 p.rxSync.timingDll.alpha = 0.03;
 p.rxSync.timingDll.beta = 5e-4;

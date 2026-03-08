@@ -64,10 +64,11 @@ if chaosEnabled && usePayloadBitChaos
     end
 end
 
-[~, preambleSym] = make_preamble(p.frame.preambleLength, p.frame);%生成前导
+[~, firstSyncSym] = make_packet_sync(p.frame, 1);
+[~, shortSyncSym] = make_packet_sync(p.frame, 2);
 
-% 发送端按包构建（最小分包：pktIdx/totalPkts/payloadLen/CRC16）
-[txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, preambleSym, packetIndependentBitChaos, waveform);
+% 构建按包发送计划（每包独立同步/头部/载荷）
+[txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, packetIndependentBitChaos, waveform);
 nPackets = numel(txPackets);
 fhEnabled = txPlan.fhEnabled;
 packetConcealEnable = false;
@@ -320,11 +321,15 @@ for ie = 1:numel(EbN0dBList)
 
         % ============ 分包发收 ============
         phyHeaderSymLen = phy_header_symbol_length_local(p.frame);
+        bobSyncCtrl = init_packet_sync_ctrl_local();
+        if eveEnabled
+            eveSyncCtrl = init_packet_sync_ctrl_local();
+        end
 
         for pktIdx = 1:nPackets
             pkt = txPackets(pktIdx);
 
-            % ??
+            % 加入随机传播时延
             delaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
             delay = round(double(delaySym) * waveform.sps);
             tx = [zeros(delay, 1); pkt.txSymForChannel];
@@ -340,9 +345,9 @@ for ie = 1:numel(EbN0dBList)
             bobOk = false;
             bobPhy = struct();
             rDataBobNominal = complex(zeros(0, 1));
-            [startIdx, rxBobSync] = frame_sync(rx, preambleSym, syncCfgUse);
-            if ~isempty(startIdx)
-                phyStart = startIdx + numel(preambleSym);
+            [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
+            if bobOk
+                phyStart = startIdx + numel(syncSymBob);
                 [rPhyBob, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
                 if bobOk
                     bobPhyBits = decode_phy_header_symbols_local(rPhyBob, p.frame);
@@ -359,9 +364,9 @@ for ie = 1:numel(EbN0dBList)
             evePhy = struct();
             rDataEveNominal = complex(zeros(0, 1));
             if eveEnabled
-                [startIdxEve, rxEveSync] = frame_sync(rxEve, preambleSym, syncCfgUse);
-                if ~isempty(startIdxEve)
-                    phyStartEve = startIdxEve + numel(preambleSym);
+                [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local(rxEve, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, eveSyncCtrl);
+                if eveOk
+                    phyStartEve = startIdxEve + numel(syncSymEve);
                     [rPhyEve, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
                     if eveOk
                         evePhyBits = decode_phy_header_symbols_local(rPhyEve, p.frame);
@@ -375,7 +380,7 @@ for ie = 1:numel(EbN0dBList)
                 end
             end
 
-            % ????????????
+            % 对不同脉冲抑制方法分别解调与统计
             for im = 1:numel(methods)
                 if bobOk
                     rxStateBob = derive_rx_packet_state_local(p, double(bobPhy.packetIndex), double(bobPhy.packetDataBytes) * 8);
@@ -732,7 +737,8 @@ end
 packetIndex = double(phyHeader.packetIndex);
 if phyHeader.hasSessionHeader
     [metaSession, payloadPktRx, okSession] = parse_session_header_bits(packetDataBitsRx, p.frame);
-    ok = ok && okSession && packetIndex == 1;
+    allowSessionRefresh = (packetIndex == 1) || (is_long_sync_packet(p.frame, packetIndex) && repeat_session_header_on_resync_local(p.frame));
+    ok = ok && okSession && allowSessionRefresh;
     if ok && isfield(sessionIn, "known") && sessionIn.known
         ok = session_meta_compatible_local(sessionIn.meta, metaSession);
     end
@@ -968,6 +974,76 @@ end
 maxPacketBits = max_packet_data_bits_local(p);
 maxPacketSym = ceil(coded_bits_length_local(maxPacketBits, p.fec) / bits_per_symbol_local(p.mod));
 nHops = ceil(double(maxPacketSym) / double(p.fh.symbolsPerHop));
+end
+
+function ctrl = init_packet_sync_ctrl_local()
+ctrl = struct();
+ctrl.forceLongSearch = true;
+ctrl.shortSyncMisses = 0;
+end
+
+function [startIdx, rxSync, syncSymUse, ctrl, ok] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, ctrl)
+startIdx = [];
+rxSync = rx;
+syncSymUse = firstSyncSym;
+ok = false;
+if nargin < 7 || isempty(ctrl)
+    ctrl = init_packet_sync_ctrl_local();
+end
+
+isLongPkt = is_long_sync_packet(p.frame, pktIdx);
+if ctrl.forceLongSearch
+    candidateKinds = ["long"];
+elseif isLongPkt
+    candidateKinds = ["long"];
+else
+    candidateKinds = ["short"];
+end
+
+for k = 1:numel(candidateKinds)
+    kind = candidateKinds(k);
+    if kind == "long"
+        syncTry = firstSyncSym;
+    else
+        syncTry = shortSyncSym;
+    end
+    [startTry, rxTry] = frame_sync(rx, syncTry, syncCfgUse);
+    if ~isempty(startTry)
+        startIdx = startTry;
+        rxSync = rxTry;
+        syncSymUse = syncTry(:);
+        ok = true;
+        ctrl.shortSyncMisses = 0;
+        if kind == "long"
+            ctrl.forceLongSearch = false;
+        end
+        return;
+    end
+end
+
+if isLongPkt
+    ctrl.forceLongSearch = true;
+    ctrl.shortSyncMisses = 0;
+else
+    ctrl.shortSyncMisses = ctrl.shortSyncMisses + 1;
+    if ctrl.shortSyncMisses >= max_short_sync_misses_local(p.rxSync)
+        ctrl.forceLongSearch = true;
+    end
+end
+end
+
+function tf = repeat_session_header_on_resync_local(frameCfg)
+tf = false;
+if isfield(frameCfg, "repeatSessionHeaderOnResync") && ~isempty(frameCfg.repeatSessionHeaderOnResync)
+    tf = logical(frameCfg.repeatSessionHeaderOnResync);
+end
+end
+
+function n = max_short_sync_misses_local(rxSync)
+n = 2;
+if isfield(rxSync, "maxShortSyncMisses") && ~isempty(rxSync.maxShortSyncMisses)
+    n = max(1, round(double(rxSync.maxShortSyncMisses)));
+end
 end
 
 function bits = decode_phy_header_symbols_local(rSym, frameCfg)
