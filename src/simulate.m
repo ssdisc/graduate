@@ -707,6 +707,7 @@ bitsPerSym = bits_per_symbol_local(p.mod);
 codedBitsLen = coded_bits_length_local(packetDataBitsLen, p.fec);
 [~, intState] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
 nDataSym = ceil(codedBitsLen / bitsPerSym);
+offsets = derive_packet_state_offsets(p, pktIdx);
 
 state = struct();
 state.packetIndex = pktIdx;
@@ -715,8 +716,9 @@ state.packetDataBytes = ceil(packetDataBitsLen / 8);
 state.codedBitsLen = codedBitsLen;
 state.nDataSym = nDataSym;
 state.intState = intState;
-state.scrambleCfg = derive_packet_scramble_cfg(p.scramble, pktIdx, max_packet_data_bits_local(p));
-state.fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, packet_stride_hops_local(p), nDataSym);
+state.stateOffsets = offsets;
+state.scrambleCfg = derive_packet_scramble_cfg(p.scramble, pktIdx, offsets.scrambleOffsetBits);
+state.fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, offsets.fhOffsetHops, nDataSym);
 state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nDataSym);
 end
 
@@ -956,24 +958,6 @@ end
 
 function nSym = phy_header_symbol_length_local(frameCfg)
 nSym = phy_header_length_bits_local(frameCfg) * phy_header_repeat_local(frameCfg);
-end
-
-function nBits = session_header_length_bits_local(~)
-nBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16;
-end
-
-function nBits = max_packet_data_bits_local(p)
-nBits = session_header_length_bits_local(p.frame) + max(0, nominal_payload_bits_local(p));
-end
-
-function nHops = packet_stride_hops_local(p)
-if ~isfield(p, "fh") || ~isstruct(p.fh) || ~isfield(p.fh, "enable") || ~p.fh.enable
-    nHops = 0;
-    return;
-end
-maxPacketBits = max_packet_data_bits_local(p);
-maxPacketSym = ceil(coded_bits_length_local(maxPacketBits, p.fec) / bits_per_symbol_local(p.mod));
-nHops = ceil(double(maxPacketSym) / double(p.fh.symbolsPerHop));
 end
 
 function ctrl = init_packet_sync_ctrl_local()

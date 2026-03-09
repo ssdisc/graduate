@@ -55,8 +55,8 @@ if packetEnable
 else
     maxPacketDataBits = sessionHeaderLenBits + totalBits;
 end
-packetStrideBits = maxPacketDataBits;
 maxPacketDataSym = n_symbols_for_info_bits_local(p, maxPacketDataBits);
+packetStrideBits = maxPacketDataBits;
 packetStrideHops = packet_stride_hops_local(p, maxPacketDataSym);
 
 txPackets = repmat(struct(), nPackets, 1);
@@ -79,8 +79,8 @@ for pktIdx = 1:nPackets
         error("单包payload过大(%d bytes)，超出uint16可表示范围。", payloadPktBytes);
     end
 
-    isLongSyncPkt = is_long_sync_packet(p.frame, pktIdx);
-    hasSessionHeader = (pktIdx == 1) || (isLongSyncPkt && repeat_session_header_on_resync_local(p.frame));
+    offsetsPkt = derive_packet_state_offsets(p, pktIdx);
+    hasSessionHeader = offsetsPkt.hasSessionHeader;
     if hasSessionHeader
         packetDataBits = [sessionHeaderBits; payloadPkt];
     else
@@ -100,7 +100,7 @@ for pktIdx = 1:nPackets
     [phyHeaderBits, phyHeader] = build_phy_header_bits(phyMeta, p.frame);
     phyHeaderSym = modulate_repeated_bpsk_bits_local(phyHeaderBits, phyRepeat);
 
-    scrambleCfgPkt = derive_packet_scramble_cfg(p.scramble, pktIdx, packetStrideBits);
+    scrambleCfgPkt = derive_packet_scramble_cfg(p.scramble, pktIdx, offsetsPkt.scrambleOffsetBits);
     dataBitsTxScr = scramble_bits(packetDataBits, scrambleCfgPkt);
     codedBits = fec_encode(dataBitsTxScr, p.fec);
     [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
@@ -108,7 +108,7 @@ for pktIdx = 1:nPackets
     modInfoRef = modInfo;
 
     if fhEnabled
-        fhCfgPkt = derive_packet_fh_cfg(p.fh, pktIdx, packetStrideHops, numel(dataSymTx));
+        fhCfgPkt = derive_packet_fh_cfg(p.fh, pktIdx, offsetsPkt.fhOffsetHops, numel(dataSymTx));
         [dataSymHop, hopInfo] = fh_modulate(dataSymTx, fhCfgPkt);
     else
         dataSymHop = dataSymTx;
@@ -137,6 +137,7 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).phyHeader = phyHeader;
     txPackets(pktIdx).phyHeaderBits = phyHeaderBits;
     txPackets(pktIdx).phyHeaderSym = phyHeaderSym;
+    txPackets(pktIdx).stateOffsets = offsetsPkt;
     txPackets(pktIdx).scrambleCfg = scrambleCfgPkt;
     txPackets(pktIdx).dataSymTx = dataSymTx;
     txPackets(pktIdx).fhCfg = fhCfgPkt;
@@ -210,13 +211,6 @@ switch upper(string(mod.type))
         bitsPerSym = 1;
     otherwise
         error("Unsupported modulation for packet build: %s", mod.type);
-end
-end
-
-function tf = repeat_session_header_on_resync_local(frameCfg)
-tf = false;
-if isfield(frameCfg, "repeatSessionHeaderOnResync") && ~isempty(frameCfg.repeatSessionHeaderOnResync)
-    tf = logical(frameCfg.repeatSessionHeaderOnResync);
 end
 end
 

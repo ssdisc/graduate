@@ -1,11 +1,11 @@
-﻿function scrambleCfg = derive_packet_scramble_cfg(scrambleBase, pktIdx, strideBits)
-%DERIVE_PACKET_SCRAMBLE_CFG  基于包序号直接派生每包扰码配置。
+function scrambleCfg = derive_packet_scramble_cfg(scrambleBase, pktIdx, offsetBits)
+%DERIVE_PACKET_SCRAMBLE_CFG  基于绝对比特偏移派生当前包扰码配置。
 
-if nargin < 3 || isempty(strideBits)
-    if isfield(scrambleBase, "packetStrideBits") && ~isempty(scrambleBase.packetStrideBits)
-        strideBits = double(scrambleBase.packetStrideBits);
+if nargin < 3 || isempty(offsetBits)
+    if isfield(scrambleBase, "packetOffsetBits") && ~isempty(scrambleBase.packetOffsetBits)
+        offsetBits = double(scrambleBase.packetOffsetBits);
     else
-        strideBits = 0;
+        offsetBits = 0;
     end
 end
 
@@ -17,6 +17,7 @@ if ~isfield(scrambleCfg, "pnPolynomial") || ~isfield(scrambleCfg, "pnInit") || i
     return;
 end
 
-advanceBits = max(0, round(double(pktIdx - 1) * double(strideBits)));
-scrambleCfg.pnInit = advance_pn_state(scrambleCfg.pnPolynomial, scrambleCfg.pnInit, advanceBits);
+scrambleCfg.packetIndex = pktIdx;
+scrambleCfg.packetOffsetBits = max(0, round(double(offsetBits)));
+scrambleCfg.pnInit = advance_pn_state(scrambleCfg.pnPolynomial, scrambleCfg.pnInit, scrambleCfg.packetOffsetBits);
 end

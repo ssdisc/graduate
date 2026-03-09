@@ -10,6 +10,7 @@ function [freqIdx, state] = fh_generate_sequence(nHops, fh)
 %           .pnInit       - PN初始状态（sequenceType='pn'时使用）
 %           .chaosMethod  - 混沌映射类型（sequenceType='chaos'时使用）
 %           .chaosParams  - 混沌参数（sequenceType='chaos'时使用）
+%           .sequenceOffsetHops - 会话连续序列中的hop起始偏移
 %
 % 输出:
 %   freqIdx - 频率索引序列 (1 到 nFreqs)
@@ -84,8 +85,13 @@ switch seqType
         else
             chaosParams = struct();
         end
+        offsetHops = 0;
+        if isfield(fh, "sequenceOffsetHops") && ~isempty(fh.sequenceOffsetHops)
+            offsetHops = max(0, round(double(fh.sequenceOffsetHops)));
+        end
 
-        chaosSeq = double(chaos_generate(nHops, chaosMethod, chaosParams));
+        chaosSeqFull = double(chaos_generate(nHops + offsetHops, chaosMethod, chaosParams));
+        chaosSeq = chaosSeqFull(offsetHops + 1:end);
         chaosSeq = max(min(chaosSeq(:), 1 - eps), 0);
         freqIdx = floor(chaosSeq * nFreqs) + 1;
         freqIdx = min(max(freqIdx, 1), nFreqs);
@@ -94,8 +100,9 @@ switch seqType
         state.type = "chaos";
         state.chaosMethod = chaosMethod;
         state.chaosParams = chaosParams;
-        if ~isempty(chaosSeq)
-            state.lastValue = chaosSeq(end);
+        state.sequenceOffsetHops = offsetHops;
+        if ~isempty(chaosSeqFull)
+            state.lastValue = chaosSeqFull(end);
         else
             state.lastValue = NaN;
         end
