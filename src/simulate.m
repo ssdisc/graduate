@@ -81,10 +81,10 @@ if isfield(p, "packet") && isstruct(p.packet)
         packetConcealMode = lower(string(p.packet.concealMode));
     end
 end
+packetConcealActive = packetConcealEnable && nPackets > 1;
 
 % 用于信道/频谱/监视者评估的整段突发
 txSymForChannel = txPlan.txBurstForChannel;
-txSymForSpectrum = txPlan.txBurstForSpectrum;
 modInfo = txPlan.modInfo;
 
 %% 仿真参数初始化与配置
@@ -93,9 +93,12 @@ EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
 methods = string(p.mitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
 ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
-mseVals = nan(numel(methods), numel(EbN0dBList)); %均方误差（MSE）评估图像质量
-psnrVals = nan(numel(methods), numel(EbN0dBList));%峰值信噪比（PSNR）评估图像质量
-ssimVals = nan(numel(methods), numel(EbN0dBList));%结构相似性指数（SSIM）评估图像质量
+mseCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的MSE
+psnrCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的PSNR
+ssimCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的SSIM
+mseCompVals = nan(numel(methods), numel(EbN0dBList)); % 丢包补偿/修复后的MSE
+psnrCompVals = nan(numel(methods), numel(EbN0dBList)); % 丢包补偿/修复后的PSNR
+ssimCompVals = nan(numel(methods), numel(EbN0dBList)); % 丢包补偿/修复后的SSIM
 klSigVsNoise = nan(1, numel(EbN0dBList)); % KL(P_signal || P_noise)
 klNoiseVsSig = nan(1, numel(EbN0dBList)); % KL(P_noise || P_signal)
 klSym = nan(1, numel(EbN0dBList)); % 对称KL
@@ -124,9 +127,12 @@ if eveEnabled
 
     eveEbN0dBList = EbN0dBList + double(p.eve.ebN0dBOffset);
     berEve = nan(numel(methods), numel(EbN0dBList));
-    mseEveVals = nan(numel(methods), numel(EbN0dBList));
-    psnrEveVals = nan(numel(methods), numel(EbN0dBList));
-    ssimEveVals = nan(numel(methods), numel(EbN0dBList));
+    mseCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    psnrCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    ssimCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    mseCompEveVals = nan(numel(methods), numel(EbN0dBList));
+    psnrCompEveVals = nan(numel(methods), numel(EbN0dBList));
+    ssimCompEveVals = nan(numel(methods), numel(EbN0dBList));
     exampleEve = struct();
 
     scrambleAssumptionEve = lower(string(p.eve.scrambleAssumption));
@@ -190,8 +196,8 @@ if wardenEnabled
     wardenNTrials = NaN; %蒙特卡洛试验次数（如果仿真中未指定，则使用仿真中实际的试验次数）
 end
 
-% 波形成型启用时，将“按符号配置”的信道参数映射到“按采样配置”。
-channelSample = adapt_channel_for_sps(p.channel, waveform.sps);
+% 将“对外按符号/Hz配置”的信道参数映射到“对内按采样执行”。
+channelSample = adapt_channel_for_sps(p.channel, waveform);
 maxDelaySamples = max(0, round(double(p.channel.maxDelaySymbols) * waveform.sps));
 
 totalEbN0Points = numel(EbN0dBList);
@@ -210,17 +216,14 @@ dllEnabled = isfield(p.rxSync, "timingDll") && isfield(p.rxSync.timingDll, "enab
 syncEnabled = p.rxSync.compensateCarrier || p.rxSync.fineSearchRadius > 0 || ...
     p.rxSync.enableFractionalTiming || p.rxSync.carrierPll.enable || dllEnabled;
 mpEnabled = isfield(p.channel, "multipath") && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable;
-dopplerEnabled = isfield(p.channel, "doppler") && isfield(p.channel.doppler, "enable") && p.channel.doppler.enable;
-pathLossEnabled = isfield(p.channel, "pathLoss") && isfield(p.channel.pathLoss, "enable") && p.channel.pathLoss.enable;
 if waveform.enable
     pulseTxt = sprintf('ON(sps=%d)', waveform.sps);
 else
     pulseTxt = 'OFF';
 end
-fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, Pulse=%s, RxSync=%s, MP=%s, Doppler=%s, PathLoss=%s\n', ...
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, Pulse=%s, RxSync=%s, MP=%s\n', ...
     on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
-    on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabled), ...
-    on_off_text(mpEnabled), on_off_text(dopplerEnabled), on_off_text(pathLossEnabled));
+    on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabled), on_off_text(mpEnabled));
 fprintf('========================================\n\n');
 
 %% 主仿真循环：信道传输与接收端处理
@@ -258,23 +261,15 @@ for ie = 1:numel(EbN0dBList)
 
     nErr = zeros(numel(methods), 1);
     nTot = zeros(numel(methods), 1);
-    mseAcc = zeros(numel(methods), 1);
-    psnrAcc = zeros(numel(methods), 1);
-    ssimAcc = zeros(numel(methods), 1);
-    nMse = zeros(numel(methods), 1);
-    nPsnr = zeros(numel(methods), 1);
-    nSsim = zeros(numel(methods), 1);
+    metricAccComm = init_image_metric_acc_local(numel(methods));
+    metricAccComp = init_image_metric_acc_local(numel(methods));
 
 
     if eveEnabled
         nErrEve = zeros(numel(methods), 1);
         nTotEve = zeros(numel(methods), 1);
-        mseAccEve = zeros(numel(methods), 1);
-        psnrAccEve = zeros(numel(methods), 1);
-        ssimAccEve = zeros(numel(methods), 1);
-        nMseEve = zeros(numel(methods), 1);
-        nPsnrEve = zeros(numel(methods), 1);
-        nSsimEve = zeros(numel(methods), 1);
+        metricAccCommEve = init_image_metric_acc_local(numel(methods));
+        metricAccCompEve = init_image_metric_acc_local(numel(methods));
     end
 
     % --- 帧循环：每个Eb/N0点仿真多帧 ---
@@ -287,8 +282,14 @@ for ie = 1:numel(EbN0dBList)
             mpExtra = 0;
             if isfield(p, "channel") && isfield(p.channel, "multipath") ...
                     && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable ...
-                    && isfield(p.channel.multipath, "pathDelays") && ~isempty(p.channel.multipath.pathDelays)
-                mpExtra = max(double(p.channel.multipath.pathDelays(:)));
+                    && ( ...
+                        (isfield(p.channel.multipath, "pathDelaysSymbols") && ~isempty(p.channel.multipath.pathDelaysSymbols)) || ...
+                        (isfield(p.channel.multipath, "pathDelays") && ~isempty(p.channel.multipath.pathDelays)) )
+                if isfield(p.channel.multipath, "pathDelaysSymbols") && ~isempty(p.channel.multipath.pathDelaysSymbols)
+                    mpExtra = max(double(p.channel.multipath.pathDelaysSymbols(:)));
+                else
+                    mpExtra = max(double(p.channel.multipath.pathDelays(:)));
+                end
             end
             if isfield(p, "channel") && isfield(p.channel, "maxDelaySymbols")
                 syncCfgUse.maxSearchIndex = double(p.channel.maxDelaySymbols) + mpExtra + 6;
@@ -342,7 +343,6 @@ for ie = 1:numel(EbN0dBList)
                 rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
             end
 
-            bobOk = false;
             bobPhy = struct();
             rDataBobNominal = complex(zeros(0, 1));
             [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
@@ -490,41 +490,36 @@ for ie = 1:numel(EbN0dBList)
             end
             if packetIndependentBitChaos && chaosEnabled
                 payloadBitsRxDec = decrypt_payload_packets_rx_local(payloadBitsRxFrame, bobPacketOk(im, :), p, totalPayloadBitsBob, "known");
-                imgRx = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
+                imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
             elseif chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
                 if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
                     payloadBitsRxDec = chaos_decrypt_bits(payloadBitsRxFrame, chaosEncInfo);
-                    imgRx = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
+                    imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
                 else
                     imgRxEnc = payload_bits_to_image(payloadBitsRxFrame, metaBobUse, p.payload);
-                    imgRx = chaos_decrypt(imgRxEnc, chaosEncInfo);
+                    imgRxComm = chaos_decrypt(imgRxEnc, chaosEncInfo);
                 end
             else
-                imgRx = payload_bits_to_image(payloadBitsRxFrame, metaBobUse, p.payload);
+                imgRxComm = payload_bits_to_image(payloadBitsRxFrame, metaBobUse, p.payload);
             end
-            if packetConcealEnable && nPackets > 1
-                imgRx = conceal_image_from_packets(imgRx, bobPacketOk(im, :), rxLayoutBob, metaBobUse, p.payload, packetConcealMode);
+            imgRxComp = imgRxComm;
+            if packetConcealActive
+                imgRxComp = conceal_image_from_packets(imgRxComp, bobPacketOk(im, :), rxLayoutBob, metaBobUse, p.payload, packetConcealMode);
             end
 
-            [psnrNow, ssimNow, mseNow] = image_quality(imgTx, imgRx);
-            if isfinite(mseNow)
-                mseAcc(im) = mseAcc(im) + mseNow;
-                nMse(im) = nMse(im) + 1;
-            end
-            if ~isnan(psnrNow)
-                psnrAcc(im) = psnrAcc(im) + psnrNow;
-                nPsnr(im) = nPsnr(im) + 1;
-            end
-            if isfinite(ssimNow)
-                ssimAcc(im) = ssimAcc(im) + ssimNow;
-                nSsim(im) = nSsim(im) + 1;
-            end
+            [psnrNowComm, ssimNowComm, mseNowComm] = image_quality(imgTx, imgRxComm);
+            metricAccComm = accumulate_image_metric_acc_local(metricAccComm, im, mseNowComm, psnrNowComm, ssimNowComm);
+            [psnrNowComp, ssimNowComp, mseNowComp] = image_quality(imgTx, imgRxComp);
+            metricAccComp = accumulate_image_metric_acc_local(metricAccComp, im, mseNowComp, psnrNowComp, ssimNowComp);
 
             if frameIdx == 1 && ie == exampleIdx
                 example.(methods(im)).EbN0dB = EbN0dB;
-                example.(methods(im)).imgRx = imgRx;
+                example.(methods(im)).imgRxComm = imgRxComm;
+                example.(methods(im)).imgRxCompensated = imgRxComp;
+                example.(methods(im)).imgRx = imgRxComp;
                 example.(methods(im)).packetSuccessRate = mean(bobPacketOk(im, :));
             end
+            clear imgRxComm imgRxComp;
         end
 
         if eveEnabled
@@ -540,42 +535,37 @@ for ie = 1:numel(EbN0dBList)
                 end
                 if packetIndependentBitChaos && chaosEnabled && chaosAssumptionEve ~= "none"
                     payloadBitsEveDec = decrypt_payload_packets_rx_local(payloadBitsEveFrame, evePacketOk(im, :), p, totalPayloadBitsEve, chaosAssumptionEve);
-                    imgEve = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
+                    imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
                 elseif chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
                     if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
                         payloadBitsEveDec = chaos_decrypt_bits(payloadBitsEveFrame, chaosEncInfoEve);
-                        imgEve = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
+                        imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
                     else
                         imgEveEnc = payload_bits_to_image(payloadBitsEveFrame, metaEveUse, p.payload);
-                        imgEve = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
+                        imgEveComm = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
                     end
                 else
-                    imgEve = payload_bits_to_image(payloadBitsEveFrame, metaEveUse, p.payload);
+                    imgEveComm = payload_bits_to_image(payloadBitsEveFrame, metaEveUse, p.payload);
                 end
-                if packetConcealEnable && nPackets > 1
-                    imgEve = conceal_image_from_packets(imgEve, evePacketOk(im, :), rxLayoutEve, metaEveUse, p.payload, packetConcealMode);
+                imgEveComp = imgEveComm;
+                if packetConcealActive
+                    imgEveComp = conceal_image_from_packets(imgEveComp, evePacketOk(im, :), rxLayoutEve, metaEveUse, p.payload, packetConcealMode);
                 end
 
-                [psnrNowEve, ssimNowEve, mseNowEve] = image_quality(imgTx, imgEve);
-                if isfinite(mseNowEve)
-                    mseAccEve(im) = mseAccEve(im) + mseNowEve;
-                    nMseEve(im) = nMseEve(im) + 1;
-                end
-                if ~isnan(psnrNowEve)
-                    psnrAccEve(im) = psnrAccEve(im) + psnrNowEve;
-                    nPsnrEve(im) = nPsnrEve(im) + 1;
-                end
-                if isfinite(ssimNowEve)
-                    ssimAccEve(im) = ssimAccEve(im) + ssimNowEve;
-                    nSsimEve(im) = nSsimEve(im) + 1;
-                end
+                [psnrNowCommEve, ssimNowCommEve, mseNowCommEve] = image_quality(imgTx, imgEveComm);
+                metricAccCommEve = accumulate_image_metric_acc_local(metricAccCommEve, im, mseNowCommEve, psnrNowCommEve, ssimNowCommEve);
+                [psnrNowCompEve, ssimNowCompEve, mseNowCompEve] = image_quality(imgTx, imgEveComp);
+                metricAccCompEve = accumulate_image_metric_acc_local(metricAccCompEve, im, mseNowCompEve, psnrNowCompEve, ssimNowCompEve);
 
                 if frameIdx == 1 && ie == exampleIdx
                     exampleEve.(methods(im)).EbN0dB = EbN0dBEve;
                     exampleEve.(methods(im)).headerOk = all(evePacketOk(im, :));
                     exampleEve.(methods(im)).packetSuccessRate = mean(evePacketOk(im, :));
-                    exampleEve.(methods(im)).imgRx = imgEve;
+                    exampleEve.(methods(im)).imgRxComm = imgEveComm;
+                    exampleEve.(methods(im)).imgRxCompensated = imgEveComp;
+                    exampleEve.(methods(im)).imgRx = imgEveComp;
                 end
+                clear imgEveComm imgEveComp;
             end
         end
     end
@@ -583,35 +573,27 @@ for ie = 1:numel(EbN0dBList)
     % --- 当前Eb/N0点的性能统计 ---
     ber(:, ie) = nErr ./ max(nTot, 1);
 
-    mseOut = nan(numel(methods), 1);
-    psnrOut = nan(numel(methods), 1);
-    ssimOut = nan(numel(methods), 1);
-    validMse = nMse > 0;
-    validPsnr = nPsnr > 0;
-    validSsim = nSsim > 0;
-    mseOut(validMse) = mseAcc(validMse) ./ nMse(validMse);
-    psnrOut(validPsnr) = psnrAcc(validPsnr) ./ nPsnr(validPsnr);
-    ssimOut(validSsim) = ssimAcc(validSsim) ./ nSsim(validSsim);
-    mseVals(:, ie) = mseOut;
-    psnrVals(:, ie) = psnrOut;
-    ssimVals(:, ie) = ssimOut;
+    [mseOutComm, psnrOutComm, ssimOutComm] = finalize_image_metric_acc_local(metricAccComm);
+    [mseOutComp, psnrOutComp, ssimOutComp] = finalize_image_metric_acc_local(metricAccComp);
+    mseCommVals(:, ie) = mseOutComm;
+    psnrCommVals(:, ie) = psnrOutComm;
+    ssimCommVals(:, ie) = ssimOutComm;
+    mseCompVals(:, ie) = mseOutComp;
+    psnrCompVals(:, ie) = psnrOutComp;
+    ssimCompVals(:, ie) = ssimOutComp;
 
 
     if eveEnabled
         berEve(:, ie) = nErrEve ./ max(nTotEve, 1);
 
-        mseOutEve = nan(numel(methods), 1);
-        psnrOutEve = nan(numel(methods), 1);
-        ssimOutEve = nan(numel(methods), 1);
-        validMseEve = nMseEve > 0;
-        validPsnrEve = nPsnrEve > 0;
-        validSsimEve = nSsimEve > 0;
-        mseOutEve(validMseEve) = mseAccEve(validMseEve) ./ nMseEve(validMseEve);
-        psnrOutEve(validPsnrEve) = psnrAccEve(validPsnrEve) ./ nPsnrEve(validPsnrEve);
-        ssimOutEve(validSsimEve) = ssimAccEve(validSsimEve) ./ nSsimEve(validSsimEve);
-        mseEveVals(:, ie) = mseOutEve;
-        psnrEveVals(:, ie) = psnrOutEve;
-        ssimEveVals(:, ie) = ssimOutEve;
+        [mseOutCommEve, psnrOutCommEve, ssimOutCommEve] = finalize_image_metric_acc_local(metricAccCommEve);
+        [mseOutCompEve, psnrOutCompEve, ssimOutCompEve] = finalize_image_metric_acc_local(metricAccCompEve);
+        mseCommEveVals(:, ie) = mseOutCommEve;
+        psnrCommEveVals(:, ie) = psnrOutCommEve;
+        ssimCommEveVals(:, ie) = ssimOutCommEve;
+        mseCompEveVals(:, ie) = mseOutCompEve;
+        psnrCompEveVals(:, ie) = psnrOutCompEve;
+        ssimCompEveVals(:, ie) = ssimOutCompEve;
     end
 
     fprintf('[SIM] <<< Eb/N0点 %.2f dB 完成, 用时 %.2fs\n', EbN0dB, toc(pointTic));
@@ -625,19 +607,36 @@ end
 %% 仿真评估与结果汇总（SIMULATION EVALUATION）
 fprintf('[SIM] 开始频谱估计与结果汇总...\n');
 
-% 波形/频谱（单次突发，无信道）
-[psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum(txSymForSpectrum, modInfo);
+% 波形/频谱（单次突发，无信道，基于真实发射采样波形）
+[psd, freqHz, bw99Hz, etaBpsHz, spectrumInfo] = estimate_spectrum( ...
+    txSymForChannel, modInfo, waveform, struct("payloadBits", numel(payloadBits)));
 
 results = struct();
 results.params = p;
 results.ebN0dB = EbN0dBList;
 results.methods = methods;
 results.ber = ber;
-results.mse = mseVals;
-results.psnr = psnrVals;
-results.ssim = ssimVals;
+results.packetConceal = struct("configured", packetConcealEnable, "active", packetConcealActive, "mode", packetConcealMode);
+results.imageMetrics = struct();
+results.imageMetrics.communication = struct("mse", mseCommVals, "psnr", psnrCommVals, "ssim", ssimCommVals);
+results.imageMetrics.compensated = struct("mse", mseCompVals, "psnr", psnrCompVals, "ssim", ssimCompVals);
+results.mse = mseCommVals;
+results.psnr = psnrCommVals;
+results.ssim = ssimCommVals;
+results.mseCompensated = mseCompVals;
+results.psnrCompensated = psnrCompVals;
+results.ssimCompensated = ssimCompVals;
 results.example = example;
-results.spectrum = struct("freqHz", freqHz, "psd", psd, "bw99Hz", bw99Hz, "etaBpsHz", etaBpsHz);
+results.spectrum = struct( ...
+    "freqHz", freqHz, ...
+    "psd", psd, ...
+    "bw99Hz", bw99Hz, ...
+    "etaBpsHz", etaBpsHz, ...
+    "symbolRateHz", spectrumInfo.symbolRateHz, ...
+    "sampleRateHz", spectrumInfo.sampleRateHz, ...
+    "burstDurationSec", spectrumInfo.burstDurationSec, ...
+    "grossInfoBitRateBps", spectrumInfo.grossInfoBitRateBps, ...
+    "payloadBitRateBps", spectrumInfo.payloadBitRateBps);
 results.kl = struct("ebN0dB", EbN0dBList, ...
     "signalVsNoise", klSigVsNoise, ...
     "noiseVsSignal", klNoiseVsSig, ...
@@ -648,9 +647,15 @@ if eveEnabled
     results.eve = struct();
     results.eve.ebN0dB = eveEbN0dBList;
     results.eve.ber = berEve;
-    results.eve.mse = mseEveVals;
-    results.eve.psnr = psnrEveVals;
-    results.eve.ssim = ssimEveVals;
+    results.eve.imageMetrics = struct();
+    results.eve.imageMetrics.communication = struct("mse", mseCommEveVals, "psnr", psnrCommEveVals, "ssim", ssimCommEveVals);
+    results.eve.imageMetrics.compensated = struct("mse", mseCompEveVals, "psnr", psnrCompEveVals, "ssim", ssimCompEveVals);
+    results.eve.mse = mseCommEveVals;
+    results.eve.psnr = psnrCommEveVals;
+    results.eve.ssim = ssimCommEveVals;
+    results.eve.mseCompensated = mseCompEveVals;
+    results.eve.psnrCompensated = psnrCompEveVals;
+    results.eve.ssimCompensated = ssimCompEveVals;
     results.eve.example = exampleEve;
     results.eve.scrambleAssumption = string(p.eve.scrambleAssumption);
 end
@@ -683,6 +688,43 @@ end
 
 fprintf('[SIM] 链路仿真结束，总耗时 %.2fs\n', toc(simTic));
 
+end
+
+function acc = init_image_metric_acc_local(nMethods)
+acc = struct();
+acc.mse = zeros(nMethods, 1);
+acc.psnr = zeros(nMethods, 1);
+acc.ssim = zeros(nMethods, 1);
+acc.nMse = zeros(nMethods, 1);
+acc.nPsnr = zeros(nMethods, 1);
+acc.nSsim = zeros(nMethods, 1);
+end
+
+function acc = accumulate_image_metric_acc_local(acc, methodIdx, mseVal, psnrVal, ssimVal)
+if isfinite(mseVal)
+    acc.mse(methodIdx) = acc.mse(methodIdx) + mseVal;
+    acc.nMse(methodIdx) = acc.nMse(methodIdx) + 1;
+end
+if ~isnan(psnrVal)
+    acc.psnr(methodIdx) = acc.psnr(methodIdx) + psnrVal;
+    acc.nPsnr(methodIdx) = acc.nPsnr(methodIdx) + 1;
+end
+if isfinite(ssimVal)
+    acc.ssim(methodIdx) = acc.ssim(methodIdx) + ssimVal;
+    acc.nSsim(methodIdx) = acc.nSsim(methodIdx) + 1;
+end
+end
+
+function [mseOut, psnrOut, ssimOut] = finalize_image_metric_acc_local(acc)
+mseOut = nan(size(acc.mse));
+psnrOut = nan(size(acc.psnr));
+ssimOut = nan(size(acc.ssim));
+validMse = acc.nMse > 0;
+validPsnr = acc.nPsnr > 0;
+validSsim = acc.nSsim > 0;
+mseOut(validMse) = acc.mse(validMse) ./ acc.nMse(validMse);
+psnrOut(validPsnr) = acc.psnr(validPsnr) ./ acc.nPsnr(validPsnr);
+ssimOut(validSsim) = acc.ssim(validSsim) ./ acc.nSsim(validSsim);
 end
 
 function session = rx_session_empty_local()
@@ -977,11 +1019,11 @@ end
 
 isLongPkt = is_long_sync_packet(p.frame, pktIdx);
 if ctrl.forceLongSearch
-    candidateKinds = ["long"];
+    candidateKinds = "long";
 elseif isLongPkt
-    candidateKinds = ["long"];
+    candidateKinds = "long";
 else
-    candidateKinds = ["short"];
+    candidateKinds = "short";
 end
 
 for k = 1:numel(candidateKinds)

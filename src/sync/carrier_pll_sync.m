@@ -82,14 +82,14 @@ switch upper(string(modCfg.type))
         bq = sign(imag(y));
         if bi == 0; bi = 1; end
         if bq == 0; bq = 1; end
-        d = (bi + 1j*bq) / sqrt(2);
+        d = (bi + 1j * bq) / sqrt(2);
     case "MSK"
         % MSK为连续相位调制，使用四象限相位判决提供相位误差方向。
         bi = sign(real(y));
         bq = sign(imag(y));
         if bi == 0; bi = 1; end
         if bq == 0; bq = 1; end
-        d = (bi + 1j*bq) / sqrt(2);
+        d = (bi + 1j * bq) / sqrt(2);
     otherwise
         error("carrier_pll_sync不支持该调制: %s", string(modCfg.type));
 end

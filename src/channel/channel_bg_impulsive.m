@@ -1,20 +1,17 @@
 function [y, impMask, chState] = channel_bg_impulsive(x, N0, ch)
-%CHANNEL_BG_IMPULSIVE  复基带信道：AWGN + BG脉冲（可选多径/多普勒/路径损耗）。
+%CHANNEL_BG_IMPULSIVE  复基带信道：AWGN + BG脉冲（可选静态多径/干扰/同步失配）。
 %
 % 输入:
 %   x  - 输入符号（列向量）
 %   N0 - 背景噪声功率谱密度
-%   ch - 信道参数结构体
+%   ch - 采样级信道参数结构体（通常由adapt_channel_for_sps转换得到）
 %        .impulseProb      - 脉冲噪声出现概率
 %        .impulseToBgRatio - 脉冲噪声功率与背景噪声功率比
-%        .fading.enable/.type（可选）
-%        .multipath.enable/.pathDelays/.pathGainsDb（可选）
-%        .doppler.enable/.mode/.maxNorm/.commonNorm/.pathNorm（可选）
-%        .pathLoss.enable/.model（可选）
-%        .singleTone.enable/.toBgRatio/.normFreq（可选）
-%        .narrowband.enable/.toBgRatio/.centerFreq/.bandwidth（可选）
+%        .multipath.enable/.pathDelays/.pathGainsDb（可选，pathDelays单位: sample）
+%        .singleTone.enable/.toBgRatio/.normFreq（可选，normFreq单位: cycles/sample）
+%        .narrowband.enable/.toBgRatio/.centerFreq/.bandwidth（可选，单位: cycles/sample）
 %        .sweep.enable/.toBgRatio/.startFreq/.stopFreq/.periodSamples（可选）
-%        .syncImpairment.enable/.timingOffset/.cfoNorm/.phaseOffsetRad（可选）
+%        .syncImpairment.enable/.timingOffset/.phaseOffsetRad（可选，timingOffset单位: sample）
 %
 % 输出:
 %   y       - 加噪后符号
@@ -23,36 +20,7 @@ function [y, impMask, chState] = channel_bg_impulsive(x, N0, ch)
 
 x = x(:);
 n = (0:numel(x)-1).';
-
-% 默认：无衰落
-h = ones(size(x));
-fadingType = "none";
-dopplerEnable = false;
-dopplerMode = "none";
-dopplerNormUsed = [];
-dopplerPhaseUsed = [];
-pathLossEnable = false;
-pathLossDb = 0;
-pathLossLinear = 1;
-
-% 可选衰落：块瑞利/逐符号瑞利
-if isfield(ch, "fading") && isfield(ch.fading, "enable") && ch.fading.enable
-    if isfield(ch.fading, "type")
-        fadingType = lower(string(ch.fading.type));
-    else
-        fadingType = "rayleigh_block";
-    end
-    switch fadingType
-        case "rayleigh_block"
-            h0 = (randn(1, 1) + 1j*randn(1, 1)) / sqrt(2);
-            h = h0 * ones(size(x));
-        case "rayleigh_per_symbol"
-            h = (randn(size(x)) + 1j*randn(size(x))) / sqrt(2);
-        otherwise
-            error("未知的衰落类型: %s", string(fadingType));
-    end
-end
-xCh = h .* x;
+xCh = x;
 
 % 可选：多径抽头（整数时延）
 mpEnable = false;
@@ -73,7 +41,6 @@ if isfield(ch, "multipath") && isfield(ch.multipath, "enable") && ch.multipath.e
     dly = round(dly);
 
     amp = 10.^(gDb/20);
-    phase = zeros(size(amp));
     if isfield(ch.multipath, "pathPhasesRad") && ~isempty(ch.multipath.pathPhasesRad)
         phase = double(ch.multipath.pathPhasesRad(:));
         if numel(phase) ~= numel(amp)
@@ -83,79 +50,29 @@ if isfield(ch, "multipath") && isfield(ch.multipath, "enable") && ch.multipath.e
         phase = 2*pi*rand(size(amp));
     end
 
-    if ~isfield(ch.multipath, "fadingType")
-        mpFadingType = "static";
-    else
-        mpFadingType = lower(string(ch.multipath.fadingType));
-    end
-    switch mpFadingType
-        case "static"
-            cplxAmp = amp .* exp(1j*phase);
-        case "rayleigh_block"
-            cplxAmp = amp .* exp(1j*phase) .* ((randn(size(amp)) + 1j*randn(size(amp))) / sqrt(2));
-        otherwise
-            error("未知的multipath.fadingType: %s", string(mpFadingType));
-    end
+    cplxAmp = amp .* exp(1j*phase);
 
     mpTaps = complex(zeros(max(dly)+1, 1));
     for k = 1:numel(dly)
         mpTaps(dly(k)+1) = mpTaps(dly(k)+1) + cplxAmp(k);
     end
-    if isfield(ch, "doppler") && isfield(ch.doppler, "enable") && ch.doppler.enable
-        dopplerEnable = true;
-        if isfield(ch.doppler, "mode")
-            dopplerMode = lower(string(ch.doppler.mode));
-        else
-            dopplerMode = "per_path_random";
-        end
-        [dopplerNormUsed, dopplerPhaseUsed] = resolve_doppler_profile(ch.doppler, numel(dly));
-        xMp = complex(zeros(size(xCh)));
-        for k = 1:numel(dly)
-            xDelayed = integer_delay(xCh, dly(k));
-            osc = exp(1j * (2*pi*dopplerNormUsed(k)*n + dopplerPhaseUsed(k)));
-            xMp = xMp + cplxAmp(k) .* xDelayed .* osc;
-        end
-        xCh = xMp;
-    else
-        xCh = filter(mpTaps, 1, xCh);
-    end
+    xCh = filter(mpTaps, 1, xCh);
 end
 
-% 可选：多普勒（无多径时退化为平坦频移）
-if ~mpEnable && isfield(ch, "doppler") && isfield(ch.doppler, "enable") && ch.doppler.enable
-    dopplerEnable = true;
-    if isfield(ch.doppler, "mode")
-        dopplerMode = lower(string(ch.doppler.mode));
-    else
-        dopplerMode = "common";
-    end
-    [dopplerNormUsed, dopplerPhaseUsed] = resolve_doppler_profile(ch.doppler, 1);
-    xCh = xCh .* exp(1j * (2*pi*dopplerNormUsed(1)*n + dopplerPhaseUsed(1)));
-end
-
-% 可选：大尺度路径损耗（对信号功率衰减，不改变噪声注入方式）
-if isfield(ch, "pathLoss") && isfield(ch.pathLoss, "enable") && ch.pathLoss.enable
-    pathLossEnable = true;
-    [pathLossDb, pathLossLinear] = resolve_path_loss(ch.pathLoss);
-    xCh = pathLossLinear * xCh;
-end
-
-% 可选：同步失配（分数定时偏移 + 载波频偏/相偏）
+% 可选：同步失配（分数定时偏移 + 初始相位偏移）
 syncImpEnable = false;
 timingOffset = 0;
-cfoNorm = 0;
 phaseOffsetRad = 0;
 if isfield(ch, "syncImpairment") && isfield(ch.syncImpairment, "enable") && ch.syncImpairment.enable
     syncImpEnable = true;
     if isfield(ch.syncImpairment, "timingOffset"); timingOffset = double(ch.syncImpairment.timingOffset); end
-    if isfield(ch.syncImpairment, "cfoNorm"); cfoNorm = double(ch.syncImpairment.cfoNorm); end
     if isfield(ch.syncImpairment, "phaseOffsetRad"); phaseOffsetRad = double(ch.syncImpairment.phaseOffsetRad); end
 
     if abs(timingOffset) > 1e-12
         xCh = fractional_delay(xCh, timingOffset);
     end
-    if abs(cfoNorm) > 0 || abs(phaseOffsetRad) > 0
-        xCh = xCh .* exp(1j * (2*pi*cfoNorm*n + phaseOffsetRad));
+    if abs(phaseOffsetRad) > 0
+        xCh = xCh .* exp(1j * phaseOffsetRad);
     end
 end
 
@@ -267,23 +184,13 @@ y = xCh + nBg + impMask .* nImp + jammer;
 
 if nargout >= 3
     chState = struct();
-    chState.h = h;
-    chState.fadingType = char(fadingType);
     chState.singleToneEnable = singleToneEnable;
     chState.narrowbandEnable = narrowbandEnable;
     chState.sweepEnable = sweepEnable;
     chState.multipathEnable = mpEnable;
     chState.multipathTaps = mpTaps;
-    chState.dopplerEnable = dopplerEnable;
-    chState.dopplerMode = char(dopplerMode);
-    chState.dopplerNorm = dopplerNormUsed;
-    chState.dopplerPhaseRad = dopplerPhaseUsed;
-    chState.pathLossEnable = pathLossEnable;
-    chState.pathLossDb = pathLossDb;
-    chState.pathLossLinear = pathLossLinear;
     chState.syncImpairmentEnable = syncImpEnable;
     chState.timingOffset = timingOffset;
-    chState.cfoNorm = cfoNorm;
     chState.phaseOffsetRad = phaseOffsetRad;
 end
 end

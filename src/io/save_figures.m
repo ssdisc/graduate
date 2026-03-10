@@ -5,12 +5,13 @@ function save_figures(outDir, imgTx, results)
 %   outDir  - 输出目录
 %   imgTx   - 发送端原图
 %   results - 仿真结果结构体
-%             .methods, .ebN0dB, .ber, .mse, .psnr, .ssim
+%             .methods, .ebN0dB, .ber
+%             .imageMetrics.communication/.compensated（或兼容字段.mse/.psnr/.ssim）
 %             .kl（含signalVsNoise/noiseVsSignal/symmetric）
 %             .spectrum（freqHz, psd, bw99Hz, etaBpsHz）
 %             .example（按方法名的动态字段保存示例接收图）
 %                 .<method>.EbN0dB - 示例图对应的Eb/N0（dB）
-%                 .<method>.imgRx  - 该方法的示例接收图像
+%                 .<method>.imgRxComm/.imgRxCompensated - 两种示例接收图像
 %             .eve（可选，含 .example.<method>.EbN0dB/.headerOk/.imgRx）
 %             .covert.warden（可选）
 %
@@ -19,6 +20,8 @@ function save_figures(outDir, imgTx, results)
 
 methods = results.methods;
 EbN0dB = results.ebN0dB;
+[commMetrics, compMetrics] = local_get_image_metrics(results);
+packetConcealActive = local_packet_conceal_active(results);
 
 fig1 = figure("Name", "BER");
 semilogy(EbN0dB, results.ber.', "o-");
@@ -29,23 +32,45 @@ legend(methods, "Location", "southwest");
 exportgraphics(fig1, fullfile(outDir, "ber.png"));
 close(fig1);
 
-fig2 = figure("Name", "PSNR");
-plot(EbN0dB, results.psnr.', "o-");
+fig2 = figure("Name", "PSNR (Communication)");
+plot(EbN0dB, commMetrics.psnr.', "o-");
 grid on;
 xlabel("E_b/N_0 (dB)");
-ylabel("PSNR (dB)");
+ylabel("PSNR (dB, communication only)");
 legend(methods, "Location", "southeast");
 exportgraphics(fig2, fullfile(outDir, "psnr.png"));
+exportgraphics(fig2, fullfile(outDir, "psnr_comm.png"));
 close(fig2);
 
-fig2m = figure("Name", "MSE");
-semilogy(EbN0dB, results.mse.', "o-");
+fig2m = figure("Name", "MSE (Communication)");
+semilogy(EbN0dB, commMetrics.mse.', "o-");
 grid on;
 xlabel("E_b/N_0 (dB)");
-ylabel("MSE");
+ylabel("MSE (communication only)");
 legend(methods, "Location", "northeast");
 exportgraphics(fig2m, fullfile(outDir, "mse.png"));
+exportgraphics(fig2m, fullfile(outDir, "mse_comm.png"));
 close(fig2m);
+
+if packetConcealActive
+    fig2c = figure("Name", "PSNR (Compensated)");
+    plot(EbN0dB, compMetrics.psnr.', "o-");
+    grid on;
+    xlabel("E_b/N_0 (dB)");
+    ylabel("PSNR (dB, after concealment)");
+    legend(methods, "Location", "southeast");
+    exportgraphics(fig2c, fullfile(outDir, "psnr_compensated.png"));
+    close(fig2c);
+
+    fig2cm = figure("Name", "MSE (Compensated)");
+    semilogy(EbN0dB, compMetrics.mse.', "o-");
+    grid on;
+    xlabel("E_b/N_0 (dB)");
+    ylabel("MSE (after concealment)");
+    legend(methods, "Location", "northeast");
+    exportgraphics(fig2cm, fullfile(outDir, "mse_compensated.png"));
+    close(fig2cm);
+end
 
 if isfield(results, "kl")
     fig2k = figure("Name", "KL Divergence");
@@ -62,24 +87,47 @@ end
 
 
 if isfield(results, "eve")
-    fig2b = figure("Name", "PSNR (Eve)");
-    plot(results.eve.ebN0dB, results.eve.psnr.', "o-");
+    [commMetricsEve, compMetricsEve] = local_get_image_metrics(results.eve);
+    fig2b = figure("Name", "PSNR (Eve, Communication)");
+    plot(results.eve.ebN0dB, commMetricsEve.psnr.', "o-");
     grid on;
     xlabel("E_b/N_0 at Eve (dB)");
-    ylabel("PSNR (dB)");
+    ylabel("PSNR (dB, communication only)");
     legend(methods, "Location", "southeast");
     exportgraphics(fig2b, fullfile(outDir, "psnr_eve.png"));
+    exportgraphics(fig2b, fullfile(outDir, "psnr_eve_comm.png"));
     close(fig2b);
 
-    if isfield(results.eve, "mse")
-        fig2bm = figure("Name", "MSE (Eve)");
-        semilogy(results.eve.ebN0dB, results.eve.mse.', "o-");
+    if isfield(commMetricsEve, "mse")
+        fig2bm = figure("Name", "MSE (Eve, Communication)");
+        semilogy(results.eve.ebN0dB, commMetricsEve.mse.', "o-");
         grid on;
         xlabel("E_b/N_0 at Eve (dB)");
-        ylabel("MSE");
+        ylabel("MSE (communication only)");
         legend(methods, "Location", "northeast");
         exportgraphics(fig2bm, fullfile(outDir, "mse_eve.png"));
+        exportgraphics(fig2bm, fullfile(outDir, "mse_eve_comm.png"));
         close(fig2bm);
+    end
+
+    if packetConcealActive
+        fig2bc = figure("Name", "PSNR (Eve, Compensated)");
+        plot(results.eve.ebN0dB, compMetricsEve.psnr.', "o-");
+        grid on;
+        xlabel("E_b/N_0 at Eve (dB)");
+        ylabel("PSNR (dB, after concealment)");
+        legend(methods, "Location", "southeast");
+        exportgraphics(fig2bc, fullfile(outDir, "psnr_eve_compensated.png"));
+        close(fig2bc);
+
+        fig2bcm = figure("Name", "MSE (Eve, Compensated)");
+        semilogy(results.eve.ebN0dB, compMetricsEve.mse.', "o-");
+        grid on;
+        xlabel("E_b/N_0 at Eve (dB)");
+        ylabel("MSE (after concealment)");
+        legend(methods, "Location", "northeast");
+        exportgraphics(fig2bcm, fullfile(outDir, "mse_eve_compensated.png"));
+        close(fig2bcm);
     end
 
     fig1b = figure("Name", "BER (Eve)");
@@ -119,28 +167,32 @@ close(figTx);
 for k = 1:numel(methods)
     if isfield(results.example, methods(k))
         figRx = figure("Name", sprintf("RX - %s", methods(k)), "Visible", "off");
-        
-        % 获取该方法的PSNR和SSIM
-        mseVal = results.mse(k, :);
-        psnrVal = results.psnr(k, :);
-        ssimVal = results.ssim(k, :);
+        exampleEntry = results.example.(methods(k));
+        mseCommVal = commMetrics.mse(k, :);
+        psnrCommVal = commMetrics.psnr(k, :);
+        ssimCommVal = commMetrics.ssim(k, :);
+        mseCompVal = compMetrics.mse(k, :);
+        psnrCompVal = compMetrics.psnr(k, :);
+        ssimCompVal = compMetrics.ssim(k, :);
         % 与example图像保持一致的Eb/N0索引
-        if isfield(results.example.(methods(k)), "EbN0dB")
-            ebN0Sel = double(results.example.(methods(k)).EbN0dB);
+        if isfield(exampleEntry, "EbN0dB")
+            ebN0Sel = double(exampleEntry.EbN0dB);
             [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
         else
             exampleIdx = numel(results.ebN0dB);
             ebN0Sel = results.ebN0dB(exampleIdx);
         end
-        mseMid = mseVal(exampleIdx);
-        psnrMid = psnrVal(exampleIdx);
-        ssimMid = ssimVal(exampleIdx);
         ebN0Mid = ebN0Sel;
-        
-        imshow(results.example.(methods(k)).imgRx);
-        titleStr = sprintf("RX - %s\nEb/N0=%.0fdB, MSE=%.3g, PSNR=%.2fdB, SSIM=%.3f", ...
-            methods(k), ebN0Mid, mseMid, psnrMid, ssimMid);
-        title(titleStr, "FontSize", 12);
+
+        imshow(local_get_example_image(exampleEntry));
+        titleLines = cell(3 + double(packetConcealActive), 1);
+        titleLines{1} = sprintf("RX - %s", methods(k));
+        titleLines{2} = sprintf("Eb/N0=%.0fdB", ebN0Mid);
+        titleLines{3} = local_metric_line("Comm", mseCommVal(exampleIdx), psnrCommVal(exampleIdx), ssimCommVal(exampleIdx), true);
+        if packetConcealActive
+            titleLines{4} = local_metric_line("Comp", mseCompVal(exampleIdx), psnrCompVal(exampleIdx), ssimCompVal(exampleIdx), true);
+        end
+        title(titleLines, "FontSize", 12);
         
         % 文件名带序号，方便排序
         filename = sprintf("%02d_rx_%s.png", k, lower(strrep(methods(k), " ", "_")));
@@ -154,6 +206,7 @@ for k = 1:numel(methods)
     if isfield(results.example, methods(k))
         figCmp = figure("Name", sprintf("Compare - %s", methods(k)), "Visible", "off");
         figCmp.Position = [100 100 800 400];
+        exampleEntry = results.example.(methods(k));
         
         tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
         
@@ -164,17 +217,20 @@ for k = 1:numel(methods)
         
         % 右：RX
         nexttile;
-        imshow(results.example.(methods(k)).imgRx);
-        if isfield(results.example.(methods(k)), "EbN0dB")
-            ebN0Sel = double(results.example.(methods(k)).EbN0dB);
+        imshow(local_get_example_image(exampleEntry));
+        if isfield(exampleEntry, "EbN0dB")
+            ebN0Sel = double(exampleEntry.EbN0dB);
             [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
         else
             exampleIdx = numel(results.ebN0dB);
         end
-        mseMid = results.mse(k, exampleIdx);
-        psnrMid = results.psnr(k, exampleIdx);
-        ssimMid = results.ssim(k, exampleIdx);
-        title(sprintf("RX - %s\nMSE=%.3g, PSNR=%.2fdB, SSIM=%.3f", methods(k), mseMid, psnrMid, ssimMid), "FontSize", 12);
+        titleLines = cell(2 + double(packetConcealActive), 1);
+        titleLines{1} = sprintf("RX - %s", methods(k));
+        titleLines{2} = local_metric_line("Comm", commMetrics.mse(k, exampleIdx), commMetrics.psnr(k, exampleIdx), commMetrics.ssim(k, exampleIdx), true);
+        if packetConcealActive
+            titleLines{3} = local_metric_line("Comp", compMetrics.mse(k, exampleIdx), compMetrics.psnr(k, exampleIdx), compMetrics.ssim(k, exampleIdx), true);
+        end
+        title(titleLines, "FontSize", 12);
         
         filename = sprintf("compare_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
         exportgraphics(figCmp, fullfile(imagesDir, filename), 'Resolution', 200);
@@ -201,12 +257,12 @@ title("TX");
 for k = 1:numel(methods)
     nexttile;
     if isfield(results.example, methods(k))
-        imshow(results.example.(methods(k)).imgRx);
-        title(sprintf("RX - %s", methods(k)));
+        imshow(local_get_example_image(results.example.(methods(k))));
+        title(local_example_label("RX", methods(k), packetConcealActive));
     else
         text(0.1, 0.5, "No example", "Units", "normalized");
         axis off;
-        title(sprintf("RX - %s", methods(k)));
+        title(local_example_label("RX", methods(k), packetConcealActive));
     end
 end
 exportgraphics(fig4, fullfile(outDir, "images.png"), 'Resolution', 150);
@@ -242,22 +298,20 @@ if isfield(results, "eve") && isfield(results.eve, "example")
             
             % 中：Bob接收
             nexttile;
-            imshow(results.example.(methods(k)).imgRx);
-            mseBob = results.mse(k, exampleIdx);
-            psnrBob = results.psnr(k, exampleIdx);
-            ssimBob = results.ssim(k, exampleIdx);
+            imshow(local_get_example_image(results.example.(methods(k))));
             ebN0Bob = results.ebN0dB(exampleIdx);
-            title(sprintf("Bob - %s\nEb/N0=%.0fdB, MSE=%.3g, PSNR=%.2fdB", methods(k), ebN0Bob, mseBob, psnrBob), "FontSize", 12);
+            titleLinesBob = cell(3 + double(packetConcealActive), 1);
+            titleLinesBob{1} = sprintf("Bob - %s", methods(k));
+            titleLinesBob{2} = sprintf("Eb/N0=%.0fdB", ebN0Bob);
+            titleLinesBob{3} = local_metric_line("Comm", commMetrics.mse(k, exampleIdx), commMetrics.psnr(k, exampleIdx), commMetrics.ssim(k, exampleIdx), false);
+            if packetConcealActive
+                titleLinesBob{4} = local_metric_line("Comp", compMetrics.mse(k, exampleIdx), compMetrics.psnr(k, exampleIdx), compMetrics.ssim(k, exampleIdx), false);
+            end
+            title(titleLinesBob, "FontSize", 12);
             
             % 右：Eve截获
             nexttile;
-            imshow(results.eve.example.(methods(k)).imgRx);
-            mseEve = NaN;
-            if isfield(results.eve, "mse")
-                mseEve = results.eve.mse(k, exampleIdx);
-            end
-            psnrEve = results.eve.psnr(k, exampleIdx);
-            ssimEve = results.eve.ssim(k, exampleIdx);
+            imshow(local_get_example_image(results.eve.example.(methods(k))));
             ebN0Eve = results.eve.ebN0dB(exampleIdx);
             hdrTxt = "";
             if isfield(results.eve.example.(methods(k)), "headerOk")
@@ -267,7 +321,14 @@ if isfield(results, "eve") && isfield(results.eve, "example")
                     hdrTxt = " (hdr fail)";
                 end
             end
-            title(sprintf("Eve - %s%s\nEb/N0=%.0fdB, MSE=%.3g, PSNR=%.2fdB", methods(k), hdrTxt, ebN0Eve, mseEve, psnrEve), "FontSize", 12);
+            titleLinesEve = cell(3 + double(packetConcealActive), 1);
+            titleLinesEve{1} = sprintf("Eve - %s%s", methods(k), hdrTxt);
+            titleLinesEve{2} = sprintf("Eb/N0=%.0fdB", ebN0Eve);
+            titleLinesEve{3} = local_metric_line("Comm", commMetricsEve.mse(k, exampleIdx), commMetricsEve.psnr(k, exampleIdx), commMetricsEve.ssim(k, exampleIdx), false);
+            if packetConcealActive
+                titleLinesEve{4} = local_metric_line("Comp", compMetricsEve.mse(k, exampleIdx), compMetricsEve.psnr(k, exampleIdx), compMetricsEve.ssim(k, exampleIdx), false);
+            end
+            title(titleLinesEve, "FontSize", 12);
             
             filename = sprintf("bob_vs_eve_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
             exportgraphics(figEve, fullfile(eveDir, filename), 'Resolution', 200);
@@ -288,12 +349,12 @@ if isfield(results, "eve") && isfield(results.eve, "example")
     for k = 1:numel(methods)
         nexttile;
         if isfield(results.example, methods(k))
-            imshow(results.example.(methods(k)).imgRx);
-            title(sprintf("Bob - %s", methods(k)));
+            imshow(local_get_example_image(results.example.(methods(k))));
+            title(local_example_label("Bob", methods(k), packetConcealActive));
         else
             text(0.1, 0.5, "No example", "Units", "normalized");
             axis off;
-            title(sprintf("Bob - %s", methods(k)));
+            title(local_example_label("Bob", methods(k), packetConcealActive));
         end
     end
 
@@ -310,7 +371,7 @@ if isfield(results, "eve") && isfield(results.eve, "example")
     for k = 1:numel(methods)
         nexttile;
         if isfield(results.eve.example, methods(k))
-            imshow(results.eve.example.(methods(k)).imgRx);
+            imshow(local_get_example_image(results.eve.example.(methods(k))));
             hdrTxt = "";
             if isfield(results.eve.example.(methods(k)), "headerOk")
                 if results.eve.example.(methods(k)).headerOk
@@ -320,14 +381,14 @@ if isfield(results, "eve") && isfield(results.eve, "example")
                 end
             end
             if strlength(hdrTxt) > 0
-                title(sprintf("Eve - %s (%s)", methods(k), hdrTxt));
+                title(local_example_label("Eve", methods(k), packetConcealActive, hdrTxt));
             else
-                title(sprintf("Eve - %s", methods(k)));
+                title(local_example_label("Eve", methods(k), packetConcealActive));
             end
         else
             text(0.1, 0.5, "No example", "Units", "normalized");
             axis off;
-            title(sprintf("Eve - %s", methods(k)));
+            title(local_example_label("Eve", methods(k), packetConcealActive));
         end
     end
     exportgraphics(fig5, fullfile(outDir, "intercept.png"), 'Resolution', 150);
@@ -355,4 +416,71 @@ if isfield(results, "covert") && isfield(results.covert, "warden")
     exportgraphics(fig6, fullfile(outDir, "warden.png"));
     close(fig6);
 end
+end
+
+function [commMetrics, compMetrics] = local_get_image_metrics(results)
+commMetrics = struct("mse", results.mse, "psnr", results.psnr, "ssim", results.ssim);
+compMetrics = commMetrics;
+
+if isfield(results, "imageMetrics") && isstruct(results.imageMetrics)
+    if isfield(results.imageMetrics, "communication")
+        commMetrics = results.imageMetrics.communication;
+    end
+    if isfield(results.imageMetrics, "compensated")
+        compMetrics = results.imageMetrics.compensated;
+    end
+end
+
+if isfield(results, "mseCompensated")
+    compMetrics.mse = results.mseCompensated;
+end
+if isfield(results, "psnrCompensated")
+    compMetrics.psnr = results.psnrCompensated;
+end
+if isfield(results, "ssimCompensated")
+    compMetrics.ssim = results.ssimCompensated;
+end
+end
+
+function tf = local_packet_conceal_active(results)
+tf = false;
+if isfield(results, "packetConceal") && isfield(results.packetConceal, "active")
+    tf = logical(results.packetConceal.active);
+end
+end
+
+function img = local_get_example_image(exampleEntry)
+if isfield(exampleEntry, "imgRxCompensated")
+    img = exampleEntry.imgRxCompensated;
+elseif isfield(exampleEntry, "imgRx")
+    img = exampleEntry.imgRx;
+elseif isfield(exampleEntry, "imgRxComm")
+    img = exampleEntry.imgRxComm;
+else
+    img = [];
+end
+end
+
+function txt = local_metric_line(label, mseVal, psnrVal, ssimVal, includeSsim)
+if nargin < 5
+    includeSsim = true;
+end
+label = char(string(label));
+if includeSsim
+    txt = sprintf("%s: MSE=%.3g, PSNR=%.2fdB, SSIM=%.3f", label, mseVal, psnrVal, ssimVal);
+else
+    txt = sprintf("%s: MSE=%.3g, PSNR=%.2fdB", label, mseVal, psnrVal);
+end
+end
+
+function txt = local_example_label(prefix, methodName, packetConcealActive, varargin)
+suffix = "";
+if packetConcealActive
+    suffix = " (comp)";
+end
+extra = "";
+if nargin >= 4 && ~isempty(varargin{1}) && strlength(string(varargin{1})) > 0
+    extra = sprintf(" (%s)", string(varargin{1}));
+end
+txt = sprintf("%s - %s%s%s", char(string(prefix)), char(string(methodName)), char(suffix), char(extra));
 end

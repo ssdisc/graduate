@@ -61,7 +61,6 @@ packetStrideHops = packet_stride_hops_local(p, maxPacketDataSym);
 
 txPackets = repmat(struct(), nPackets, 1);
 txBurstChannelParts = cell(nPackets, 1);
-txBurstSpectrumParts = cell(nPackets, 1);
 modInfoRef = struct();
 
 for pktIdx = 1:nPackets
@@ -69,10 +68,9 @@ for pktIdx = 1:nPackets
     endBit = min(pktIdx * pktBitsPerPacket, totalBits);
     payloadPktPlain = payloadBits(startBit:endBit);
     payloadPkt = payloadPktPlain;
-    chaosEncInfoPkt = struct('enabled', false, 'mode', "none");
     if packetChaosEnable
         chaosPktCfg = derive_packet_chaos_cfg(p.chaosEncrypt, pktIdx);
-        [payloadPkt, chaosEncInfoPkt] = chaos_encrypt_bits(payloadPktPlain, chaosPktCfg);
+        payloadPkt = chaos_encrypt_bits(payloadPktPlain, chaosPktCfg);
     end
     payloadPktBytes = ceil(numel(payloadPkt) / 8);
     if payloadPktBytes > 65535
@@ -146,7 +144,6 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).txSymPkt = txSymPkt;
     txPackets(pktIdx).txSymForChannel = txSymForChannel;
     txBurstChannelParts{pktIdx} = txSymForChannel;
-    txBurstSpectrumParts{pktIdx} = txSymPkt;
 end
 
 plan = struct();
@@ -164,7 +161,6 @@ plan.packetChaosEnable = packetChaosEnable;
 plan.waveform = waveform;
 plan.modInfo = modInfoRef;
 plan.txBurstForChannel = vertcat(txBurstChannelParts{:});
-plan.txBurstForSpectrum = vertcat(txBurstSpectrumParts{:});
 end
 
 function nSym = n_symbols_for_info_bits_local(p, nInfoBits)

@@ -120,9 +120,7 @@ if logical(syncCfg.compensateCarrier)
     preTimes = idx + (0:numel(p)-1).';
     pre = interp1(idxAxis, r, preTimes, "linear", 0);
     denom = sum(abs(p).^2);
-
     cfoRad = 0;
-    phiHat = 0;
     if logical(syncCfg.estimateCfo)
         [cfoRad, phiHat] = estimate_cfo_phase(pre, p, preTimes);
         nAll = idxAxis;
@@ -130,7 +128,6 @@ if logical(syncCfg.compensateCarrier)
     else
         rComp = r;
     end
-
     preComp = interp1(idxAxis, rComp, preTimes, "linear", 0);
     if denom > 0
         hHat = sum(preComp .* conj(p)) / denom;

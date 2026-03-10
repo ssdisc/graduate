@@ -9,7 +9,7 @@ p.rngSeed = 1;
 %% 仿真控制
 p.sim = struct();
 p.sim.ebN0dBList = 0:2:10;
-p.sim.nFramesPerPoint = 1;
+p.sim.nFramesPerPoint = 10;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
 p.sim.exampleEbN0dB = inf; % 示例图默认取最高Eb/N0；设为具体值时取最近点
@@ -119,74 +119,54 @@ p.fh.freqSet = linspace(-0.35, 0.35, p.fh.nFreqs);
 % 9.5) 波形成型与过采样（复基带）
 p.waveform = struct();
 p.waveform.enable = true;        % 启用Tx/Rx根升余弦成型与匹配滤波
+p.waveform.symbolRateHz = 10e3;  % 符号率（Hz），用于真实采样率/频谱/OBW统计
 p.waveform.sps = 4;              % 每符号采样数
 p.waveform.rolloff = 0.25;       % RRC滚降系数
 p.waveform.spanSymbols = 10;     % RRC滤波器长度（单位：符号）
 p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
 
 %% 信道
-% AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/衰落）
+% 对外配置口径：
+% - 时延/周期类参数按“符号”配置
+% - 频率类参数按“Hz”配置
+% 进入采样级信道前再统一换算到样点/归一化频率。
+% AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/同步失配）
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
 p.channel.impulseProb = 0.01;    % 每个符号产生脉冲的概率
 p.channel.impulseToBgRatio = 50; % 脉冲方差 = 比值 * 背景方差
-% 可选：块瑞利衰落（用于更贴近无线场景）
-p.channel.fading = struct();
-p.channel.fading.enable = false;
-p.channel.fading.type = "rayleigh_block"; % 'rayleigh_block' | 'rayleigh_per_symbol'
 % 可选：单音干扰（窄带强干扰）
 p.channel.singleTone = struct();
 p.channel.singleTone.enable = false;
 p.channel.singleTone.toBgRatio = 10;    % 单音功率与背景噪声功率比
-p.channel.singleTone.normFreq = 0.08;   % 归一化频率（cycles/sample），范围(-0.5,0.5)
+p.channel.singleTone.freqHz = 800;      % 单音频率（Hz）
 p.channel.singleTone.randomPhase = true;
 % 可选：窄带噪声干扰
 p.channel.narrowband = struct();
 p.channel.narrowband.enable = false;
 p.channel.narrowband.toBgRatio = 8;     % 干扰功率与背景噪声功率比
-p.channel.narrowband.centerFreq = 0.12; % 归一化中心频率（cycles/sample）
-p.channel.narrowband.bandwidth = 0.08;  % 归一化双边带宽（0,1]
+p.channel.narrowband.centerHz = 1200;   % 窄带噪声中心频率（Hz）
+p.channel.narrowband.bandwidthHz = 800; % 窄带噪声双边带宽（Hz）
 % 可选：扫频干扰（线性chirp）
 p.channel.sweep = struct();
 p.channel.sweep.enable = false;
 p.channel.sweep.toBgRatio = 8;          % 扫频干扰功率与背景噪声功率比
-p.channel.sweep.startFreq = -0.20;      % 起始归一化频率（cycles/sample）
-p.channel.sweep.stopFreq = 0.20;        % 终止归一化频率（cycles/sample）
+p.channel.sweep.startHz = -2000;        % 起始频率（Hz）
+p.channel.sweep.stopHz = 2000;          % 终止频率（Hz）
 p.channel.sweep.periodSymbols = 256;    % 单次扫频周期（符号数）
 p.channel.sweep.randomPhase = true;
 % 可选：同步失配（用于验证“完整同步链路”）
 p.channel.syncImpairment = struct();
 p.channel.syncImpairment.enable = false;
-p.channel.syncImpairment.timingOffset = 0.0;      % 分数符号偏移（单位：sample）
-p.channel.syncImpairment.cfoNorm = 0.0;           % 归一化频偏（cycles/sample）
+p.channel.syncImpairment.timingOffsetSymbols = 0.0; % 分数符号偏移（单位：symbol）
 p.channel.syncImpairment.phaseOffsetRad = 0.0;    % 初始相位偏移（rad）
 % 可选：多径抽头信道（整数抽头时延，复基带等效）
 p.channel.multipath = struct();
 p.channel.multipath.enable = true;
-p.channel.multipath.pathDelays = [0 1 2];      % 单位: sample
+p.channel.multipath.pathDelaysSymbols = [0 1 2];   % 各径时延（单位：symbol）
 p.channel.multipath.pathGainsDb = [0 -12 -18]; % 各径平均增益(dB)
 % 各径相位（固定相位便于可复现对比）
 p.channel.multipath.pathPhasesRad = [0 0 0];
-p.channel.multipath.fadingType = "static";     % 'static' | 'rayleigh_block'
-% 可选：多普勒（归一化到采样率，cycles/sample）
-% 若与多径同时启用，可形成“每径不同频移”的时变信道。
-p.channel.doppler = struct();
-p.channel.doppler.enable = false;
-p.channel.doppler.mode = "common";             % 'common' | 'per_path_random' | 'per_path_fixed'
-p.channel.doppler.maxNorm = 3e-4;              % mode=per_path_random/fixed时生效
-p.channel.doppler.commonNorm = 1e-4;           % mode=common时生效
-p.channel.doppler.pathNorm = [];               % 显式指定每径频移（覆盖mode）
-p.channel.doppler.initialPhaseRad = [];        % 空=随机初相，标量/向量均可
-% 可选：路径损耗（大尺度衰减）
-p.channel.pathLoss = struct();
-p.channel.pathLoss.enable = false;
-p.channel.pathLoss.model = "log_distance";     % 'log_distance' | 'fixed_db'
-p.channel.pathLoss.referenceLossDb = 0.0;      % d0处路径损耗(dB)
-p.channel.pathLoss.referenceDistance = 1.0;    % d0（任意一致单位）
-p.channel.pathLoss.distance = 1.5;             % 链路距离（同d0单位）
-p.channel.pathLoss.pathLossExp = 2.0;          % 路径损耗指数
-p.channel.pathLoss.shadowStdDb = 0.0;          % 对数正态阴影标准差(dB)
-p.channel.pathLoss.fixedLossDb = 0.0;          % model='fixed_db'时使用
 
 %% 接收端（RX）
 % 10) 脉冲抑制
@@ -231,7 +211,7 @@ p.rxSync.equalizeAmplitude = true; % true: 复增益均衡；false: 仅相位补
 p.rxSync.enableFractionalTiming = true; % 分数符号定时估计
 p.rxSync.fractionalRange = 0.5;         % 分数搜索范围（sample）
 p.rxSync.fractionalStep = 0.05;         % 分数搜索步长（sample）
-p.rxSync.estimateCfo = true;            % 用前导估计CFO并前馈补偿
+p.rxSync.estimateCfo = true;            % 用前导估计残余CFO并前馈补偿
 p.rxSync.maxShortSyncMisses = 2;        % 连续短同步失配阈值，超限后切回长前导搜索
 % 决策导向载波PLL（用于残余频偏/相位跟踪）
 p.rxSync.carrierPll = struct();

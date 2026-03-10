@@ -65,14 +65,14 @@ Current packet structure is:
 [packet-1 long PN preamble / later short sync word][PHY mini-header][protected data]
 ```
 
-- Packet 1 uses a long `PN` preamble; later packets use a short sync word to reduce burst overhead.
-- The sync strategy is configurable; with `p.frame.resyncIntervalPackets = 1`, all packets use a long preamble.
+- Packet 1 uses a long `PN` preamble; in the current mainline, later packets also keep the long preamble for synchronization robustness.
+- The sync strategy is configurable, but short sync words are currently treated as an experimental option because they cause severe packet loss under the present receiver/channel settings.
 - The receiver falls back to long-preamble reacquisition after consecutive short-sync misses.
 - `PHY mini-header` uses repeated `BPSK`, and is **not hopped** and **not scrambled**.
 - Packet 1 protected data is `[session header][encrypted payload chunk]`.
-- When `p.frame.repeatSessionHeaderOnResync = false`, only packet 1 carries the session header even if all packets use a long preamble.
-- Bob first decodes the PHY mini-header to obtain `packetIndex`, `packetDataBytes`, and CRC, then locally derives packet-specific hopping and scrambling state.
-- Bob initially learns image/session metadata from packet 1, and can refresh that metadata again on long-preamble resync packets when enabled.
+- With the default `p.frame.repeatSessionHeaderOnResync = false`, only packet 1 carries the session header to limit overt overhead.
+- Bob first decodes the PHY mini-header to obtain `packetIndex`, `packetDataBytes`, and CRC, then locally reconstructs exact session-continuous scrambling and hopping offsets for that packet.
+- Bob initially learns image/session metadata from packet 1, and can refresh that metadata again on long-preamble resync packets when explicitly enabled.
 - Re-entry is therefore **not** done by blindly trusting transmitter-side variables; it is done by waiting for an on-air long-preamble resync packet and rebuilding state from the received PHY/session headers.
 - Main framing helpers: `src/frame/build_phy_header_bits.m`, `src/frame/parse_phy_header_bits.m`, `src/frame/build_session_header_bits.m`, `src/frame/parse_session_header_bits.m`.
 
@@ -230,9 +230,11 @@ p.eve.fhAssumption = "partial";  % Eve使用错误的序列
 | 附加干扰 | `channel_bg_impulsive.m` | 单音、窄带噪声、扫频（linear chirp） |
 
 信道模型参数：
-- `impulseProb`: 脉冲发生概率（默认1%）
+- `impulseProb`: 每符号脉冲发生概率（默认1%）
 - `impulseToBgRatio`: 脉冲功率与背景噪声功率比（默认50倍）
-- `sweep.*`: 扫频干扰起止频率、周期和功率比配置
+- `multipath.pathDelaysSymbols`: 多径时延（单位：symbol）
+- `singleTone.freqHz` / `narrowband.*Hz` / `sweep.*Hz`: 频率类参数按Hz配置
+- `sweep.periodSymbols`: 扫频周期按symbol配置
 
 ### 8. 脉冲抑制（核心创新点）
 
@@ -331,6 +333,8 @@ p.sim.nFramesPerPoint = 1;       % 每个SNR点的帧数
 ```matlab
 p.channel.impulseProb = 0.01;    % 脉冲概率(1%)
 p.channel.impulseToBgRatio = 50; % 脉冲功率比(50倍)
+p.channel.multipath.pathDelaysSymbols = [0 1 2];
+p.channel.singleTone.freqHz = 800;
 ```
 
 ### 分包参数
@@ -348,8 +352,8 @@ p.frame.preamblePnPolynomial = [1 0 0 0 1 0 0 1];   % 默认PN长前导
 p.frame.packetSyncLength = 31;                      % 后续分包短同步字长度
 p.frame.packetSyncType = "pn";                      % 后续分包短同步字类型
 p.frame.packetSyncPnPolynomial = [1 0 0 1 0 1];      % 短同步字PN序列
-p.frame.resyncIntervalPackets = 1;                   % 设为1表示所有分包都使用长前导
-p.frame.repeatSessionHeaderOnResync = false;         % 长前导包默认不重复会话头
+p.frame.resyncIntervalPackets = 1;                   % 当前主线每包都使用长前导
+p.frame.repeatSessionHeaderOnResync = false;         % 默认仅首包发送会话头，短同步方案仅保留为实验选项
 p.frame.phyMagic16 = hex2dec('3AC5');
 p.frame.sessionMagic16 = hex2dec('C7E1');
 p.frame.phyHeaderRepeat = 3;
