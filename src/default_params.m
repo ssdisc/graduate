@@ -8,7 +8,7 @@ p.rngSeed = 1;
 
 %% 仿真控制
 p.sim = struct();
-p.sim.ebN0dBList = 0:2:10;
+p.sim.ebN0dBList = 8:2:20;
 p.sim.nFramesPerPoint = 1;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");

@@ -27,7 +27,7 @@ fig1 = local_create_line_figure("BER");
 ax1 = axes(fig1);
 local_plot_series_matrix(ax1, EbN0dB, results.ber, "logy");
 local_apply_line_labels(ax1, "E_b/N_0 (dB)", "BER (payload)");
-local_format_ber_axis(ax1);
+local_format_ber_axis(ax1, EbN0dB, results.ber);
 local_style_legend(ax1, methods, "southwest");
 exportgraphics(fig1, fullfile(outDir, "ber.png"));
 close(fig1);
@@ -124,7 +124,7 @@ if isfield(results, "eve")
     ax1b = axes(fig1b);
     local_plot_series_matrix(ax1b, results.eve.ebN0dB, results.eve.ber, "logy");
     local_apply_line_labels(ax1b, "E_b/N_0 at Eve (dB)", "BER (payload)");
-    local_format_ber_axis(ax1b);
+    local_format_ber_axis(ax1b, results.eve.ebN0dB, results.eve.ber);
     local_style_legend(ax1b, methods, "southwest");
     exportgraphics(fig1b, fullfile(outDir, "ber_eve.png"));
     close(fig1b);
@@ -154,110 +154,117 @@ title("TX (原图)", "FontSize", 14);
 exportgraphics(figTx, fullfile(imagesDir, "00_tx_original.png"), 'Resolution', 200);
 close(figTx);
 
-% 2. 为每种方法单独保存接收图像
+exampleVariants = local_example_variants(packetConcealActive);
+
+% 2. 为每种方法分别保存通信前/补偿后接收图像
 for k = 1:numel(methods)
     if isfield(results.example, methods(k))
-        figRx = figure("Name", sprintf("RX - %s", methods(k)), "Visible", "off");
         exampleEntry = results.example.(methods(k));
-        mseCommVal = commMetrics.mse(k, :);
-        psnrCommVal = commMetrics.psnr(k, :);
-        ssimCommVal = commMetrics.ssim(k, :);
-        mseCompVal = compMetrics.mse(k, :);
-        psnrCompVal = compMetrics.psnr(k, :);
-        ssimCompVal = compMetrics.ssim(k, :);
-        % 与example图像保持一致的Eb/N0索引
-        if isfield(exampleEntry, "EbN0dB")
-            ebN0Sel = double(exampleEntry.EbN0dB);
-            [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
-        else
-            exampleIdx = numel(results.ebN0dB);
-            ebN0Sel = results.ebN0dB(exampleIdx);
-        end
-        ebN0Mid = ebN0Sel;
+        [exampleIdx, ebN0Mid] = local_get_example_index(exampleEntry, results.ebN0dB);
 
-        imshow(local_get_example_image(exampleEntry));
-        titleLines = cell(3 + double(packetConcealActive), 1);
-        titleLines{1} = sprintf("RX - %s", methods(k));
-        titleLines{2} = sprintf("Eb/N0=%.0fdB", ebN0Mid);
-        titleLines{3} = local_metric_line("Comm", mseCommVal(exampleIdx), psnrCommVal(exampleIdx), ssimCommVal(exampleIdx), true);
-        if packetConcealActive
-            titleLines{4} = local_metric_line("Comp", mseCompVal(exampleIdx), psnrCompVal(exampleIdx), ssimCompVal(exampleIdx), true);
+        for iv = 1:numel(exampleVariants)
+            variant = exampleVariants(iv);
+            imgVariant = local_get_example_image_variant(exampleEntry, variant.key);
+            if isempty(imgVariant)
+                continue;
+            end
+
+            figRx = figure("Name", sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), "Visible", "off");
+            imshow(imgVariant);
+            title( ...
+                local_example_title_lines( ...
+                    sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), ...
+                    ebN0Mid, ...
+                    local_example_metric_line(variant.key, commMetrics, compMetrics, k, exampleIdx, true)), ...
+                "FontSize", 12);
+
+            filename = sprintf("%02d_rx_%s_%s.png", k, variant.fileTag, lower(strrep(methods(k), " ", "_")));
+            exportgraphics(figRx, fullfile(imagesDir, filename), 'Resolution', 200);
+            close(figRx);
         end
-        title(titleLines, "FontSize", 12);
-        
-        % 文件名带序号，方便排序
-        filename = sprintf("%02d_rx_%s.png", k, lower(strrep(methods(k), " ", "_")));
-        exportgraphics(figRx, fullfile(imagesDir, filename), 'Resolution', 200);
-        close(figRx);
     end
 end
 
-% 3. 保存TX与各方法RX的对比图（每种方法一张，左TX右RX）
+% 3. 保存TX与各方法RX的对比图（每种方法一张，补偿前后分栏）
 for k = 1:numel(methods)
     if isfield(results.example, methods(k))
         figCmp = figure("Name", sprintf("Compare - %s", methods(k)), "Visible", "off");
-        figCmp.Position = [100 100 800 400];
         exampleEntry = results.example.(methods(k));
-        
-        tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-        
-        % 左：TX
+        [exampleIdx, ebN0Sel] = local_get_example_index(exampleEntry, results.ebN0dB);
+        nTiles = 1 + numel(exampleVariants);
+        figCmp.Position = [100 100 380*nTiles 420];
+
+        tiledlayout(1, nTiles, 'TileSpacing', 'compact', 'Padding', 'compact');
+
         nexttile;
         imshow(imgTx);
         title("TX (原图)", "FontSize", 12);
-        
-        % 右：RX
-        nexttile;
-        imshow(local_get_example_image(exampleEntry));
-        if isfield(exampleEntry, "EbN0dB")
-            ebN0Sel = double(exampleEntry.EbN0dB);
-            [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
-        else
-            exampleIdx = numel(results.ebN0dB);
+
+        for iv = 1:numel(exampleVariants)
+            variant = exampleVariants(iv);
+            nexttile;
+            imgVariant = local_get_example_image_variant(exampleEntry, variant.key);
+            if isempty(imgVariant)
+                text(0.1, 0.5, "No example", "Units", "normalized");
+                axis off;
+                title(sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), "FontSize", 12);
+            else
+                imshow(imgVariant);
+                title( ...
+                    local_example_title_lines( ...
+                        sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), ...
+                        ebN0Sel, ...
+                        local_example_metric_line(variant.key, commMetrics, compMetrics, k, exampleIdx, true)), ...
+                    "FontSize", 12);
+            end
         end
-        titleLines = cell(2 + double(packetConcealActive), 1);
-        titleLines{1} = sprintf("RX - %s", methods(k));
-        titleLines{2} = local_metric_line("Comm", commMetrics.mse(k, exampleIdx), commMetrics.psnr(k, exampleIdx), commMetrics.ssim(k, exampleIdx), true);
-        if packetConcealActive
-            titleLines{3} = local_metric_line("Comp", compMetrics.mse(k, exampleIdx), compMetrics.psnr(k, exampleIdx), compMetrics.ssim(k, exampleIdx), true);
-        end
-        title(titleLines, "FontSize", 12);
-        
+
         filename = sprintf("compare_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
         exportgraphics(figCmp, fullfile(imagesDir, filename), 'Resolution', 200);
         close(figCmp);
     end
 end
 
-% 4. 保存所有方法的汇总对比图（保留原有功能）
-fig4 = figure("Name", "Images", "Visible", "off");
+% 4. 保存所有方法的汇总对比图（通信前/补偿后分别导出）
 nMethods = numel(methods);
 nTotal = nMethods + 1;  % +1 for TX image
-% 使用2行布局以获得更好的显示效果
-nCols = ceil(nTotal / 2);
-nRows = 2;
-if nTotal <= 4
-    nRows = 1;
-    nCols = nTotal;
-end
-fig4.Position = [100 100 300*nCols 300*nRows];
-tiledlayout(nRows, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
-nexttile;
-imshow(imgTx);
-title("TX");
-for k = 1:numel(methods)
-    nexttile;
-    if isfield(results.example, methods(k))
-        imshow(local_get_example_image(results.example.(methods(k))));
-        title(local_example_label("RX", methods(k), packetConcealActive));
-    else
-        text(0.1, 0.5, "No example", "Units", "normalized");
-        axis off;
-        title(local_example_label("RX", methods(k), packetConcealActive));
+for iv = 1:numel(exampleVariants)
+    variant = exampleVariants(iv);
+    fig4 = figure("Name", sprintf("Images - %s", variant.shortLabel), "Visible", "off");
+    nCols = ceil(nTotal / 2);
+    nRows = 2;
+    if nTotal <= 4
+        nRows = 1;
+        nCols = nTotal;
     end
+    fig4.Position = [100 100 300*nCols 300*nRows];
+    tiledlayout(nRows, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
+    nexttile;
+    imshow(imgTx);
+    title("TX");
+    for k = 1:numel(methods)
+        nexttile;
+        if isfield(results.example, methods(k))
+            imgVariant = local_get_example_image_variant(results.example.(methods(k)), variant.key);
+            if ~isempty(imgVariant)
+                imshow(imgVariant);
+            else
+                text(0.1, 0.5, "No example", "Units", "normalized");
+                axis off;
+            end
+            title(sprintf("RX (%s) - %s", variant.shortLabel, methods(k)));
+        else
+            text(0.1, 0.5, "No example", "Units", "normalized");
+            axis off;
+            title(sprintf("RX (%s) - %s", variant.shortLabel, methods(k)));
+        end
+    end
+    exportgraphics(fig4, fullfile(outDir, sprintf("images_%s.png", variant.summaryTag)), 'Resolution', 150);
+    if variant.key == "communication"
+        exportgraphics(fig4, fullfile(outDir, "images.png"), 'Resolution', 150);
+    end
+    close(fig4);
 end
-exportgraphics(fig4, fullfile(outDir, "images.png"), 'Resolution', 150);
-close(fig4);
 
 
 if isfield(results, "eve") && isfield(results.eve, "example")
@@ -270,40 +277,37 @@ if isfield(results, "eve") && isfield(results.eve, "example")
     % 为每种方法单独保存Bob vs Eve对比图
     for k = 1:numel(methods)
         if isfield(results.example, methods(k)) && isfield(results.eve.example, methods(k))
-            if isfield(results.example.(methods(k)), "EbN0dB")
-                ebN0Sel = double(results.example.(methods(k)).EbN0dB);
-                [~, exampleIdx] = min(abs(results.ebN0dB - ebN0Sel));
-            else
-                exampleIdx = numel(results.ebN0dB);
-            end
+            [exampleIdx, ebN0Bob] = local_get_example_index(results.example.(methods(k)), results.ebN0dB);
+            [~, ebN0Eve] = local_get_example_index(results.eve.example.(methods(k)), results.eve.ebN0dB);
 
             figEve = figure("Name", sprintf("Bob vs Eve - %s", methods(k)), "Visible", "off");
-            figEve.Position = [100 100 1200 400];
-            
-            tiledlayout(1, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
-            
-            % 左：TX原图
+            nTiles = 1 + 2 * numel(exampleVariants);
+            figEve.Position = [100 100 330*nTiles 420];
+            tiledlayout(1, nTiles, 'TileSpacing', 'compact', 'Padding', 'compact');
+
             nexttile;
             imshow(imgTx);
             title("TX (原图)", "FontSize", 12);
-            
-            % 中：Bob接收
-            nexttile;
-            imshow(local_get_example_image(results.example.(methods(k))));
-            ebN0Bob = results.ebN0dB(exampleIdx);
-            titleLinesBob = cell(3 + double(packetConcealActive), 1);
-            titleLinesBob{1} = sprintf("Bob - %s", methods(k));
-            titleLinesBob{2} = sprintf("Eb/N0=%.0fdB", ebN0Bob);
-            titleLinesBob{3} = local_metric_line("Comm", commMetrics.mse(k, exampleIdx), commMetrics.psnr(k, exampleIdx), commMetrics.ssim(k, exampleIdx), false);
-            if packetConcealActive
-                titleLinesBob{4} = local_metric_line("Comp", compMetrics.mse(k, exampleIdx), compMetrics.psnr(k, exampleIdx), compMetrics.ssim(k, exampleIdx), false);
+
+            for iv = 1:numel(exampleVariants)
+                variant = exampleVariants(iv);
+                nexttile;
+                imgBobVariant = local_get_example_image_variant(results.example.(methods(k)), variant.key);
+                if isempty(imgBobVariant)
+                    text(0.1, 0.5, "No example", "Units", "normalized");
+                    axis off;
+                    title(sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)), "FontSize", 12);
+                else
+                    imshow(imgBobVariant);
+                    title( ...
+                        local_example_title_lines( ...
+                            sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)), ...
+                            ebN0Bob, ...
+                            local_example_metric_line(variant.key, commMetrics, compMetrics, k, exampleIdx, false)), ...
+                        "FontSize", 12);
+                end
             end
-            title(titleLinesBob, "FontSize", 12);
-            
-            % 右：Eve截获
-            nexttile;
-            imshow(local_get_example_image(results.eve.example.(methods(k))));
-            ebN0Eve = results.eve.ebN0dB(exampleIdx);
+
             hdrTxt = "";
             if isfield(results.eve.example.(methods(k)), "headerOk")
                 if results.eve.example.(methods(k)).headerOk
@@ -312,78 +316,106 @@ if isfield(results, "eve") && isfield(results.eve, "example")
                     hdrTxt = " (hdr fail)";
                 end
             end
-            titleLinesEve = cell(3 + double(packetConcealActive), 1);
-            titleLinesEve{1} = sprintf("Eve - %s%s", methods(k), hdrTxt);
-            titleLinesEve{2} = sprintf("Eb/N0=%.0fdB", ebN0Eve);
-            titleLinesEve{3} = local_metric_line("Comm", commMetricsEve.mse(k, exampleIdx), commMetricsEve.psnr(k, exampleIdx), commMetricsEve.ssim(k, exampleIdx), false);
-            if packetConcealActive
-                titleLinesEve{4} = local_metric_line("Comp", compMetricsEve.mse(k, exampleIdx), compMetricsEve.psnr(k, exampleIdx), compMetricsEve.ssim(k, exampleIdx), false);
+
+            for iv = 1:numel(exampleVariants)
+                variant = exampleVariants(iv);
+                nexttile;
+                imgEveVariant = local_get_example_image_variant(results.eve.example.(methods(k)), variant.key);
+                if isempty(imgEveVariant)
+                    text(0.1, 0.5, "No example", "Units", "normalized");
+                    axis off;
+                    title(sprintf("Eve (%s) - %s%s", variant.shortLabel, methods(k), hdrTxt), "FontSize", 12);
+                else
+                    imshow(imgEveVariant);
+                    title( ...
+                        local_example_title_lines( ...
+                            sprintf("Eve (%s) - %s%s", variant.shortLabel, methods(k), hdrTxt), ...
+                            ebN0Eve, ...
+                            local_example_metric_line(variant.key, commMetricsEve, compMetricsEve, k, exampleIdx, false)), ...
+                        "FontSize", 12);
+                end
             end
-            title(titleLinesEve, "FontSize", 12);
-            
+
             filename = sprintf("bob_vs_eve_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
             exportgraphics(figEve, fullfile(eveDir, filename), 'Resolution', 200);
             close(figEve);
         end
     end
     
-    % 保存汇总对比图（保留原有功能）
-    fig5 = figure("Name", "Intercept", "Visible", "off");
-    nCols = numel(methods) + 1;
-    fig5.Position = [100 100 200*nCols 400];
-    tiledlayout(2, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
+    % 保存汇总对比图（通信前/补偿后分别导出）
+    for iv = 1:numel(exampleVariants)
+        variant = exampleVariants(iv);
+        fig5 = figure("Name", sprintf("Intercept - %s", variant.shortLabel), "Visible", "off");
+        nCols = numel(methods) + 1;
+        fig5.Position = [100 100 200*nCols 400];
+        tiledlayout(2, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
 
-    % Bob
-    nexttile;
-    imshow(imgTx);
-    title("TX");
-    for k = 1:numel(methods)
         nexttile;
-        if isfield(results.example, methods(k))
-            imshow(local_get_example_image(results.example.(methods(k))));
-            title(local_example_label("Bob", methods(k), packetConcealActive));
-        else
-            text(0.1, 0.5, "No example", "Units", "normalized");
-            axis off;
-            title(local_example_label("Bob", methods(k), packetConcealActive));
-        end
-    end
-
-    % Eve
-    nexttile;
-    txt = {'Eve (intercept)'};
-    if isfield(results.eve.example, methods(1)) && isfield(results.eve.example.(methods(1)), "EbN0dB")
-        txt{end+1} = sprintf("Eb/N0=%.1f dB", results.eve.example.(methods(1)).EbN0dB);
-    end
-    text(0.05, 0.5, txt, "Units", "normalized", "Interpreter", "none");
-    axis off;
-    title("Eve");
-
-    for k = 1:numel(methods)
-        nexttile;
-        if isfield(results.eve.example, methods(k))
-            imshow(local_get_example_image(results.eve.example.(methods(k))));
-            hdrTxt = "";
-            if isfield(results.eve.example.(methods(k)), "headerOk")
-                if results.eve.example.(methods(k)).headerOk
-                    hdrTxt = "hdr ok";
+        imshow(imgTx);
+        title("TX");
+        for k = 1:numel(methods)
+            nexttile;
+            if isfield(results.example, methods(k))
+                imgVariant = local_get_example_image_variant(results.example.(methods(k)), variant.key);
+                if ~isempty(imgVariant)
+                    imshow(imgVariant);
                 else
-                    hdrTxt = "hdr fail";
+                    text(0.1, 0.5, "No example", "Units", "normalized");
+                    axis off;
                 end
-            end
-            if strlength(hdrTxt) > 0
-                title(local_example_label("Eve", methods(k), packetConcealActive, hdrTxt));
+                title(sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)));
             else
-                title(local_example_label("Eve", methods(k), packetConcealActive));
+                text(0.1, 0.5, "No example", "Units", "normalized");
+                axis off;
+                title(sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)));
             end
-        else
-            text(0.1, 0.5, "No example", "Units", "normalized");
-            axis off;
-            title(local_example_label("Eve", methods(k), packetConcealActive));
         end
+
+        nexttile;
+        if isfield(results.eve.example, methods(1)) && isfield(results.eve.example.(methods(1)), "EbN0dB")
+            txt = {'Eve (intercept)', sprintf("Eb/N0=%.1f dB", results.eve.example.(methods(1)).EbN0dB)};
+        else
+            txt = {'Eve (intercept)'};
+        end
+        text(0.05, 0.5, txt, "Units", "normalized", "Interpreter", "none");
+        axis off;
+        title("Eve");
+
+        for k = 1:numel(methods)
+            nexttile;
+            if isfield(results.eve.example, methods(k))
+                imgVariant = local_get_example_image_variant(results.eve.example.(methods(k)), variant.key);
+                if ~isempty(imgVariant)
+                    imshow(imgVariant);
+                else
+                    text(0.1, 0.5, "No example", "Units", "normalized");
+                    axis off;
+                end
+                hdrTxt = "";
+                if isfield(results.eve.example.(methods(k)), "headerOk")
+                    if results.eve.example.(methods(k)).headerOk
+                        hdrTxt = "hdr ok";
+                    else
+                        hdrTxt = "hdr fail";
+                    end
+                end
+                if strlength(hdrTxt) > 0
+                    title(sprintf("Eve (%s) - %s (%s)", variant.shortLabel, methods(k), hdrTxt));
+                else
+                    title(sprintf("Eve (%s) - %s", variant.shortLabel, methods(k)));
+                end
+            else
+                text(0.1, 0.5, "No example", "Units", "normalized");
+                axis off;
+                title(sprintf("Eve (%s) - %s", variant.shortLabel, methods(k)));
+            end
+        end
+        exportgraphics(fig5, fullfile(outDir, sprintf("intercept_%s.png", variant.summaryTag)), 'Resolution', 150);
+        if variant.key == "communication"
+            exportgraphics(fig5, fullfile(outDir, "intercept.png"), 'Resolution', 150);
+        end
+        close(fig5);
     end
-    exportgraphics(fig5, fullfile(outDir, "intercept.png"), 'Resolution', 150);
-    close(fig5);
 end
 
 if isfield(results, "covert") && isfield(results.covert, "warden")
@@ -422,16 +454,18 @@ if nargin < 6
 end
 
 values = local_align_series_matrix(x, values);
+isLogY = string(scaleMode) == "logy";
+if isLogY
+    ax.YScale = "log";
+end
 hold(ax, "on");
 for idx = 1:size(values, 1)
     style = local_pick_series_style(idx);
     y = values(idx, :);
-    switch string(scaleMode)
-        case "logy"
-            h = semilogy(ax, x, y);
-        otherwise
-            h = plot(ax, x, y);
+    if isLogY
+        y(y <= 0) = NaN;
     end
+    h = plot(ax, x, y);
     local_apply_series_style(h, style, showMarkers);
 end
 hold(ax, "off");
@@ -477,28 +511,67 @@ ax.YMinorGrid = "on";
 ax.Layer = "bottom";
 end
 
-function local_format_ber_axis(ax)
-yLim = ylim(ax);
-if any(~isfinite(yLim)) || yLim(1) <= 0 || yLim(2) <= 0
+function local_format_ber_axis(ax, x, values)
+if nargin < 3
+    yLim = ylim(ax);
+    if any(~isfinite(yLim)) || yLim(1) <= 0 || yLim(2) <= 0
+        return;
+    end
+    expMin = floor(log10(yLim(1)));
+    expMax = ceil(log10(yLim(2)));
+    yTicks = 10 .^ (expMin:expMax);
+    yLabels = arrayfun(@(tick) sprintf("10^{%d}", round(log10(tick))), yTicks, "UniformOutput", false);
+    ax.YTick = yTicks;
+    ax.YTickLabel = yLabels;
     return;
 end
 
-expMin = floor(log10(yLim(1)));
-expMax = ceil(log10(yLim(2)));
-if yLim(2) < 1
-    expMax = min(expMax, -1);
-end
-if expMin > expMax
-    expMax = expMin;
+x = x(:).';
+values = local_align_series_matrix(x, values);
+positiveVals = values(values > 0 & isfinite(values));
+
+if isempty(positiveVals)
+    zeroTick = 1e-2;
+    positiveTicks = [1e-1 1];
+else
+    minPositive = min(positiveVals);
+    maxPositive = max(positiveVals);
+    expMinPositive = floor(log10(minPositive));
+    expMaxPositive = ceil(log10(maxPositive));
+    expMaxPositive = min(expMaxPositive, 0);
+    if expMinPositive > expMaxPositive
+        expMaxPositive = expMinPositive;
+    end
+    zeroTick = 10 ^ (expMinPositive - 1);
+    positiveTicks = 10 .^ (expMinPositive:expMaxPositive);
 end
 
-yTicks = 10 .^ (expMin:expMax);
-yTicks = yTicks(yTicks >= yLim(1) & yTicks <= yLim(2));
-if isempty(yTicks)
-    yTicks = 10 .^ (expMin:expMax);
+positiveTicks = unique(positiveTicks, "stable");
+positiveTicks = positiveTicks(positiveTicks > zeroTick);
+if isempty(positiveTicks)
+    positiveTicks = [zeroTick * 10, max(zeroTick * 100, 1)];
 end
 
-yLabels = arrayfun(@(tick) sprintf("10^{%d}", round(log10(tick))), yTicks, "UniformOutput", false);
+zeroPlotLevel = zeroTick * 1.15;
+topLimit = max([positiveTicks, 1]);
+ylim(ax, [zeroTick, topLimit]);
+
+hold(ax, "on");
+for idx = 1:size(values, 1)
+    zeroMask = isfinite(values(idx, :)) & values(idx, :) == 0;
+    if any(zeroMask)
+        style = local_pick_series_style(idx);
+        hZero = plot(ax, x(zeroMask), zeroPlotLevel * ones(1, nnz(zeroMask)));
+        local_apply_series_style(hZero, style, true);
+        hZero.LineStyle = "none";
+        hZero.HandleVisibility = "off";
+        hZero.Clipping = "on";
+    end
+end
+hold(ax, "off");
+
+yTicks = [zeroTick, positiveTicks];
+yLabels = [{"0"}, arrayfun(@(tick) sprintf("10^{%d}", round(log10(tick))), positiveTicks, "UniformOutput", false)];
 ax.YTick = yTicks;
 ax.YTickLabel = yLabels;
 end
@@ -597,16 +670,98 @@ if isfield(results, "packetConceal") && isfield(results.packetConceal, "active")
 end
 end
 
-function img = local_get_example_image(exampleEntry)
-if isfield(exampleEntry, "imgRxCompensated")
-    img = exampleEntry.imgRxCompensated;
-elseif isfield(exampleEntry, "imgRx")
-    img = exampleEntry.imgRx;
-elseif isfield(exampleEntry, "imgRxComm")
-    img = exampleEntry.imgRxComm;
-else
-    img = [];
+function variants = local_example_variants(packetConcealActive)
+variants = struct( ...
+    "key", "communication", ...
+    "shortLabel", "Comm", ...
+    "fileTag", "comm", ...
+    "summaryTag", "comm");
+if packetConcealActive
+    variants(2) = struct( ...
+        "key", "compensated", ...
+        "shortLabel", "Comp", ...
+        "fileTag", "comp", ...
+        "summaryTag", "compensated");
 end
+end
+
+function [exampleIdx, ebN0Sel] = local_get_example_index(exampleEntry, ebN0List)
+if isfield(exampleEntry, "EbN0dB")
+    ebN0Sel = double(exampleEntry.EbN0dB);
+    [~, exampleIdx] = min(abs(ebN0List - ebN0Sel));
+else
+    exampleIdx = numel(ebN0List);
+    ebN0Sel = ebN0List(exampleIdx);
+end
+end
+
+function img = local_get_example_image_variant(exampleEntry, variantKey)
+variantKey = lower(string(variantKey));
+switch variantKey
+    case "communication"
+        if isfield(exampleEntry, "imgRxComm")
+            img = exampleEntry.imgRxComm;
+        elseif isfield(exampleEntry, "imgRx")
+            img = exampleEntry.imgRx;
+        elseif isfield(exampleEntry, "imgRxCompensated")
+            img = exampleEntry.imgRxCompensated;
+        else
+            img = [];
+        end
+    case "compensated"
+        if isfield(exampleEntry, "imgRxCompensated")
+            img = exampleEntry.imgRxCompensated;
+        elseif isfield(exampleEntry, "imgRx")
+            img = exampleEntry.imgRx;
+        elseif isfield(exampleEntry, "imgRxComm")
+            img = exampleEntry.imgRxComm;
+        else
+            img = [];
+        end
+    otherwise
+        if isfield(exampleEntry, "imgRxCompensated")
+            img = exampleEntry.imgRxCompensated;
+        elseif isfield(exampleEntry, "imgRx")
+            img = exampleEntry.imgRx;
+        elseif isfield(exampleEntry, "imgRxComm")
+            img = exampleEntry.imgRxComm;
+        else
+            img = [];
+        end
+end
+end
+
+function txt = local_example_metric_line(variantKey, commMetrics, compMetrics, methodIdx, exampleIdx, includeSsim)
+if nargin < 6
+    includeSsim = true;
+end
+
+switch lower(string(variantKey))
+    case "communication"
+        txt = local_metric_line( ...
+            "Comm", ...
+            commMetrics.mse(methodIdx, exampleIdx), ...
+            commMetrics.psnr(methodIdx, exampleIdx), ...
+            commMetrics.ssim(methodIdx, exampleIdx), ...
+            includeSsim);
+    case "compensated"
+        txt = local_metric_line( ...
+            "Comp", ...
+            compMetrics.mse(methodIdx, exampleIdx), ...
+            compMetrics.psnr(methodIdx, exampleIdx), ...
+            compMetrics.ssim(methodIdx, exampleIdx), ...
+            includeSsim);
+    otherwise
+        error("save_figures:InvalidExampleVariant", ...
+            "Unsupported example variant: %s", char(string(variantKey)));
+end
+end
+
+function titleLines = local_example_title_lines(nameLine, ebN0Val, metricLine)
+titleLines = { ...
+    char(string(nameLine)); ...
+    sprintf("Eb/N0=%.0fdB", ebN0Val); ...
+    char(string(metricLine))};
 end
 
 function txt = local_metric_line(label, mseVal, psnrVal, ssimVal, includeSsim)
@@ -619,16 +774,4 @@ if includeSsim
 else
     txt = sprintf("%s: MSE=%.3g, PSNR=%.2fdB", label, mseVal, psnrVal);
 end
-end
-
-function txt = local_example_label(prefix, methodName, packetConcealActive, varargin)
-suffix = "";
-if packetConcealActive
-    suffix = " (comp)";
-end
-extra = "";
-if nargin >= 4 && ~isempty(varargin{1}) && strlength(string(varargin{1})) > 0
-    extra = sprintf(" (%s)", string(varargin{1}));
-end
-txt = sprintf("%s - %s%s%s", char(string(prefix)), char(string(methodName)), char(suffix), char(extra));
 end
