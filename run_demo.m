@@ -9,10 +9,6 @@ addpath(genpath(fullfile(fileparts(mfilename('fullpath')), 'src')));
 
 p = default_params();
 
-% 快速演示设置（按需修改）
-p.sim.ebN0dBList = 0:2:10;
-p.sim.nFramesPerPoint = 10;
-p.sim.saveFigures = true;
 
 %% ML模型：训练一次，后续复用（LR/CNN/GRU）
 modelDir = fullfile(pwd, 'models');

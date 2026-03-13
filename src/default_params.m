@@ -9,7 +9,7 @@ p.rngSeed = 1;
 %% 仿真控制
 p.sim = struct();
 p.sim.ebN0dBList = 0:2:10;
-p.sim.nFramesPerPoint = 10;
+p.sim.nFramesPerPoint = 1;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
 p.sim.exampleEbN0dB = inf; % 示例图默认取最高Eb/N0；设为具体值时取最近点

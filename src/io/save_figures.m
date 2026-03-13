@@ -23,64 +23,58 @@ EbN0dB = results.ebN0dB;
 [commMetrics, compMetrics] = local_get_image_metrics(results);
 packetConcealActive = local_packet_conceal_active(results);
 
-fig1 = figure("Name", "BER");
-semilogy(EbN0dB, results.ber.', "o-");
-grid on;
-xlabel("E_b/N_0 (dB)");
-ylabel("BER (payload)");
-legend(methods, "Location", "southwest");
+fig1 = local_create_line_figure("BER");
+ax1 = axes(fig1);
+local_plot_series_matrix(ax1, EbN0dB, results.ber, "logy");
+local_apply_line_labels(ax1, "E_b/N_0 (dB)", "BER (payload)");
+local_format_ber_axis(ax1);
+local_style_legend(ax1, methods, "southwest");
 exportgraphics(fig1, fullfile(outDir, "ber.png"));
 close(fig1);
 
-fig2 = figure("Name", "PSNR (Communication)");
-plot(EbN0dB, commMetrics.psnr.', "o-");
-grid on;
-xlabel("E_b/N_0 (dB)");
-ylabel("PSNR (dB, communication only)");
-legend(methods, "Location", "southeast");
+fig2 = local_create_line_figure("PSNR (Communication)");
+ax2 = axes(fig2);
+local_plot_series_matrix(ax2, EbN0dB, commMetrics.psnr, "linear");
+local_apply_line_labels(ax2, "E_b/N_0 (dB)", "PSNR (dB, communication only)");
+local_style_legend(ax2, methods, "southeast");
 exportgraphics(fig2, fullfile(outDir, "psnr.png"));
 exportgraphics(fig2, fullfile(outDir, "psnr_comm.png"));
 close(fig2);
 
-fig2m = figure("Name", "MSE (Communication)");
-semilogy(EbN0dB, commMetrics.mse.', "o-");
-grid on;
-xlabel("E_b/N_0 (dB)");
-ylabel("MSE (communication only)");
-legend(methods, "Location", "northeast");
+fig2m = local_create_line_figure("MSE (Communication)");
+ax2m = axes(fig2m);
+local_plot_series_matrix(ax2m, EbN0dB, commMetrics.mse, "logy");
+local_apply_line_labels(ax2m, "E_b/N_0 (dB)", "MSE (communication only)");
+local_style_legend(ax2m, methods, "northeast");
 exportgraphics(fig2m, fullfile(outDir, "mse.png"));
 exportgraphics(fig2m, fullfile(outDir, "mse_comm.png"));
 close(fig2m);
 
 if packetConcealActive
-    fig2c = figure("Name", "PSNR (Compensated)");
-    plot(EbN0dB, compMetrics.psnr.', "o-");
-    grid on;
-    xlabel("E_b/N_0 (dB)");
-    ylabel("PSNR (dB, after concealment)");
-    legend(methods, "Location", "southeast");
+    fig2c = local_create_line_figure("PSNR (Compensated)");
+    ax2c = axes(fig2c);
+    local_plot_series_matrix(ax2c, EbN0dB, compMetrics.psnr, "linear");
+    local_apply_line_labels(ax2c, "E_b/N_0 (dB)", "PSNR (dB, after concealment)");
+    local_style_legend(ax2c, methods, "southeast");
     exportgraphics(fig2c, fullfile(outDir, "psnr_compensated.png"));
     close(fig2c);
 
-    fig2cm = figure("Name", "MSE (Compensated)");
-    semilogy(EbN0dB, compMetrics.mse.', "o-");
-    grid on;
-    xlabel("E_b/N_0 (dB)");
-    ylabel("MSE (after concealment)");
-    legend(methods, "Location", "northeast");
+    fig2cm = local_create_line_figure("MSE (Compensated)");
+    ax2cm = axes(fig2cm);
+    local_plot_series_matrix(ax2cm, EbN0dB, compMetrics.mse, "logy");
+    local_apply_line_labels(ax2cm, "E_b/N_0 (dB)", "MSE (after concealment)");
+    local_style_legend(ax2cm, methods, "northeast");
     exportgraphics(fig2cm, fullfile(outDir, "mse_compensated.png"));
     close(fig2cm);
 end
 
 if isfield(results, "kl")
-    fig2k = figure("Name", "KL Divergence");
-    plot(results.kl.ebN0dB, results.kl.signalVsNoise, "o-");
-    hold on;
-    plot(results.kl.ebN0dB, results.kl.symmetric, "s-");
-    grid on;
-    xlabel("E_b/N_0 (dB)");
-    ylabel("KL divergence");
-    legend("KL(P_{sig}||P_{noise})", "Symmetric KL", "Location", "best");
+    fig2k = local_create_line_figure("KL Divergence");
+    ax2k = axes(fig2k);
+    klValues = [results.kl.signalVsNoise(:).'; results.kl.symmetric(:).'];
+    local_plot_series_matrix(ax2k, results.kl.ebN0dB, klValues, "linear");
+    local_apply_line_labels(ax2k, "E_b/N_0 (dB)", "KL divergence");
+    local_style_legend(ax2k, ["KL(P_{sig}||P_{noise})", "Symmetric KL"], "best");
     exportgraphics(fig2k, fullfile(outDir, "kl.png"));
     close(fig2k);
 end
@@ -88,64 +82,61 @@ end
 
 if isfield(results, "eve")
     [commMetricsEve, compMetricsEve] = local_get_image_metrics(results.eve);
-    fig2b = figure("Name", "PSNR (Eve, Communication)");
-    plot(results.eve.ebN0dB, commMetricsEve.psnr.', "o-");
-    grid on;
-    xlabel("E_b/N_0 at Eve (dB)");
-    ylabel("PSNR (dB, communication only)");
-    legend(methods, "Location", "southeast");
+    fig2b = local_create_line_figure("PSNR (Eve, Communication)");
+    ax2b = axes(fig2b);
+    local_plot_series_matrix(ax2b, results.eve.ebN0dB, commMetricsEve.psnr, "linear");
+    local_apply_line_labels(ax2b, "E_b/N_0 at Eve (dB)", "PSNR (dB, communication only)");
+    local_style_legend(ax2b, methods, "southeast");
     exportgraphics(fig2b, fullfile(outDir, "psnr_eve.png"));
     exportgraphics(fig2b, fullfile(outDir, "psnr_eve_comm.png"));
     close(fig2b);
 
     if isfield(commMetricsEve, "mse")
-        fig2bm = figure("Name", "MSE (Eve, Communication)");
-        semilogy(results.eve.ebN0dB, commMetricsEve.mse.', "o-");
-        grid on;
-        xlabel("E_b/N_0 at Eve (dB)");
-        ylabel("MSE (communication only)");
-        legend(methods, "Location", "northeast");
+        fig2bm = local_create_line_figure("MSE (Eve, Communication)");
+        ax2bm = axes(fig2bm);
+        local_plot_series_matrix(ax2bm, results.eve.ebN0dB, commMetricsEve.mse, "logy");
+        local_apply_line_labels(ax2bm, "E_b/N_0 at Eve (dB)", "MSE (communication only)");
+        local_style_legend(ax2bm, methods, "northeast");
         exportgraphics(fig2bm, fullfile(outDir, "mse_eve.png"));
         exportgraphics(fig2bm, fullfile(outDir, "mse_eve_comm.png"));
         close(fig2bm);
     end
 
     if packetConcealActive
-        fig2bc = figure("Name", "PSNR (Eve, Compensated)");
-        plot(results.eve.ebN0dB, compMetricsEve.psnr.', "o-");
-        grid on;
-        xlabel("E_b/N_0 at Eve (dB)");
-        ylabel("PSNR (dB, after concealment)");
-        legend(methods, "Location", "southeast");
+        fig2bc = local_create_line_figure("PSNR (Eve, Compensated)");
+        ax2bc = axes(fig2bc);
+        local_plot_series_matrix(ax2bc, results.eve.ebN0dB, compMetricsEve.psnr, "linear");
+        local_apply_line_labels(ax2bc, "E_b/N_0 at Eve (dB)", "PSNR (dB, after concealment)");
+        local_style_legend(ax2bc, methods, "southeast");
         exportgraphics(fig2bc, fullfile(outDir, "psnr_eve_compensated.png"));
         close(fig2bc);
 
-        fig2bcm = figure("Name", "MSE (Eve, Compensated)");
-        semilogy(results.eve.ebN0dB, compMetricsEve.mse.', "o-");
-        grid on;
-        xlabel("E_b/N_0 at Eve (dB)");
-        ylabel("MSE (after concealment)");
-        legend(methods, "Location", "northeast");
+        fig2bcm = local_create_line_figure("MSE (Eve, Compensated)");
+        ax2bcm = axes(fig2bcm);
+        local_plot_series_matrix(ax2bcm, results.eve.ebN0dB, compMetricsEve.mse, "logy");
+        local_apply_line_labels(ax2bcm, "E_b/N_0 at Eve (dB)", "MSE (after concealment)");
+        local_style_legend(ax2bcm, methods, "northeast");
         exportgraphics(fig2bcm, fullfile(outDir, "mse_eve_compensated.png"));
         close(fig2bcm);
     end
 
-    fig1b = figure("Name", "BER (Eve)");
-    semilogy(results.eve.ebN0dB, results.eve.ber.', "o-");
-    grid on;
-    xlabel("E_b/N_0 at Eve (dB)");
-    ylabel("BER (payload)");
-    legend(methods, "Location", "southwest");
+    fig1b = local_create_line_figure("BER (Eve)");
+    ax1b = axes(fig1b);
+    local_plot_series_matrix(ax1b, results.eve.ebN0dB, results.eve.ber, "logy");
+    local_apply_line_labels(ax1b, "E_b/N_0 at Eve (dB)", "BER (payload)");
+    local_format_ber_axis(ax1b);
+    local_style_legend(ax1b, methods, "southwest");
     exportgraphics(fig1b, fullfile(outDir, "ber_eve.png"));
     close(fig1b);
 end
 
-fig3 = figure("Name", "Spectrum");
-plot(results.spectrum.freqHz/1e3, 10*log10(results.spectrum.psd));
-grid on;
-xlabel("Frequency (kHz)");
-ylabel("PSD (dB/Hz)");
-title(sprintf("99%% OBW=%.1f Hz,  \\eta=%.3f b/s/Hz", results.spectrum.bw99Hz, results.spectrum.etaBpsHz));
+fig3 = local_create_line_figure("Spectrum");
+ax3 = axes(fig3);
+local_plot_series_matrix(ax3, results.spectrum.freqHz(:).'/1e3, 10*log10(results.spectrum.psd(:)).', "linear", false, false);
+local_apply_line_labels(ax3, ...
+    "Frequency (kHz)", ...
+    "PSD (dB/Hz)", ...
+    sprintf("99%% OBW=%.1f Hz,  \\eta=%.3f b/s/Hz", results.spectrum.bw99Hz, results.spectrum.etaBpsHz));
 exportgraphics(fig3, fullfile(outDir, "psd.png"));
 close(fig3);
 
@@ -403,19 +394,176 @@ if isfield(results, "covert") && isfield(results.covert, "warden")
         x = w.eveEbN0dB;
         xlab = "E_b/N_0 at Eve (dB)";
     end
-    fig6 = figure("Name", "Warden");
-    plot(x, w.pdEst, "o-");
-    hold on;
-    plot(x, w.pfaEst, "o-");
-    plot(x, w.peEst, "o-");
-    grid on;
-    xlabel(xlab);
-    ylabel("Probability");
-    legend("P_D", "P_{FA}", "P_e", "Location", "best");
-    title(sprintf("Energy detector: P_FA target=%.3g, nObs=%d, nTrials=%d", w.pfaTarget, round(w.nObs(1)), round(w.nTrials)));
+    fig6 = local_create_line_figure("Warden");
+    ax6 = axes(fig6);
+    wardenValues = [w.pdEst(:).'; w.pfaEst(:).'; w.peEst(:).'];
+    local_plot_series_matrix(ax6, x, wardenValues, "linear");
+    local_apply_line_labels(ax6, ...
+        xlab, ...
+        "Probability", ...
+        sprintf("Energy detector: P_FA target=%.3g, nObs=%d, nTrials=%d", w.pfaTarget, round(w.nObs(1)), round(w.nTrials)));
+    local_style_legend(ax6, ["P_D", "P_{FA}", "P_e"], "best");
     exportgraphics(fig6, fullfile(outDir, "warden.png"));
     close(fig6);
 end
+end
+
+function fig = local_create_line_figure(name)
+fig = figure("Name", name, "Color", "w");
+fig.Position = [100 100 1000 632];
+end
+
+function local_plot_series_matrix(ax, x, values, scaleMode, useDiscreteXAxis, showMarkers)
+if nargin < 5
+    useDiscreteXAxis = true;
+end
+if nargin < 6
+    showMarkers = true;
+end
+
+values = local_align_series_matrix(x, values);
+hold(ax, "on");
+for idx = 1:size(values, 1)
+    style = local_pick_series_style(idx);
+    y = values(idx, :);
+    switch string(scaleMode)
+        case "logy"
+            h = semilogy(ax, x, y);
+        otherwise
+            h = plot(ax, x, y);
+    end
+    local_apply_series_style(h, style, showMarkers);
+end
+hold(ax, "off");
+
+local_apply_axes_style(ax);
+if useDiscreteXAxis
+    local_style_discrete_x_axis(ax, x);
+end
+grid(ax, "on");
+end
+
+function values = local_align_series_matrix(x, values)
+nX = numel(x);
+
+if isvector(values)
+    values = reshape(values, 1, []);
+end
+
+if size(values, 2) == nX
+    return;
+end
+
+if size(values, 1) == nX
+    values = values.';
+    return;
+end
+
+error("save_figures:InvalidSeriesShape", ...
+    "Series data shape does not match x-axis length (%d).", nX);
+end
+
+function local_apply_axes_style(ax)
+ax.FontName = "Times New Roman";
+ax.FontSize = 18;
+ax.LineWidth = 1.0;
+ax.Box = "on";
+ax.TickLabelInterpreter = "tex";
+ax.GridLineStyle = "-";
+ax.GridAlpha = 0.3;
+ax.MinorGridAlpha = 0.15;
+ax.XMinorGrid = "on";
+ax.YMinorGrid = "on";
+ax.Layer = "bottom";
+end
+
+function local_format_ber_axis(ax)
+yLim = ylim(ax);
+if any(~isfinite(yLim)) || yLim(1) <= 0 || yLim(2) <= 0
+    return;
+end
+
+expMin = floor(log10(yLim(1)));
+expMax = ceil(log10(yLim(2)));
+if yLim(2) < 1
+    expMax = min(expMax, -1);
+end
+if expMin > expMax
+    expMax = expMin;
+end
+
+yTicks = 10 .^ (expMin:expMax);
+yTicks = yTicks(yTicks >= yLim(1) & yTicks <= yLim(2));
+if isempty(yTicks)
+    yTicks = 10 .^ (expMin:expMax);
+end
+
+yLabels = arrayfun(@(tick) sprintf("10^{%d}", round(log10(tick))), yTicks, "UniformOutput", false);
+ax.YTick = yTicks;
+ax.YTickLabel = yLabels;
+end
+
+function local_apply_line_labels(ax, xText, yText, titleText)
+xlabel(ax, xText, "FontName", "Times New Roman", "FontSize", 16);
+ylabel(ax, yText, "FontName", "Times New Roman", "FontSize", 16);
+if nargin >= 4 && strlength(string(titleText)) > 0
+    title(ax, titleText, "FontName", "Times New Roman", "FontSize", 18);
+end
+end
+
+function local_style_legend(ax, labels, location)
+leg = legend(ax, labels, "Location", location, "FontSize", 11);
+leg.FontName = "Times New Roman";
+leg.Box = "on";
+leg.EdgeColor = [0 0 0];
+leg.Color = [1 1 1];
+end
+
+function local_style_discrete_x_axis(ax, x)
+xTicks = unique(x, "stable");
+if isempty(xTicks) || numel(xTicks) > 10
+    return;
+end
+
+ax.XTick = xTicks;
+if isnumeric(xTicks)
+    xMin = min(xTicks);
+    xMax = max(xTicks);
+    if xMin ~= xMax
+        xlim(ax, [xMin - 1, xMax + 1]);
+    end
+end
+end
+
+function local_apply_series_style(h, style, showMarkers)
+set(h, ...
+    "Color", style.Color, ...
+    "LineStyle", style.LineStyle, ...
+    "LineWidth", 2.5);
+
+if showMarkers
+    set(h, ...
+        "Marker", style.Marker, ...
+        "MarkerSize", 9, ...
+        "MarkerFaceColor", "none", ...
+        "MarkerEdgeColor", style.Color);
+else
+    set(h, "Marker", "none");
+end
+end
+
+function style = local_pick_series_style(index)
+styles = local_series_styles();
+style = styles(mod(index - 1, numel(styles)) + 1);
+end
+
+function styles = local_series_styles()
+styles = struct( ...
+    "Color", {[213 94 0] / 255, [153 153 153] / 255, [230 159 0] / 255, ...
+              [0 158 115] / 255, [204 121 167] / 255, [0 114 178] / 255, ...
+              [86 180 233] / 255}, ...
+    "LineStyle", {"-", ":", "-.", "--", ":", "--", "-."}, ...
+    "Marker", {"s", "o", "v", "^", "d", "p", "x"});
 end
 
 function [commMetrics, compMetrics] = local_get_image_metrics(results)
