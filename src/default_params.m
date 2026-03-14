@@ -165,8 +165,7 @@ p.channel.multipath = struct();
 p.channel.multipath.enable = true;
 p.channel.multipath.pathDelaysSymbols = [0 1 2];   % 各径时延（单位：symbol）
 p.channel.multipath.pathGainsDb = [0 -12 -18]; % 各径平均增益(dB)
-% 各径相位（固定相位便于可复现对比）
-p.channel.multipath.pathPhasesRad = [0 0 0];
+p.channel.multipath.rayleigh = true;        % 启用瑞利衰落（各径独立复高斯系数，每帧随机）
 
 %% 接收端（RX）
 % 10) 脉冲抑制

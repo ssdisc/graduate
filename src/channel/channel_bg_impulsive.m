@@ -50,7 +50,13 @@ if isfield(ch, "multipath") && isfield(ch.multipath, "enable") && ch.multipath.e
         phase = 2*pi*rand(size(amp));
     end
 
-    cplxAmp = amp .* exp(1j*phase);
+    useRayleigh = isfield(ch.multipath, "rayleigh") && ch.multipath.rayleigh;
+    if useRayleigh
+        % 瑞利衰落：各径复高斯系数，均方 = 线性功率增益
+        cplxAmp = amp .* (randn(size(amp)) + 1j*randn(size(amp))) / sqrt(2);
+    else
+        cplxAmp = amp .* exp(1j*phase);
+    end
 
     mpTaps = complex(zeros(max(dly)+1, 1));
     for k = 1:numel(dly)
