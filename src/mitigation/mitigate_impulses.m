@@ -87,6 +87,7 @@ switch lower(string(method))
         else
             model = ml_cnn_impulse_model();
         end
+        local_require_trained_dl_model(model, "ml_cnn", mit);
         [mask, rel, cleanSym, pImp] = ml_cnn_impulse_detect(r, model);
 
         % 对检测到的脉冲使用清洁符号，否则使用原始符号
@@ -109,6 +110,7 @@ switch lower(string(method))
         else
             model = ml_cnn_impulse_model();
         end
+        local_require_trained_dl_model(model, "ml_cnn_hard", mit);
         [mask, rel, ~, ~] = ml_cnn_impulse_detect(r, model);
         rOut = r;
         rOut(mask) = 0;
@@ -122,6 +124,7 @@ switch lower(string(method))
         else
             model = ml_gru_impulse_model();
         end
+        local_require_trained_dl_model(model, "ml_gru", mit);
         [mask, rel, cleanSym, pImp] = ml_gru_impulse_detect(r, model);
 
         rOut = r;
@@ -141,6 +144,7 @@ switch lower(string(method))
         else
             model = ml_gru_impulse_model();
         end
+        local_require_trained_dl_model(model, "ml_gru_hard", mit);
         [mask, rel, ~, ~] = ml_gru_impulse_detect(r, model);
         rOut = r;
         rOut(mask) = 0;
@@ -149,5 +153,13 @@ switch lower(string(method))
 
     otherwise
         error("未知的抑制方法: %s", method);
+end
+end
+
+function local_require_trained_dl_model(model, methodName, mit)
+requireTrained = isfield(mit, "requireTrainedModels") && logical(mit.requireTrainedModels);
+if requireTrained && ~(isfield(model, "trained") && logical(model.trained))
+    error("mitigate_impulses:MissingTrainedModel", ...
+        "Method %s requires a trained ML model, but the loaded model is not trained.", char(methodName));
 end
 end

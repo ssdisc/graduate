@@ -1,5 +1,11 @@
-function p = default_params()
+function p = default_params(opts)
 %DEFAULT_PARAMS  赛道一基准链路的默认参数集（仿真控制置前，其余按链路顺序）。
+
+arguments
+    opts.strictModelLoad (1,1) logical = true
+    opts.requireTrainedMlModels (1,1) logical = true
+    opts.allowBatchModelFallback (1,1) logical = true
+end
 
 p = struct();
 
@@ -184,6 +190,8 @@ p.mitigation.adaptiveNotch.peakRatio = 8.0;
 p.mitigation.adaptiveNotch.radius = 0.97;     % 极点半径，越接近1越窄
 p.mitigation.adaptiveNotch.minFreqAbs = 0.01;
 p.mitigation.adaptiveNotch.stages = 1;
+p.mitigation.strictModelLoad = opts.strictModelLoad;
+p.mitigation.requireTrainedModels = opts.requireTrainedMlModels;
 
 modelDir = fullfile(pwd, "models");
 if ~exist(modelDir, 'dir')
@@ -194,9 +202,21 @@ if ~exist(modelDir, 'dir')
     end
 end
 
-p.mitigation.ml = load_pretrained_model(fullfile(modelDir, "impulse_lr_model.mat"), @ml_impulse_lr_model);
-p.mitigation.mlCnn = load_pretrained_model(fullfile(modelDir, "impulse_cnn_model.mat"), @ml_cnn_impulse_model);
-p.mitigation.mlGru = load_pretrained_model(fullfile(modelDir, "impulse_gru_model.mat"), @ml_gru_impulse_model);
+p.mitigation.ml = load_pretrained_model( ...
+    fullfile(modelDir, "impulse_lr_model.mat"), @ml_impulse_lr_model, ...
+    "strict", opts.strictModelLoad, ...
+    "requireTrained", opts.requireTrainedMlModels, ...
+    "allowBatchFallback", opts.allowBatchModelFallback);
+p.mitigation.mlCnn = load_pretrained_model( ...
+    fullfile(modelDir, "impulse_cnn_model.mat"), @ml_cnn_impulse_model, ...
+    "strict", opts.strictModelLoad, ...
+    "requireTrained", opts.requireTrainedMlModels, ...
+    "allowBatchFallback", opts.allowBatchModelFallback);
+p.mitigation.mlGru = load_pretrained_model( ...
+    fullfile(modelDir, "impulse_gru_model.mat"), @ml_gru_impulse_model, ...
+    "strict", opts.strictModelLoad, ...
+    "requireTrained", opts.requireTrainedMlModels, ...
+    "allowBatchFallback", opts.allowBatchModelFallback);
 
 % 11) 软量化（用于vitdec 'soft'）
 p.softMetric = struct();

@@ -1,29 +1,5 @@
 function [model, report] = ml_train_cnn_impulse(p, opts)
-%ML_TRAIN_CNN_IMPULSE  使用Deep Learning Toolbox训练1D CNN脉冲检测器（支持GPU）。
-%
-% 训练一个小型CNN，输出：
-%   - 脉冲概率
-%   - 软译码的可靠性权重
-%   - 清洁符号估计
-%
-% 示例:
-%   addpath(genpath('src'));
-%   p = default_params();
-%   [model, report] = ml_train_cnn_impulse(p);
-%   p.mitigation.mlCnn = model;
-%   results = simulate(p);
-%
-% 输入:
-%   p    - 参数结构体（default_params）
-%          主要使用: p.mod, p.channel, p.mitigation
-%   opts - 训练选项结构体（Name-Value）
-%          .nBlocks, .blockLen, .ebN0dBRange
-%          .epochs, .batchSize, .lr, .pfaTarget
-%          .useGpu, .verbose
-%
-% 输出:
-%   model  - 训练后的CNN模型结构体
-%   report - 训练报告结构体（阈值/检测率等）
+%ML_TRAIN_CNN_IMPULSE  使用 Deep Learning Toolbox 训练 1D CNN 脉冲检测器。
 
 arguments
     p (1,1) struct
@@ -34,11 +10,32 @@ arguments
     opts.batchSize (1,1) double {mustBeInteger, mustBePositive} = 64
     opts.lr (1,1) double {mustBePositive} = 0.001
     opts.pfaTarget (1,1) double = 0.01
+    opts.valFraction (1,1) double = 0.15
+    opts.testFraction (1,1) double = 0.15
+    opts.splitSeed (1,1) double = 1
+    opts.rngSeed (1,1) double = NaN
+    opts.enableEarlyStopping (1,1) logical = true
+    opts.earlyStoppingPatience (1,1) double {mustBeInteger, mustBePositive} = 5
+    opts.earlyStoppingMinDelta (1,1) double {mustBeNonnegative} = 1e-4
+    opts.minEpochs (1,1) double {mustBeInteger, mustBePositive} = 5
+    opts.saveArtifacts (1,1) logical = false
+    opts.saveDir (1,1) string = "models"
+    opts.saveTag (1,1) string = ""
+    opts.savedBy (1,1) string = ""
     opts.useGpu (1,1) logical = true
     opts.verbose (1,1) logical = true
 end
 
-%% 检查GPU可用性
+if ~(opts.valFraction > 0 && opts.valFraction < 1)
+    error("valFraction 必须在 (0,1) 内。");
+end
+if ~(opts.testFraction > 0 && opts.testFraction < 1)
+    error("testFraction 必须在 (0,1) 内。");
+end
+
+rngSeed = ml_resolve_rng_seed(p, opts.rngSeed);
+rngScope = ml_rng_scope(rngSeed); %#ok<NASGU>
+
 if opts.useGpu && canUseGPU()
     executionEnvironment = "gpu";
     if opts.verbose
@@ -51,138 +48,99 @@ else
     end
 end
 
-%% 生成训练数据
 if opts.verbose
-    fprintf("正在生成训练数据...\n");
+    fprintf("正在生成训练/验证/测试数据...\n");
 end
 
-[~, modInfo] = modulate_bits(uint8([0; 1]), p.mod);
-codeRate = modInfo.codeRate;
-bitsPerSym = modInfo.bitsPerSymbol;
-Es = 1.0;
-
-nBlocks = opts.nBlocks;
-L = opts.blockLen;
-
-% 存储序列数据（用于序列输入层）
-allSeqX = cell(nBlocks, 1);    % 特征序列 [L x 4]
-allSeqY = cell(nBlocks, 1);    % 脉冲标签 [L x 1]
-allSeqTx = cell(nBlocks, 1);   % 清洁发送符号 [L x 1]
-allSeqRx = cell(nBlocks, 1);   % 接收符号 [L x 1]
-
-for b = 1:nBlocks
-    ebN0dB = opts.ebN0dBRange(1) + rand() * diff(opts.ebN0dBRange);
-    EbN0 = 10.^(ebN0dB/10);
-    N0 = ebn0_to_n0(EbN0, codeRate, bitsPerSym, Es);
-
-    % 生成随机符号（BPSK/QPSK）
-    bits = randi([0 1], L * bitsPerSym, 1, 'uint8');
-    txSym = modulate_bits(bits, p.mod);
-
-    % 通过脉冲信道
-    [rxSym, impMask] = channel_bg_impulsive(txSym, N0, p.channel);
-
-    % 提取特征
-    feats = ml_cnn_features(rxSym);
-
-    % 存储
-    allSeqX{b} = feats;           % [L x 4]
-    allSeqY{b} = impMask ~= 0;    % [L x 1] logical
-    allSeqTx{b} = txSym;          % [L x 1]
-    allSeqRx{b} = rxSym;          % [L x 1]
+dataset = ml_generate_impulse_blocks(p, opts.nBlocks, opts.blockLen, opts.ebN0dBRange);
+split = ml_split_dataset_indices(dataset.nBlocks, opts.valFraction, opts.testFraction, opts.splitSeed);
+if split.nVal < 1 || split.nTest < 1
+    error("当前CNN训练流程要求独立的验证集和测试集，请增大 nBlocks 或调整 val/test 占比。");
 end
 
-%% 计算归一化统计量
-allX = cell2mat(allSeqX);
-inputMean = mean(allX, 1);
-inputStd = std(allX, 0, 1);
+trainRx = dataset.rxSym(split.trainIdx);
+trainTx = dataset.txSym(split.trainIdx);
+trainY = dataset.impMask(split.trainIdx);
+valRx = dataset.rxSym(split.valIdx);
+valY = dataset.impMask(split.valIdx);
+testRx = dataset.rxSym(split.testIdx);
+testY = dataset.impMask(split.testIdx);
+
+trainX = local_extract_features(trainRx);
+valX = local_extract_features(valRx);
+testX = local_extract_features(testRx);
+
+allXTrain = cell2mat(trainX);
+inputMean = mean(allXTrain, 1);
+inputStd = std(allXTrain, 0, 1);
 inputStd(inputStd < 1e-6) = 1;
 
-% 归一化所有序列
-for b = 1:nBlocks
-    allSeqX{b} = (allSeqX{b} - inputMean) ./ inputStd;
-end
+trainX = local_normalize_features(trainX, inputMean, inputStd);
+valX = local_normalize_features(valX, inputMean, inputStd);
+testX = local_normalize_features(testX, inputMean, inputStd);
 
-%% 初始化模型
 model = ml_cnn_impulse_model();
 model.inputMean = inputMean;
 model.inputStd = inputStd;
 
-%% 统计脉冲率
-allY = cell2mat(allSeqY);
-posRate = mean(allY);
+trainPosRate = mean(cell2mat(cellfun(@double, trainY, 'UniformOutput', false)));
+valPosRate = local_positive_rate(valY);
+testPosRate = local_positive_rate(testY);
 
 if opts.verbose
-    fprintf("训练数据：%d序列，每序列%d样本，%.2f%%脉冲\n", nBlocks, L, 100*posRate);
+    fprintf("数据划分：train=%d, val=%d, test=%d\n", split.nTrain, split.nVal, split.nTest);
+    fprintf("训练集脉冲率：%.2f%%，验证集：%.2f%%，测试集：%.2f%%\n", ...
+        100 * trainPosRate, 100 * valPosRate, 100 * testPosRate);
     fprintf("开始训练%d轮...\n", opts.epochs);
 end
 
-%% 类别权重（处理不平衡）
-wPos = 0.5 / max(posRate, 1e-6);
-wNeg = 0.5 / max(1 - posRate, 1e-6);
+wPos = 0.5 / max(trainPosRate, 1e-6);
+wNeg = 0.5 / max(1 - trainPosRate, 1e-6);
 
-%% 准备训练数据（转换为dlarray格式）
-% Deep Learning Toolbox序列格式：'CTB' (Channel x Time x Batch)
-% 我们的数据是 [Time x Channel]，需要转置为 [Channel x Time]
+XTrain = local_to_network_inputs(trainX);
+YTrain = local_to_label_inputs(trainY);
+TxRealTrain = local_to_real_imag_inputs(trainTx, "real");
+TxImagTrain = local_to_real_imag_inputs(trainTx, "imag");
+XVal = local_to_network_inputs(valX);
+YVal = local_to_label_inputs(valY);
+TxRealVal = local_to_real_imag_inputs(dataset.txSym(split.valIdx), "real");
+TxImagVal = local_to_real_imag_inputs(dataset.txSym(split.valIdx), "imag");
 
-% 将序列打包为cell数组（用于不等长序列，但这里都是等长的）
-XTrain = cell(nBlocks, 1);
-YTrain = cell(nBlocks, 1);
-TxRealTrain = cell(nBlocks, 1);
-TxImagTrain = cell(nBlocks, 1);
-
-for b = 1:nBlocks
-    XTrain{b} = allSeqX{b}';      % [4 x L]
-    YTrain{b} = double(allSeqY{b})';  % [1 x L]
-    TxRealTrain{b} = real(allSeqTx{b})'; % [1 x L]
-    TxImagTrain{b} = imag(allSeqTx{b})'; % [1 x L]
-end
-
-%% 初始化Adam优化器状态
 averageGrad = [];
 averageSqGrad = [];
-
-%% 训练循环
-losses = zeros(opts.epochs, 1);
-learnRate = opts.lr;
+losses = nan(opts.epochs, 1);
+valLosses = nan(opts.epochs, 1);
+bestNet = model.net;
+bestEpoch = 0;
+bestValLoss = inf;
+patienceCount = 0;
+epochsCompleted = 0;
+stoppedEarly = false;
 
 for epoch = 1:opts.epochs
-    % 打乱数据
-    perm = randperm(nBlocks);
+    perm = randperm(numel(XTrain));
     epochLoss = 0;
-    nBatches = 0;
 
-    for bStart = 1:opts.batchSize:nBlocks
-        bEnd = min(bStart + opts.batchSize - 1, nBlocks);
+    for bStart = 1:opts.batchSize:numel(XTrain)
+        bEnd = min(bStart + opts.batchSize - 1, numel(XTrain));
         batchIdx = perm(bStart:bEnd);
         batchSize = numel(batchIdx);
 
-        % 准备批次数据
-        XBatch = XTrain(batchIdx);
-        YBatch = YTrain(batchIdx);
-        TxRealBatch = TxRealTrain(batchIdx);
-        TxImagBatch = TxImagTrain(batchIdx);
+        XData = cat(3, XTrain{batchIdx});
+        YData = cat(3, YTrain{batchIdx});
+        TxRealData = cat(3, TxRealTrain{batchIdx});
+        TxImagData = cat(3, TxImagTrain{batchIdx});
 
-        % 将批次数据合并为单个数组
-        % 由于序列等长，可以直接堆叠
-        XData = cat(3, XBatch{:});  % [4 x L x batchSize]
-        YData = cat(3, YBatch{:});  % [1 x L x batchSize]
-        TxRealData = cat(3, TxRealBatch{:}); % [1 x L x batchSize]
-        TxImagData = cat(3, TxImagBatch{:}); % [1 x L x batchSize]
-
-        % 计算类别权重
         WData = ones(size(YData));
         WData(YData == 1) = wPos;
         WData(YData == 0) = wNeg;
 
-        % 转换为dlarray
         XDl = dlarray(single(XData), 'CTB');
         YDl = dlarray(single(YData), 'CTB');
         TxRealDl = dlarray(single(TxRealData), 'CTB');
         TxImagDl = dlarray(single(TxImagData), 'CTB');
         WDl = dlarray(single(WData), 'CTB');
 
-        % 移动到GPU
         if executionEnvironment == "gpu"
             XDl = gpuArray(XDl);
             YDl = gpuArray(YDl);
@@ -191,116 +149,247 @@ for epoch = 1:opts.epochs
             WDl = gpuArray(WDl);
         end
 
-        % 计算损失和梯度
         [loss, gradients] = dlfeval(@modelLoss, model.net, XDl, YDl, TxRealDl, TxImagDl, WDl);
-
-        % 更新网络参数
         [model.net, averageGrad, averageSqGrad] = adamupdate(model.net, gradients, ...
-            averageGrad, averageSqGrad, epoch, learnRate);
+            averageGrad, averageSqGrad, epoch, opts.lr);
 
         epochLoss = epochLoss + extractdata(loss) * batchSize;
-        nBatches = nBatches + 1;
     end
 
-    epochLoss = epochLoss / nBlocks;
+    epochLoss = epochLoss / numel(XTrain);
     losses(epoch) = epochLoss;
-%当前进度
+    valLoss = local_eval_sequence_loss(model.net, XVal, YVal, TxRealVal, TxImagVal, ...
+        wPos, wNeg, executionEnvironment, @modelLossOnly);
+    valLosses(epoch) = valLoss;
+
+    if isfinite(valLoss) && (valLoss < bestValLoss - opts.earlyStoppingMinDelta || bestEpoch == 0)
+        bestValLoss = valLoss;
+        bestNet = model.net;
+        bestEpoch = epoch;
+        patienceCount = 0;
+    else
+        patienceCount = patienceCount + 1;
+    end
+    epochsCompleted = epoch;
+
     if opts.verbose && (epoch == 1 || mod(epoch, 5) == 0 || epoch == opts.epochs)
-        % 在完整数据集上评估
-        allPred = [];
-        allTrue = [];
-        for b = 1:nBlocks
-            [~, ~, ~, pImpulse] = ml_cnn_impulse_detect(complex(allSeqRx{b}), model);
-            allPred = [allPred; pImpulse];
-            allTrue = [allTrue; double(allSeqY{b})];
+        [valScoresNow, valTruthNow] = ml_collect_detector_scores(valRx, valY, @(r) ml_cnn_impulse_detect(r, model));
+        valMetricsNow = ml_binary_metrics(valScoresNow, valTruthNow, 0.5);
+        fprintf("第%d/%d轮：trainLoss=%.4f, valLoss=%.4f, Val TPR@0.5=%.3f, Val FPR@0.5=%.3f\n", ...
+            epoch, opts.epochs, epochLoss, valLoss, valMetricsNow.tpr, valMetricsNow.fpr);
+    end
+
+    if opts.enableEarlyStopping && epoch >= opts.minEpochs && patienceCount >= opts.earlyStoppingPatience
+        stoppedEarly = true;
+        if opts.verbose
+            fprintf("验证集损失连续%d轮未提升，提前停止于第%d轮。\n", opts.earlyStoppingPatience, epoch);
         end
-        allTrue = logical(allTrue);
-        pred = allPred >= 0.5;
-        tpr = mean(pred(allTrue));
-        fpr = mean(pred(~allTrue));
-        fprintf("第%d/%d轮：loss=%.4f, TPR@0.5=%.3f, FPR@0.5=%.3f\n", ...
-            epoch, opts.epochs, epochLoss, tpr, fpr);
+        break;
     end
 end
 
-%% 为目标Pfa找最优阈值
-allPred = [];
-allTrue = [];
-for b = 1:nBlocks
-    [~, ~, ~, pImpulse] = ml_cnn_impulse_detect(complex(allSeqRx{b}), model);
-    allPred = [allPred; pImpulse];
-    allTrue = [allTrue; double(allSeqY{b})];
-end
-allTrue = logical(allTrue);
+losses = losses(1:epochsCompleted);
+valLosses = valLosses(1:epochsCompleted);
+model.net = bestNet;
 
-pNeg = allPred(~allTrue);
-pNegSorted = sort(pNeg);
-idxQ = max(1, min(numel(pNegSorted), ceil((1 - opts.pfaTarget) * numel(pNegSorted))));
-model.threshold = pNegSorted(idxQ);
+[valScores, valTruth] = ml_collect_detector_scores(valRx, valY, @(r) ml_cnn_impulse_detect(r, model));
+model.threshold = ml_select_threshold_for_pfa(valScores, valTruth, opts.pfaTarget);
 
-%% 最终评估
-pfaEst = mean(allPred(~allTrue) >= model.threshold);
-pdEst = mean(allPred(allTrue) >= model.threshold);
-
+[testScores, testTruth] = ml_collect_detector_scores(testRx, testY, @(r) ml_cnn_impulse_detect(r, model));
+valMetrics = ml_binary_metrics(valScores, valTruth, model.threshold);
+testMetrics = ml_binary_metrics(testScores, testTruth, model.threshold);
 model.trained = true;
 
-%% 报告
 report = struct();
-report.nBlocks = nBlocks;
-report.blockLen = L;
-report.nSamples = nBlocks * L;
-report.posRate = posRate;
+report.nBlocks = dataset.nBlocks;
+report.blockLen = dataset.blockLen;
+report.nSamples = dataset.nBlocks * dataset.blockLen;
+report.ebN0dBRange = dataset.ebN0dBRange;
+report.ebN0dBPerBlock = dataset.ebN0dBPerBlock;
+report.rngSeed = rngSeed;
 report.epochs = opts.epochs;
+report.epochsCompleted = epochsCompleted;
+report.bestEpoch = bestEpoch;
+report.stoppedEarly = stoppedEarly;
+report.bestValLoss = bestValLoss;
 report.finalLoss = losses(end);
+report.finalTrainLoss = losses(end);
+report.finalValidationLoss = valLosses(end);
 report.losses = losses;
+report.validationLosses = valLosses;
 report.pfaTarget = opts.pfaTarget;
-report.pfaEst = pfaEst;
-report.pdEst = pdEst;
 report.threshold = model.threshold;
 report.executionEnvironment = executionEnvironment;
+report.split = split;
+report.train = struct("posRate", trainPosRate, "wPos", wPos, "wNeg", wNeg);
+report.validation = local_pack_metrics_report(valMetrics, valPosRate);
+report.test = local_pack_metrics_report(testMetrics, testPosRate);
+report.pfaEst = testMetrics.pfa;
+report.pdEst = testMetrics.pd;
+report.earlyStopping = struct( ...
+    "enabled", opts.enableEarlyStopping, ...
+    "patience", opts.earlyStoppingPatience, ...
+    "minDelta", opts.earlyStoppingMinDelta, ...
+    "minEpochs", opts.minEpochs, ...
+    "monitor", "validation_loss");
+report.selection = struct( ...
+    "bestCheckpointBy", "validation_loss", ...
+    "thresholdBy", "validation_set_pfa_target", ...
+    "testSetHeldOut", true);
+report.artifacts = local_empty_artifacts_report();
+
+if opts.saveArtifacts
+    [report, ~] = ml_save_training_artifacts(model, report, "impulse_cnn_model", ...
+        "saveDir", opts.saveDir, "saveTag", opts.saveTag, "savedBy", opts.savedBy);
+end
 
 if opts.verbose
     fprintf("\n训练完成。\n");
-    fprintf("最终：Pd=%.3f, Pfa=%.3f，阈值=%.3f\n", pdEst, pfaEst, model.threshold);
+    fprintf("最佳模型来自第%d轮，best val loss=%.4f。\n", bestEpoch, bestValLoss);
+    fprintf("验证集：Pd=%.3f, Pfa=%.3f, 阈值=%.3f\n", valMetrics.pd, valMetrics.pfa, model.threshold);
+    fprintf("测试集：Pd=%.3f, Pfa=%.3f, Pe=%.3f\n", testMetrics.pd, testMetrics.pfa, testMetrics.pe);
+end
 end
 
+function feats = local_extract_features(rxSet)
+feats = cell(numel(rxSet), 1);
+for k = 1:numel(rxSet)
+    feats{k} = ml_cnn_features(rxSet{k});
+end
 end
 
-%% 损失函数
-function [loss, gradients] = modelLoss(net, X, Y, TxReal, TxImag, W)
-%MODELLOSS  计算CNN模型的损失和梯度。
+function featsOut = local_normalize_features(featsIn, mu, sigma)
+featsOut = cell(size(featsIn));
+for k = 1:numel(featsIn)
+    featsOut{k} = (featsIn{k} - mu) ./ sigma;
+end
+end
 
-% 前向传播
-out = forward(net, X);  % [4 x L x B]
+function arr = local_to_network_inputs(featsIn)
+arr = cell(numel(featsIn), 1);
+for k = 1:numel(featsIn)
+    arr{k} = featsIn{k}.';
+end
+end
 
-% 解析输出
+function arr = local_to_label_inputs(labelsIn)
+arr = cell(numel(labelsIn), 1);
+for k = 1:numel(labelsIn)
+    arr{k} = double(labelsIn{k}).';
+end
+end
+
+function arr = local_to_real_imag_inputs(symSet, part)
+arr = cell(numel(symSet), 1);
+for k = 1:numel(symSet)
+    switch part
+        case "real"
+            arr{k} = real(symSet{k}).';
+        case "imag"
+            arr{k} = imag(symSet{k}).';
+        otherwise
+            error("未知部分: %s", part);
+    end
+end
+end
+
+function rate = local_positive_rate(labelSet)
+if isempty(labelSet)
+    rate = NaN;
+else
+    rate = mean(cell2mat(cellfun(@double, labelSet, 'UniformOutput', false)));
+end
+end
+
+function out = local_pack_metrics_report(metrics, posRate)
+out = metrics;
+out.posRate = posRate;
+end
+
+function out = local_empty_artifacts_report()
+out = struct( ...
+    "saved", false, ...
+    "saveDir", "", ...
+    "latestPath", "", ...
+    "batchPath", "", ...
+    "batchTag", "", ...
+    "savedAt", "", ...
+    "savedBy", "");
+end
+
+function lossVal = local_eval_sequence_loss(net, XSet, YSet, TxRealSet, TxImagSet, wPos, wNeg, executionEnvironment, lossFn)
+totalLoss = 0;
+for k = 1:numel(XSet)
+    XData = XSet{k};
+    YData = YSet{k};
+    TxRealData = TxRealSet{k};
+    TxImagData = TxImagSet{k};
+
+    WData = ones(size(YData), 'single');
+    WData(YData == 1) = wPos;
+    WData(YData == 0) = wNeg;
+
+    XDl = dlarray(single(XData), 'CTB');
+    YDl = dlarray(single(YData), 'CTB');
+    TxRealDl = dlarray(single(TxRealData), 'CTB');
+    TxImagDl = dlarray(single(TxImagData), 'CTB');
+    WDl = dlarray(single(WData), 'CTB');
+
+    if executionEnvironment == "gpu"
+        XDl = gpuArray(XDl);
+        YDl = gpuArray(YDl);
+        TxRealDl = gpuArray(TxRealDl);
+        TxImagDl = gpuArray(TxImagDl);
+        WDl = gpuArray(WDl);
+    end
+
+    loss = dlfeval(lossFn, net, XDl, YDl, TxRealDl, TxImagDl, WDl);
+    totalLoss = totalLoss + double(gather(extractdata(loss)));
+end
+lossVal = totalLoss / max(numel(XSet), 1);
+end
+
+function loss = modelLossOnly(net, X, Y, TxReal, TxImag, W)
+out = forward(net, X);
+
 pImpulse = sigmoid(out(1,:,:));
 reliability = sigmoid(out(2,:,:));
 cleanReal = out(3,:,:);
 cleanImag = out(4,:,:);
 
-% 1. 脉冲检测的加权二元交叉熵
 bce = -W .* (Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
 lossBce = mean(bce, 'all');
 
-% 2. 符号重建的MSE
 mse = (cleanReal - TxReal).^2 + (cleanImag - TxImag).^2;
 lossMse = mean(mse, 'all');
 
-% 3. 可靠性损失（脉冲应该低可靠性）
 relTarget = 1 - Y;
 relLoss = (reliability - relTarget).^2;
 lossRel = mean(relLoss, 'all');
 
-% 总损失
-alphaBce = 1.0;
-alphaMse = 0.5;
-alphaRel = 0.3;
-loss = alphaBce * lossBce + alphaMse * lossMse + alphaRel * lossRel;
+loss = 1.0 * lossBce + 0.5 * lossMse + 0.3 * lossRel;
+end
 
-% 计算梯度
+function [loss, gradients] = modelLoss(net, X, Y, TxReal, TxImag, W)
+out = forward(net, X);
+
+pImpulse = sigmoid(out(1,:,:));
+reliability = sigmoid(out(2,:,:));
+cleanReal = out(3,:,:);
+cleanImag = out(4,:,:);
+
+bce = -W .* (Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
+lossBce = mean(bce, 'all');
+
+mse = (cleanReal - TxReal).^2 + (cleanImag - TxImag).^2;
+lossMse = mean(mse, 'all');
+
+relTarget = 1 - Y;
+relLoss = (reliability - relTarget).^2;
+lossRel = mean(relLoss, 'all');
+
+loss = 1.0 * lossBce + 0.5 * lossMse + 0.3 * lossRel;
 gradients = dlgradient(loss, net.Learnables);
-
 end
 
 function y = sigmoid(x)
