@@ -239,6 +239,12 @@ p.rxSync.fractionalRange = 0.5;         % 分数搜索范围（sample）
 p.rxSync.fractionalStep = 0.05;         % 分数搜索步长（sample）
 p.rxSync.estimateCfo = true;            % 用前导估计残余CFO并前馈补偿
 p.rxSync.maxShortSyncMisses = 2;        % 连续短同步失配阈值，超限后切回长前导搜索
+% 多径信道估计与均衡（仅在channel.multipath.enable=true时生效）
+p.rxSync.multipathEq = struct();
+p.rxSync.multipathEq.enable = true;
+p.rxSync.multipathEq.method = "mmse";      % "mmse" | "zf"
+p.rxSync.multipathEq.nTaps = 9;            % 线性FFE长度（符号数）
+p.rxSync.multipathEq.lambdaFactor = 1.0;   % MMSE正则: lambda=lambdaFactor*N0
 % 决策导向载波PLL（用于残余频偏/相位跟踪）
 p.rxSync.carrierPll = struct();
 p.rxSync.carrierPll.enable = true;

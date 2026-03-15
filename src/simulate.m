@@ -246,6 +246,15 @@ fprintf('[SIM] 链路仿真开始\n');
 fprintf('[SIM] Eb/N0点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
     totalEbN0Points, p.sim.nFramesPerPoint, totalFrames);
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
+if numel(methods) > 1
+    hasImpulse = isfield(p, "channel") && isfield(p.channel, "impulseProb") && double(p.channel.impulseProb) > 0;
+    hasTone = isfield(p, "channel") && isfield(p.channel, "singleTone") && isfield(p.channel.singleTone, "enable") && p.channel.singleTone.enable;
+    hasNb = isfield(p, "channel") && isfield(p.channel, "narrowband") && isfield(p.channel.narrowband, "enable") && p.channel.narrowband.enable;
+    hasSweep = isfield(p, "channel") && isfield(p.channel, "sweep") && isfield(p.channel.sweep, "enable") && p.channel.sweep.enable;
+    if ~hasImpulse && ~hasTone && ~hasNb && ~hasSweep
+        fprintf('[SIM] NOTE: impulse/tone/narrowband/sweep all disabled. Most mitigation methods will behave like \"none\".\n');
+    end
+end
 dllEnabled = isfield(p.rxSync, "timingDll") && isfield(p.rxSync.timingDll, "enable") ...
     && p.rxSync.timingDll.enable;
 syncEnabled = p.rxSync.compensateCarrier || p.rxSync.fineSearchRadius > 0 || ...
@@ -376,6 +385,7 @@ for ie = 1:numel(EbN0dBList)
         bobNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
         bobNom.rxState = cell(nPackets, 1);
         bobNom.rData = cell(nPackets, 1);
+        bobNom.rDataPrepared = cell(nPackets, 1);
 
         eveNom = struct();
         if eveEnabled
@@ -383,6 +393,7 @@ for ie = 1:numel(EbN0dBList)
             eveNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
             eveNom.rxState = cell(nPackets, 1);
             eveNom.rData = cell(nPackets, 1);
+            eveNom.rDataPrepared = cell(nPackets, 1);
         end
 
         % ============ 分包发收（同步+PHY提取） ============
@@ -413,8 +424,26 @@ for ie = 1:numel(EbN0dBList)
             rDataBobNominal = complex(zeros(0, 1));
             [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
             if bobOk
-                phyStart = startIdx + numel(syncSymBob);
-                [rPhyBob, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
+                preLen = numel(syncSymBob);
+                [rPreBob, preOk] = extract_fractional_block(rxBobSync, startIdx, preLen, syncCfgUse, struct('type', 'BPSK'));
+                phyStart = startIdx + preLen;
+                [rPhyBobRaw, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
+
+                % 多径信道估计 + 线性均衡（先救PHY头，避免“整包判失败”导致BER饱和）
+                eqBob = struct();
+                eqBobOk = false;
+                rPhyBob = rPhyBobRaw;
+                if bobOk && preOk && local_multipath_eq_enabled_local(p)
+                    chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
+                    eqCfg = p.rxSync.multipathEq;
+                    [eqBob, eqBobOk] = multipath_equalizer_from_preamble(syncSymBob(:), rPreBob, eqCfg, N0, chLenSymbols);
+                    if eqBobOk
+                        yPrePhy = [rPreBob; rPhyBobRaw];
+                        yEq = local_apply_equalizer_block_local(yPrePhy, eqBob);
+                        rPhyBob = yEq(preLen+1:end);
+                    end
+                end
+
                 if bobOk
                     bobPhyBits = decode_phy_header_symbols_local(rPhyBob, p.frame);
                     [bobPhyParsed, bobOk] = parse_phy_header_bits(bobPhyBits, p.frame);
@@ -425,14 +454,27 @@ for ie = 1:numel(EbN0dBList)
                 if bobOk
                     rxStateBobNominal = derive_rx_packet_state_local(p, double(bobPhy.packetIndex), double(bobPhy.packetDataBytes) * 8);
                     dataStart = phyStart + phyHeaderSymLen;
-                    [rDataBobNominal, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, syncCfgUse, p.mod);
+                    [rDataBobRaw, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, syncCfgUse, p.mod);
+                    if bobOk && eqBobOk
+                        yAll = [rPreBob; rPhyBobRaw; rDataBobRaw];
+                        yEqAll = local_apply_equalizer_block_local(yAll, eqBob);
+                        rDataBobNominal = yEqAll(preLen + phyHeaderSymLen + 1:end);
+                    else
+                        rDataBobNominal = rDataBobRaw;
+                    end
                 end
             end
             bobNom.ok(pktIdx) = bobOk;
             if bobOk
                 bobNom.phy(pktIdx) = bobPhy;
                 bobNom.rxState{pktIdx} = rxStateBobNominal;
-                bobNom.rData{pktIdx} = rDataBobNominal;
+                bobNom.rData{pktIdx} = [];
+                hopInfoBob = struct('enable', false);
+                if fhEnabled && isfield(rxStateBobNominal, "hopInfo")
+                    hopInfoBob = rxStateBobNominal.hopInfo;
+                end
+                bobNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
+                    rDataBobNominal, rxStateBobNominal, hopInfoBob, p, fhEnabled);
             end
 
             if eveEnabled
@@ -442,8 +484,25 @@ for ie = 1:numel(EbN0dBList)
                 rDataEveNominal = complex(zeros(0, 1));
                 [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local(rxEve, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, eveSyncCtrl);
                 if eveOk
-                    phyStartEve = startIdxEve + numel(syncSymEve);
-                    [rPhyEve, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
+                    preLenEve = numel(syncSymEve);
+                    [rPreEve, preOkEve] = extract_fractional_block(rxEveSync, startIdxEve, preLenEve, syncCfgUse, struct('type', 'BPSK'));
+                    phyStartEve = startIdxEve + preLenEve;
+                    [rPhyEveRaw, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
+
+                    eqEve = struct();
+                    eqEveOk = false;
+                    rPhyEve = rPhyEveRaw;
+                    if eveOk && preOkEve && local_multipath_eq_enabled_local(p)
+                        chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
+                        eqCfg = p.rxSync.multipathEq;
+                        [eqEve, eqEveOk] = multipath_equalizer_from_preamble(syncSymEve(:), rPreEve, eqCfg, N0Eve, chLenSymbols);
+                        if eqEveOk
+                            yPrePhy = [rPreEve; rPhyEveRaw];
+                            yEq = local_apply_equalizer_block_local(yPrePhy, eqEve);
+                            rPhyEve = yEq(preLenEve+1:end);
+                        end
+                    end
+
                     if eveOk
                         evePhyBits = decode_phy_header_symbols_local(rPhyEve, p.frame);
                         [evePhyParsed, eveOk] = parse_phy_header_bits(evePhyBits, p.frame);
@@ -454,14 +513,27 @@ for ie = 1:numel(EbN0dBList)
                     if eveOk
                         rxStateEveNominal = derive_rx_packet_state_local(p, double(evePhy.packetIndex), double(evePhy.packetDataBytes) * 8);
                         dataStartEve = phyStartEve + phyHeaderSymLen;
-                        [rDataEveNominal, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, syncCfgUse, p.mod);
+                        [rDataEveRaw, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, syncCfgUse, p.mod);
+                        if eveOk && eqEveOk
+                            yAll = [rPreEve; rPhyEveRaw; rDataEveRaw];
+                            yEqAll = local_apply_equalizer_block_local(yAll, eqEve);
+                            rDataEveNominal = yEqAll(preLenEve + phyHeaderSymLen + 1:end);
+                        else
+                            rDataEveNominal = rDataEveRaw;
+                        end
                     end
                 end
                 eveNom.ok(pktIdx) = eveOk;
                 if eveOk
                     eveNom.phy(pktIdx) = evePhy;
                     eveNom.rxState{pktIdx} = rxStateEveNominal;
-                    eveNom.rData{pktIdx} = rDataEveNominal;
+                    eveNom.rData{pktIdx} = [];
+                    hopInfoEvePrep = struct('enable', false);
+                    if fhEnabled
+                        hopInfoEvePrep = eve_hop_info_local(rxStateEveNominal, fhAssumptionEve);
+                    end
+                    eveNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
+                        rDataEveNominal, rxStateEveNominal, hopInfoEvePrep, p, fhEnabled);
                 end
             end
         end
@@ -830,20 +902,25 @@ packetOkBob = false(1, nPackets);
 nErrBob = 0;
 nTotBob = 0;
 
-for pktIdx = 1:nPackets
-    txPayload = txPayloadBits{pktIdx};
-    if bobNom.ok(pktIdx)
-        phy = bobNom.phy(pktIdx);
-        rxState = bobNom.rxState{pktIdx};
-        if isempty(rxState)
-            rxState = derive_rx_packet_state_local(p, double(phy.packetIndex), double(phy.packetDataBytes) * 8);
-        end
-        rData = fit_complex_length_local(bobNom.rData{pktIdx}, rxState.nDataSym);
-        if fhEnabled
-            rData = fh_demodulate(rData, rxState.hopInfo);
-        end
-        if p.rxSync.carrierPll.enable
-            rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+        for pktIdx = 1:nPackets
+            txPayload = txPayloadBits{pktIdx};
+            if bobNom.ok(pktIdx)
+                phy = bobNom.phy(pktIdx);
+                rxState = bobNom.rxState{pktIdx};
+                if isempty(rxState)
+                    rxState = derive_rx_packet_state_local(p, double(phy.packetIndex), double(phy.packetDataBytes) * 8);
+                end
+        rData = [];
+        if isfield(bobNom, "rDataPrepared") && numel(bobNom.rDataPrepared) >= pktIdx && ~isempty(bobNom.rDataPrepared{pktIdx})
+            rData = fit_complex_length_local(bobNom.rDataPrepared{pktIdx}, rxState.nDataSym);
+        else
+            rData = fit_complex_length_local(bobNom.rData{pktIdx}, rxState.nDataSym);
+            if fhEnabled
+                rData = fh_demodulate(rData, rxState.hopInfo);
+            end
+            if p.rxSync.carrierPll.enable
+                rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+            end
         end
 
         [rMit, reliability] = mitigate_impulses(rData, methodName, p.mitigation);
@@ -945,21 +1022,26 @@ packetOkEve = false(1, nPackets);
 nErrEve = 0;
 nTotEve = 0;
 
-for pktIdx = 1:nPackets
-    txPayload = txPayloadBits{pktIdx};
-    if eveNom.ok(pktIdx)
-        phy = eveNom.phy(pktIdx);
-        rxState = eveNom.rxState{pktIdx};
-        if isempty(rxState)
-            rxState = derive_rx_packet_state_local(p, double(phy.packetIndex), double(phy.packetDataBytes) * 8);
-        end
-        rData = fit_complex_length_local(eveNom.rData{pktIdx}, rxState.nDataSym);
-        if fhEnabled
-            hopInfoEve = eve_hop_info_local(rxState, fhAssumptionEve);
-            rData = fh_demodulate(rData, hopInfoEve);
-        end
-        if p.rxSync.carrierPll.enable
-            rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+    for pktIdx = 1:nPackets
+        txPayload = txPayloadBits{pktIdx};
+        if eveNom.ok(pktIdx)
+            phy = eveNom.phy(pktIdx);
+            rxState = eveNom.rxState{pktIdx};
+            if isempty(rxState)
+                rxState = derive_rx_packet_state_local(p, double(phy.packetIndex), double(phy.packetDataBytes) * 8);
+            end
+        rData = [];
+        if isfield(eveNom, "rDataPrepared") && numel(eveNom.rDataPrepared) >= pktIdx && ~isempty(eveNom.rDataPrepared{pktIdx})
+            rData = fit_complex_length_local(eveNom.rDataPrepared{pktIdx}, rxState.nDataSym);
+        else
+            rData = fit_complex_length_local(eveNom.rData{pktIdx}, rxState.nDataSym);
+            if fhEnabled
+                hopInfoEve = eve_hop_info_local(rxState, fhAssumptionEve);
+                rData = fh_demodulate(rData, hopInfoEve);
+            end
+            if p.rxSync.carrierPll.enable
+                rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+            end
         end
         scrambleCfgEve = eve_scramble_cfg_local(rxState.scrambleCfg, scrambleAssumptionEve);
 
@@ -1061,6 +1143,96 @@ try
 catch
     tf = false;
 end
+end
+
+function tf = local_multipath_eq_enabled_local(p)
+tf = false;
+if ~isfield(p, "rxSync") || ~isstruct(p.rxSync) || ~isfield(p.rxSync, "multipathEq") ...
+        || ~isstruct(p.rxSync.multipathEq) || ~isfield(p.rxSync.multipathEq, "enable") || ~p.rxSync.multipathEq.enable
+    return;
+end
+if ~isfield(p, "channel") || ~isstruct(p.channel) || ~isfield(p.channel, "multipath") || ~isstruct(p.channel.multipath) ...
+        || ~isfield(p.channel.multipath, "enable") || ~p.channel.multipath.enable
+    return;
+end
+tf = true;
+end
+
+function Lh = local_multipath_channel_len_symbols_local(channelCfg, waveform)
+Lh = 1;
+if ~isfield(channelCfg, "multipath") || ~isstruct(channelCfg.multipath) ...
+        || ~isfield(channelCfg.multipath, "enable") || ~channelCfg.multipath.enable
+    return;
+end
+
+if isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols)
+    dly = double(channelCfg.multipath.pathDelaysSymbols(:));
+    if ~isempty(dly)
+        Lh = max(1, round(max(dly)) + 1);
+    end
+    return;
+end
+
+if isfield(channelCfg.multipath, "pathDelays") && ~isempty(channelCfg.multipath.pathDelays)
+    dlySamp = double(channelCfg.multipath.pathDelays(:));
+    if isempty(dlySamp)
+        Lh = 1;
+        return;
+    end
+    if isstruct(waveform) && isfield(waveform, "sps") && waveform.sps > 0
+        dlySym = dlySamp / double(waveform.sps);
+        Lh = max(1, round(max(dlySym)) + 1);
+    else
+        Lh = max(1, round(max(dlySamp)) + 1);
+    end
+end
+end
+
+function yEq = local_apply_equalizer_block_local(y, eq)
+y = y(:);
+if isempty(y)
+    yEq = y;
+    return;
+end
+if ~isstruct(eq) || ~isfield(eq, "enabled") || ~eq.enabled || ~isfield(eq, "g") || isempty(eq.g)
+    yEq = y;
+    return;
+end
+
+d = 0;
+if isfield(eq, "delay") && ~isempty(eq.delay)
+    d = max(0, round(double(eq.delay)));
+end
+g = eq.g(:);
+N = numel(y);
+
+% Pad zeros so the delay-compensated slice exists.
+z = conv([y; zeros(d, 1)], g);
+needLen = d + N;
+if numel(z) < needLen
+    z = [z; complex(zeros(needLen - numel(z), 1))];
+end
+yEq = z(d+1:d+N);
+end
+
+function yPrep = local_prepare_data_symbols_local(rData, rxState, hopInfoUsed, p, fhEnabled)
+% Prepare per-packet data symbols (dehop -> carrier PLL).
+%
+% Multipath equalization has already been applied at the nominal Rx stage on
+% the full [preamble; PHY; data] block to avoid edge transients. Here we only
+% apply the hop derotation and the (optional) carrier PLL once per packet.
+r = fit_complex_length_local(rData, rxState.nDataSym);
+
+if fhEnabled
+    r = fh_demodulate(r, hopInfoUsed);
+end
+
+if isfield(p, "rxSync") && isfield(p.rxSync, "carrierPll") && isfield(p.rxSync.carrierPll, "enable") ...
+        && p.rxSync.carrierPll.enable
+    r = carrier_pll_sync(r, p.mod, p.rxSync.carrierPll);
+end
+
+yPrep = r;
 end
 
 function session = rx_session_empty_local()
