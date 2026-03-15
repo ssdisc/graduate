@@ -11,6 +11,8 @@ function m = warden_energy_detector(txBurst, N0, ch, maxDelaySymbols, det)
 %                     .pfaTarget          - 第一层的目标虚警率(0,1)
 %                     .nObs               - 观测窗口长度（采样点）
 %                     .nTrials            - 蒙特卡洛试验次数
+%                     .useParallel        - 是否使用并行池加速（可选，默认false）
+%                     .nWorkers           - 并行worker数（可选，仅用于自动开池）
 %                     .primaryLayer       - "energyNp"|"energyOpt"|"energyOptUncertain"|
 %                                           "energyFhNarrow"|"cyclostationaryOpt"
 %                     .noiseUncertaintyDb - 第三层噪声不确定性半宽（+-dB）
@@ -47,6 +49,8 @@ end
 if ~isfield(det, "pfaTarget"); det.pfaTarget = 0.01; end
 if ~isfield(det, "nObs"); det.nObs = 4096; end
 if ~isfield(det, "nTrials"); det.nTrials = 200; end
+if ~isfield(det, "useParallel"); det.useParallel = false; end
+if ~isfield(det, "nWorkers"); det.nWorkers = 0; end
 if ~isfield(det, "primaryLayer"); det.primaryLayer = "energyOptUncertain"; end
 if ~isfield(det, "noiseUncertaintyDb"); det.noiseUncertaintyDb = 1.0; end
 if ~isfield(det, "extraDelaySamples"); det.extraDelaySamples = 4096; end
@@ -63,6 +67,8 @@ if ~isfield(det.cyclostationary, "sps"); det.cyclostationary.sps = 4; end
 pfaTarget = double(det.pfaTarget);
 nObs = double(det.nObs);
 nTrials = double(det.nTrials);
+useParallel = logical(det.useParallel);
+nWorkers = round(double(det.nWorkers));
 noiseUncertaintyDb = double(det.noiseUncertaintyDb);
 extraDelaySamples = round(double(det.extraDelaySamples));
 primaryLayer = local_normalize_layer_name(det.primaryLayer);
@@ -89,24 +95,32 @@ end
 if ~(extraDelaySamples >= 0)
     error("extraDelaySamples必须 >= 0。");
 end
+if ~(nWorkers >= 0)
+    error("nWorkers必须 >= 0。");
+end
+
+% 可选：自动开池（若外部已开池，此处只做快速检查）。
+if useParallel && exist("ensure_parpool", "file") == 2
+    ensure_parpool(nWorkers);
+end
 
 txBurst = txBurst(:);
 baseDelaySamples = max(0, round(double(maxDelaySymbols)));
 
 % 层1/2：同一组基础统计量分别导出固定P_FA与最优xi*两种指标
-statsBase = local_run_trials(txBurst, N0, ch, baseDelaySamples, nObs, nTrials, 0.0);
+statsBase = local_run_trials(txBurst, N0, ch, baseDelaySamples, nObs, nTrials, 0.0, useParallel);
 layerNp = local_fixed_pfa_metrics(statsBase.T0, statsBase.T1, pfaTarget);
 layerOpt = local_optimal_metrics(statsBase.T0, statsBase.T1);
 
 % 层3：在独立Warden链路上叠加噪声不确定性与更强的时延不确定性
 statsUncertain = local_run_trials( ...
-    txBurst, N0, ch, baseDelaySamples + extraDelaySamples, nObs, nTrials, noiseUncertaintyDb);
+    txBurst, N0, ch, baseDelaySamples + extraDelaySamples, nObs, nTrials, noiseUncertaintyDb, useParallel);
 layerOptUncertain = local_optimal_metrics(statsUncertain.T0, statsUncertain.T1);
 
 % 层4（可选）：跳频窄带Warden — 不知跳频序列，只能监听1/nFreqs带宽的单个信道
 if fhNarrowbandEnable
     statsFhNarrow = local_run_trials_fh_narrow( ...
-        txBurst, N0, ch, baseDelaySamples, nObs, nTrials, fhNFreqs, fhScanAllBins);
+        txBurst, N0, ch, baseDelaySamples, nObs, nTrials, fhNFreqs, fhScanAllBins, useParallel);
     layerFhNarrow = local_optimal_metrics(statsFhNarrow.T0, statsFhNarrow.T1);
 else
     % 未启用时用全带能量层占位，xi相同（表示未评估）
@@ -116,7 +130,7 @@ end
 % 层5（可选）：循环平稳检测器 — 利用符号率处的循环自相关特征
 if cycloEnable
     statsCyclo = local_run_trials_cyclo( ...
-        txBurst, N0, ch, baseDelaySamples, nObs, nTrials, cycloSps);
+        txBurst, N0, ch, baseDelaySamples, nObs, nTrials, cycloSps, useParallel);
     layerCyclo = local_optimal_metrics(statsCyclo.T0, statsCyclo.T1);
 else
     layerCyclo = layerOpt;
@@ -142,6 +156,8 @@ m.referenceLink = referenceLink;
 m.pfaTarget = pfaTarget;
 m.nObs = statsBase.L;
 m.nTrials = nTrials;
+m.useParallel = useParallel;
+m.nWorkers = nWorkers;
 m.layers = struct( ...
     "energyNp", layerNp, ...
     "energyOpt", layerOpt, ...
@@ -173,30 +189,59 @@ m.xiUncertain = layerOptUncertain.xi;
 m.peUncertain = layerOptUncertain.pe;
 end
 
-function stats = local_run_trials(txBurst, N0, ch, maxDelaySamples, nObs, nTrials, noiseUncertaintyDb)
+function stats = local_run_trials(txBurst, N0, ch, maxDelaySamples, nObs, nTrials, noiseUncertaintyDb, useParallel)
 L = min(round(nObs), numel(txBurst) + round(maxDelaySamples));
 delayMaxSamples = max(0, round(maxDelaySamples));
 T0 = zeros(nTrials, 1);
 T1 = zeros(nTrials, 1);
 
-for i = 1:nTrials
-    delay = randi([0, delayMaxSamples], 1, 1);
-    txWin = zeros(L, 1);
-    if delay < L
-        nSig = min(numel(txBurst), L - delay);
-        if nSig > 0
-            txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+useParfor = logical(useParallel) && local_has_parallel_pool();
+seeds = [];
+if useParfor
+    % Generate seeds on the client so results are deterministic w.r.t. scheduling.
+    seeds = randi(2^31-1, nTrials, 1, "uint32");
+
+    parfor i = 1:nTrials
+        rng(double(seeds(i)), "twister");
+
+        delay = randi([0, delayMaxSamples], 1, 1);
+        txWin = zeros(L, 1);
+        if delay < L
+            nSig = min(numel(txBurst), L - delay);
+            if nSig > 0
+                txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+            end
         end
+
+        % 同一检测试验内，H0/H1共享同一个未知噪声底，更贴近文献常用假设。
+        n0Trial = local_sample_n0(N0, noiseUncertaintyDb);
+
+        r0 = channel_bg_impulsive(zeros(L, 1), n0Trial, ch);
+        r1 = channel_bg_impulsive(txWin, n0Trial, ch);
+
+        T0(i) = mean(abs(r0).^2);
+        T1(i) = mean(abs(r1).^2);
     end
+else
+    for i = 1:nTrials
+        delay = randi([0, delayMaxSamples], 1, 1);
+        txWin = zeros(L, 1);
+        if delay < L
+            nSig = min(numel(txBurst), L - delay);
+            if nSig > 0
+                txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+            end
+        end
 
-    % 同一检测试验内，H0/H1共享同一个未知噪声底，更贴近文献常用假设。
-    n0Trial = local_sample_n0(N0, noiseUncertaintyDb);
+        % 同一检测试验内，H0/H1共享同一个未知噪声底，更贴近文献常用假设。
+        n0Trial = local_sample_n0(N0, noiseUncertaintyDb);
 
-    r0 = channel_bg_impulsive(zeros(L, 1), n0Trial, ch);
-    r1 = channel_bg_impulsive(txWin, n0Trial, ch);
+        r0 = channel_bg_impulsive(zeros(L, 1), n0Trial, ch);
+        r1 = channel_bg_impulsive(txWin, n0Trial, ch);
 
-    T0(i) = mean(abs(r0).^2);
-    T1(i) = mean(abs(r1).^2);
+        T0(i) = mean(abs(r0).^2);
+        T1(i) = mean(abs(r1).^2);
+    end
 end
 
 stats = struct();
@@ -213,6 +258,18 @@ if noiseUncertaintyDb <= 0
 end
 deltaDb = (2 * rand() - 1) * noiseUncertaintyDb;
 n0Draw = N0 * 10.^(deltaDb / 10);
+end
+
+function tf = local_has_parallel_pool()
+tf = false;
+if exist("gcp", "file") ~= 2
+    return;
+end
+try
+    tf = ~isempty(gcp("nocreate"));
+catch
+    tf = false;
+end
 end
 
 function metrics = local_fixed_pfa_metrics(T0, T1, pfaTarget)
@@ -289,7 +346,7 @@ switch lower(name)
 end
 end
 
-function stats = local_run_trials_fh_narrow(txBurst, N0, ch, maxDelaySamples, nObs, nTrials, nFreqs, scanAllBins)
+function stats = local_run_trials_fh_narrow(txBurst, N0, ch, maxDelaySamples, nObs, nTrials, nFreqs, scanAllBins, useParallel)
 % 模拟不知道跳频序列的Warden：只能监听带宽为1/nFreqs的单个子带。
 % scanAllBins=true时扫描全部nFreqs个频点并取最大能量（最强非相干Warden）；
 % scanAllBins=false时随机选一个频点（平均意义下的实际Warden）。
@@ -312,38 +369,79 @@ for k = 1:nFreqs
     filters{k} = lpf(:) .* exp(1j * 2*pi*fc * n_idx);
 end
 
-for i = 1:nTrials
-    delay = randi([0, delayMaxSamples], 1, 1);
-    txWin = zeros(L, 1);
-    if delay < L
-        nSig = min(numel(txBurst), L - delay);
-        if nSig > 0
-            txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+useParfor = logical(useParallel) && local_has_parallel_pool();
+if useParfor
+    seeds = randi(2^31-1, nTrials, 1, "uint32");
+    parfor i = 1:nTrials
+        rng(double(seeds(i)), "twister");
+
+        delay = randi([0, delayMaxSamples], 1, 1);
+        txWin = zeros(L, 1);
+        if delay < L
+            nSig = min(numel(txBurst), L - delay);
+            if nSig > 0
+                txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+            end
+        end
+
+        r0 = channel_bg_impulsive(zeros(L, 1), N0, ch);
+        r1 = channel_bg_impulsive(txWin, N0, ch);
+
+        if scanAllBins
+            % 扫描所有频点，取能量最大的子带（最优非相干Warden）
+            e0 = zeros(nFreqs, 1);
+            e1 = zeros(nFreqs, 1);
+            for k = 1:nFreqs
+                y0 = filter(filters{k}, 1, r0);
+                y1 = filter(filters{k}, 1, r1);
+                e0(k) = mean(abs(y0).^2);
+                e1(k) = mean(abs(y1).^2);
+            end
+            T0(i) = max(e0);
+            T1(i) = max(e1);
+        else
+            % 随机选一个频点
+            kk = randi(nFreqs);
+            y0 = filter(filters{kk}, 1, r0);
+            y1 = filter(filters{kk}, 1, r1);
+            T0(i) = mean(abs(y0).^2);
+            T1(i) = mean(abs(y1).^2);
         end
     end
+else
+    for i = 1:nTrials
+        delay = randi([0, delayMaxSamples], 1, 1);
+        txWin = zeros(L, 1);
+        if delay < L
+            nSig = min(numel(txBurst), L - delay);
+            if nSig > 0
+                txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+            end
+        end
 
-    r0 = channel_bg_impulsive(zeros(L, 1), N0, ch);
-    r1 = channel_bg_impulsive(txWin, N0, ch);
+        r0 = channel_bg_impulsive(zeros(L, 1), N0, ch);
+        r1 = channel_bg_impulsive(txWin, N0, ch);
 
-    if scanAllBins
-        % 扫描所有频点，取能量最大的子带（最优非相干Warden）
-        e0 = zeros(nFreqs, 1);
-        e1 = zeros(nFreqs, 1);
-        for k = 1:nFreqs
+        if scanAllBins
+            % 扫描所有频点，取能量最大的子带（最优非相干Warden）
+            e0 = zeros(nFreqs, 1);
+            e1 = zeros(nFreqs, 1);
+            for k = 1:nFreqs
+                y0 = filter(filters{k}, 1, r0);
+                y1 = filter(filters{k}, 1, r1);
+                e0(k) = mean(abs(y0).^2);
+                e1(k) = mean(abs(y1).^2);
+            end
+            T0(i) = max(e0);
+            T1(i) = max(e1);
+        else
+            % 随机选一个频点
+            k = randi(nFreqs);
             y0 = filter(filters{k}, 1, r0);
             y1 = filter(filters{k}, 1, r1);
-            e0(k) = mean(abs(y0).^2);
-            e1(k) = mean(abs(y1).^2);
+            T0(i) = mean(abs(y0).^2);
+            T1(i) = mean(abs(y1).^2);
         end
-        T0(i) = max(e0);
-        T1(i) = max(e1);
-    else
-        % 随机选一个频点
-        k = randi(nFreqs);
-        y0 = filter(filters{k}, 1, r0);
-        y1 = filter(filters{k}, 1, r1);
-        T0(i) = mean(abs(y0).^2);
-        T1(i) = mean(abs(y1).^2);
     end
 end
 
@@ -354,7 +452,7 @@ stats.L = L;
 stats.delayMaxSamples = delayMaxSamples;
 end
 
-function stats = local_run_trials_cyclo(txBurst, N0, ch, maxDelaySamples, nObs, nTrials, sps)
+function stats = local_run_trials_cyclo(txBurst, N0, ch, maxDelaySamples, nObs, nTrials, sps, useParallel)
 % 循环平稳检测器：利用信号在循环频率 alpha=1/sps 处的循环自相关（CAF）。
 % 调制信号（BPSK/QPSK+RRC成型）在此循环频率处存在显著的循环自相关分量，
 % 而纯AWGN在任意非零循环频率处的CAF趋于零。
@@ -365,21 +463,44 @@ T0 = zeros(nTrials, 1);
 T1 = zeros(nTrials, 1);
 alpha = 1 / sps; % 循环频率（归一化，cycles/sample）
 
-for i = 1:nTrials
-    delay = randi([0, delayMaxSamples], 1, 1);
-    txWin = zeros(L, 1);
-    if delay < L
-        nSig = min(numel(txBurst), L - delay);
-        if nSig > 0
-            txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+useParfor = logical(useParallel) && local_has_parallel_pool();
+if useParfor
+    seeds = randi(2^31-1, nTrials, 1, "uint32");
+    parfor i = 1:nTrials
+        rng(double(seeds(i)), "twister");
+
+        delay = randi([0, delayMaxSamples], 1, 1);
+        txWin = zeros(L, 1);
+        if delay < L
+            nSig = min(numel(txBurst), L - delay);
+            if nSig > 0
+                txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+            end
         end
+
+        r0 = channel_bg_impulsive(zeros(L, 1), N0, ch);
+        r1 = channel_bg_impulsive(txWin, N0, ch);
+
+        T0(i) = local_caf_magnitude(r0, alpha);
+        T1(i) = local_caf_magnitude(r1, alpha);
     end
+else
+    for i = 1:nTrials
+        delay = randi([0, delayMaxSamples], 1, 1);
+        txWin = zeros(L, 1);
+        if delay < L
+            nSig = min(numel(txBurst), L - delay);
+            if nSig > 0
+                txWin(delay+1:delay+nSig) = txBurst(1:nSig);
+            end
+        end
 
-    r0 = channel_bg_impulsive(zeros(L, 1), N0, ch);
-    r1 = channel_bg_impulsive(txWin, N0, ch);
+        r0 = channel_bg_impulsive(zeros(L, 1), N0, ch);
+        r1 = channel_bg_impulsive(txWin, N0, ch);
 
-    T0(i) = local_caf_magnitude(r0, alpha);
-    T1(i) = local_caf_magnitude(r1, alpha);
+        T0(i) = local_caf_magnitude(r0, alpha);
+        T1(i) = local_caf_magnitude(r1, alpha);
+    end
 end
 
 stats = struct();

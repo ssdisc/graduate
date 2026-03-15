@@ -70,6 +70,9 @@ end
 % 构建按包发送计划（每包独立同步/头部/载荷）
 [txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, packetIndependentBitChaos, waveform);
 nPackets = numel(txPackets);
+% 主链路译码统计仅依赖每包payload比特（避免在并行worker间广播巨大的txPackets结构体）
+txPktIndex = (1:nPackets).';
+txPayloadBits = {txPackets.payloadBits}.';
 fhEnabled = txPlan.fhEnabled;
 packetConcealEnable = false;
 packetConcealMode = "nearest";
@@ -119,6 +122,8 @@ else
 end %示例图默认取最高Eb/N0点；设为具体值时取最近点
 
 eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
+scrambleAssumptionEve = "known";
+fhAssumptionEve = "known";
 chaosAssumptionEve = "none";
 chaosEncInfoEve = struct('enabled', false, 'mode', "none");
 eveEbN0dBList = [];
@@ -187,6 +192,39 @@ end
 
 wardenEnabled = isfield(p, "covert") && isfield(p.covert, "enable") && p.covert.enable ...
     && isfield(p.covert, "warden") && isfield(p.covert.warden, "enable") && p.covert.warden.enable;
+
+% 主链路并行配置（可选）
+simUseParallel = isfield(p, "sim") && isfield(p.sim, "useParallel") && logical(p.sim.useParallel);
+simParallelMode = "methods";
+if isfield(p, "sim") && isfield(p.sim, "parallelMode") && strlength(string(p.sim.parallelMode)) > 0
+    simParallelMode = lower(string(p.sim.parallelMode));
+end
+simNWorkers = 0;
+if isfield(p, "sim") && isfield(p.sim, "nWorkers") && ~isempty(p.sim.nWorkers)
+    simNWorkers = max(0, round(double(p.sim.nWorkers)));
+end
+
+% 若Warden或主链路任一启用并行，则统一开池（避免重复开池的额外开销）。
+wardenUseParallel = false;
+wardenNWorkers = 0;
+if wardenEnabled && isfield(p.covert.warden, "useParallel") && logical(p.covert.warden.useParallel)
+    wardenUseParallel = true;
+    if isfield(p.covert.warden, "nWorkers") && ~isempty(p.covert.warden.nWorkers)
+        wardenNWorkers = max(0, round(double(p.covert.warden.nWorkers)));
+    end
+end
+
+poolWorkers = 0;
+if simUseParallel
+    poolWorkers = max(poolWorkers, simNWorkers);
+end
+if wardenUseParallel
+    poolWorkers = max(poolWorkers, wardenNWorkers);
+end
+poolObj = [];
+if poolWorkers > 0
+    poolObj = ensure_parpool(poolWorkers);
+end
 if wardenEnabled
     wardenPointDetections = cell(1, numel(EbN0dBList));
     [wardenEbN0dBList, wardenReferenceLink] = local_resolve_warden_ebn0_list( ...
@@ -221,6 +259,27 @@ end
 fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, Pulse=%s, RxSync=%s, MP=%s\n', ...
     on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
     on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabled), on_off_text(mpEnabled));
+if simUseParallel || wardenUseParallel
+    fprintf('[SIM] Parallel requested: MainLink=%s(mode=%s, workers=%d), Warden=%s(workers=%d)\n', ...
+        on_off_text(simUseParallel), char(simParallelMode), simNWorkers, ...
+        on_off_text(wardenUseParallel), wardenNWorkers);
+else
+    fprintf('[SIM] Parallel requested: OFF\n');
+end
+poolTxt = "OFF";
+poolN = 0;
+try
+    if isempty(poolObj) && exist("gcp", "file") == 2
+        poolObj = gcp("nocreate");
+    end
+    if ~isempty(poolObj)
+        poolN = poolObj.NumWorkers;
+        poolTxt = sprintf("ON(%d workers)", poolN);
+    end
+catch
+    poolTxt = "OFF";
+end
+fprintf('[SIM] Parallel pool: %s\n', char(poolTxt));
 fprintf('========================================\n\n');
 
 %% 主仿真循环：信道传输与接收端处理
@@ -256,7 +315,11 @@ for ie = 1:numel(EbN0dBList)
         if isfield(wardenCfg, "cyclostationary") && isfield(wardenCfg.cyclostationary, "enable") && wardenCfg.cyclostationary.enable
             wardenCfg.cyclostationary.sps = waveform.sps;
         end
+
+        % 避免Warden评估消耗全局RNG，导致Bob/Eve结果随“是否开启Warden”而变化。
+        wardenRngScope = rng_scope(double(p.rngSeed) + 100000 + ie); %#ok<NASGU>
         det = warden_energy_detector(txSymForChannel, N0Warden, channelSample, maxDelaySamples, wardenCfg);
+        clear wardenRngScope
         wardenPointDetections{ie} = det;
     end
 
@@ -306,23 +369,23 @@ for ie = 1:numel(EbN0dBList)
                 100 * globalFrameIdx / max(totalFrames, 1));
         end
 
-        % 当前帧的重组缓存（按方法分开）
-        bobPayloadFrame = cell(numel(methods), 1);
-        bobPacketOk = false(numel(methods), nPackets);
-        bobSession = repmat(rx_session_empty_local(), numel(methods), 1);
-        for im = 1:numel(methods)
-            bobPayloadFrame{im} = zeros(totalPayloadBits, 1, "uint8");
-        end
+        % 当前帧：先做一次“同步+PHY提取”（所有方法共享），再按方法解调/译码（可并行）。
+        phyHeaderTemplate = empty_phy_header_local();
+        bobNom = struct();
+        bobNom.ok = false(nPackets, 1);
+        bobNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
+        bobNom.rxState = cell(nPackets, 1);
+        bobNom.rData = cell(nPackets, 1);
+
+        eveNom = struct();
         if eveEnabled
-            evePayloadFrame = cell(numel(methods), 1);
-            evePacketOk = false(numel(methods), nPackets);
-            eveSession = repmat(rx_session_empty_local(), numel(methods), 1);
-            for im = 1:numel(methods)
-                evePayloadFrame{im} = zeros(totalPayloadBits, 1, "uint8");
-            end
+            eveNom.ok = false(nPackets, 1);
+            eveNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
+            eveNom.rxState = cell(nPackets, 1);
+            eveNom.rData = cell(nPackets, 1);
         end
 
-        % ============ 分包发收 ============
+        % ============ 分包发收（同步+PHY提取） ============
         phyHeaderSymLen = phy_header_symbol_length_local(p.frame);
         bobSyncCtrl = init_packet_sync_ctrl_local();
         if eveEnabled
@@ -345,7 +408,8 @@ for ie = 1:numel(EbN0dBList)
                 rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
             end
 
-            bobPhy = struct();
+            bobPhy = phyHeaderTemplate;
+            rxStateBobNominal = [];
             rDataBobNominal = complex(zeros(0, 1));
             [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
             if bobOk
@@ -353,7 +417,10 @@ for ie = 1:numel(EbN0dBList)
                 [rPhyBob, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
                 if bobOk
                     bobPhyBits = decode_phy_header_symbols_local(rPhyBob, p.frame);
-                    [bobPhy, bobOk] = parse_phy_header_bits(bobPhyBits, p.frame);
+                    [bobPhyParsed, bobOk] = parse_phy_header_bits(bobPhyBits, p.frame);
+                    if bobOk
+                        bobPhy = bobPhyParsed;
+                    end
                 end
                 if bobOk
                     rxStateBobNominal = derive_rx_packet_state_local(p, double(bobPhy.packetIndex), double(bobPhy.packetDataBytes) * 8);
@@ -361,18 +428,28 @@ for ie = 1:numel(EbN0dBList)
                     [rDataBobNominal, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, syncCfgUse, p.mod);
                 end
             end
+            bobNom.ok(pktIdx) = bobOk;
+            if bobOk
+                bobNom.phy(pktIdx) = bobPhy;
+                bobNom.rxState{pktIdx} = rxStateBobNominal;
+                bobNom.rData{pktIdx} = rDataBobNominal;
+            end
 
-            eveOk = false;
-            evePhy = struct();
-            rDataEveNominal = complex(zeros(0, 1));
             if eveEnabled
+                eveOk = false;
+                evePhy = phyHeaderTemplate;
+                rxStateEveNominal = [];
+                rDataEveNominal = complex(zeros(0, 1));
                 [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local(rxEve, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, eveSyncCtrl);
                 if eveOk
                     phyStartEve = startIdxEve + numel(syncSymEve);
                     [rPhyEve, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
                     if eveOk
                         evePhyBits = decode_phy_header_symbols_local(rPhyEve, p.frame);
-                        [evePhy, eveOk] = parse_phy_header_bits(evePhyBits, p.frame);
+                        [evePhyParsed, eveOk] = parse_phy_header_bits(evePhyBits, p.frame);
+                        if eveOk
+                            evePhy = evePhyParsed;
+                        end
                     end
                     if eveOk
                         rxStateEveNominal = derive_rx_packet_state_local(p, double(evePhy.packetIndex), double(evePhy.packetDataBytes) * 8);
@@ -380,194 +457,52 @@ for ie = 1:numel(EbN0dBList)
                         [rDataEveNominal, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, syncCfgUse, p.mod);
                     end
                 end
-            end
-
-            % 对不同脉冲抑制方法分别解调与统计
-            for im = 1:numel(methods)
-                if bobOk
-                    rxStateBob = derive_rx_packet_state_local(p, double(bobPhy.packetIndex), double(bobPhy.packetDataBytes) * 8);
-                    rDataBob = fit_complex_length_local(rDataBobNominal, rxStateBob.nDataSym);
-                    if fhEnabled
-                        rDataBob = fh_demodulate(rDataBob, rxStateBob.hopInfo);
-                    end
-                    if p.rxSync.carrierPll.enable
-                        rDataBob = carrier_pll_sync(rDataBob, p.mod, p.rxSync.carrierPll);
-                    end
-                    [rMit, reliability] = mitigate_impulses(rDataBob, methods(im), p.mitigation);
-                    demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
-                    demodDeint = deinterleave_bits(demodSoft, rxStateBob.intState, p.interleaver);
-                    dataBitsRxScr = fec_decode(demodDeint, p.fec);
-                    packetDataBitsRx = descramble_bits(dataBitsRxScr, rxStateBob.scrambleCfg);
-                    packetDataBitsRx = fit_bits_length(packetDataBitsRx, rxStateBob.packetDataBitsLen);
-
-                    [payloadPktRx, bobSessionNext, packetInfoBob, okPacket] = recover_payload_packet_local(packetDataBitsRx, bobPhy, bobSession(im), p);
-                    if okPacket
-                        bobSession(im) = bobSessionNext;
-                        if packetInfoBob.packetIndex == pkt.packetIndex
-                            payloadPktTx = pkt.payloadBits;
-                            nCompare = min(numel(payloadPktRx), numel(payloadPktTx));
-                            if nCompare > 0
-                                nErr(im) = nErr(im) + sum(payloadPktRx(1:nCompare) ~= payloadPktTx(1:nCompare));
-                                nTot(im) = nTot(im) + nCompare;
-                            end
-                            if numel(payloadPktRx) < numel(payloadPktTx)
-                                nErr(im) = nErr(im) + (numel(payloadPktTx) - numel(payloadPktRx));
-                                nTot(im) = nTot(im) + (numel(payloadPktTx) - numel(payloadPktRx));
-                            end
-                        else
-                            nErr(im) = nErr(im) + numel(pkt.payloadBits);
-                            nTot(im) = nTot(im) + numel(pkt.payloadBits);
-                        end
-                        bobPayloadFrame{im}(packetInfoBob.range.startBit:packetInfoBob.range.endBit) = fit_bits_length(payloadPktRx, packetInfoBob.range.nBits);
-                        bobPacketOk(im, packetInfoBob.packetIndex) = true;
-                    else
-                        nErr(im) = nErr(im) + numel(pkt.payloadBits);
-                        nTot(im) = nTot(im) + numel(pkt.payloadBits);
-                    end
-                else
-                    nErr(im) = nErr(im) + numel(pkt.payloadBits);
-                    nTot(im) = nTot(im) + numel(pkt.payloadBits);
-                end
-
-                if eveEnabled
-                    if eveOk
-                        rxStateEve = derive_rx_packet_state_local(p, double(evePhy.packetIndex), double(evePhy.packetDataBytes) * 8);
-                        rDataEve = fit_complex_length_local(rDataEveNominal, rxStateEve.nDataSym);
-                        if fhEnabled
-                            hopInfoEve = eve_hop_info_local(rxStateEve, fhAssumptionEve);
-                            rDataEve = fh_demodulate(rDataEve, hopInfoEve);
-                        end
-                        if p.rxSync.carrierPll.enable
-                            rDataEve = carrier_pll_sync(rDataEve, p.mod, p.rxSync.carrierPll);
-                        end
-                        scrambleCfgEve = eve_scramble_cfg_local(rxStateEve.scrambleCfg, scrambleAssumptionEve);
-                        [rMitEve, reliabilityEve] = mitigate_impulses(rDataEve, methods(im), p.mitigation);
-                        demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
-                        demodDeintEve = deinterleave_bits(demodSoftEve, rxStateEve.intState, p.interleaver);
-                        dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
-                        packetDataBitsEve = descramble_bits(dataBitsEveScr, scrambleCfgEve);
-                        packetDataBitsEve = fit_bits_length(packetDataBitsEve, rxStateEve.packetDataBitsLen);
-
-                        [payloadPktEve, eveSessionNext, packetInfoEve, okPacketEve] = recover_payload_packet_local(packetDataBitsEve, evePhy, eveSession(im), p);
-                        if okPacketEve
-                            eveSession(im) = eveSessionNext;
-                            if packetInfoEve.packetIndex == pkt.packetIndex
-                                payloadPktTx = pkt.payloadBits;
-                                nCompareEve = min(numel(payloadPktEve), numel(payloadPktTx));
-                                if nCompareEve > 0
-                                    nErrEve(im) = nErrEve(im) + sum(payloadPktEve(1:nCompareEve) ~= payloadPktTx(1:nCompareEve));
-                                    nTotEve(im) = nTotEve(im) + nCompareEve;
-                                end
-                                if numel(payloadPktEve) < numel(payloadPktTx)
-                                    nErrEve(im) = nErrEve(im) + (numel(payloadPktTx) - numel(payloadPktEve));
-                                    nTotEve(im) = nTotEve(im) + (numel(payloadPktTx) - numel(payloadPktEve));
-                                end
-                            else
-                                nErrEve(im) = nErrEve(im) + numel(pkt.payloadBits);
-                                nTotEve(im) = nTotEve(im) + numel(pkt.payloadBits);
-                            end
-                            evePayloadFrame{im}(packetInfoEve.range.startBit:packetInfoEve.range.endBit) = fit_bits_length(payloadPktEve, packetInfoEve.range.nBits);
-                            evePacketOk(im, packetInfoEve.packetIndex) = true;
-                        else
-                            nErrEve(im) = nErrEve(im) + numel(pkt.payloadBits);
-                            nTotEve(im) = nTotEve(im) + numel(pkt.payloadBits);
-                        end
-                    else
-                        nErrEve(im) = nErrEve(im) + numel(pkt.payloadBits);
-                        nTotEve(im) = nTotEve(im) + numel(pkt.payloadBits);
-                    end
+                eveNom.ok(pktIdx) = eveOk;
+                if eveOk
+                    eveNom.phy(pktIdx) = evePhy;
+                    eveNom.rxState{pktIdx} = rxStateEveNominal;
+                    eveNom.rData{pktIdx} = rDataEveNominal;
                 end
             end
         end
 
+        % ============ 按方法解调/译码与统计（可并行） ============
+        useParallelMethods = simUseParallel && simParallelMode == "methods";
+        EbN0dBEveLocal = NaN;
+        if eveEnabled
+            EbN0dBEveLocal = EbN0dBEve;
+        end
+        captureExample = (frameIdx == 1 && ie == exampleIdx);
+        [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
+            methods, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+            packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
+            packetConcealActive, packetConcealMode, imgTx, meta, totalPayloadBits, ...
+            eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+            captureExample, EbN0dB, EbN0dBEveLocal, useParallelMethods);
+
+        nErr = nErr + bobFrame.nErr;
+        nTot = nTot + bobFrame.nTot;
         for im = 1:numel(methods)
-            payloadBitsRxFrame = bobPayloadFrame{im};
-            metaBobUse = meta;
-            totalPayloadBitsBob = totalPayloadBits;
-            rxLayoutBob = derive_packet_layout_local(totalPayloadBitsBob, p);
-            if bobSession(im).known
-                metaBobUse = bobSession(im).meta;
-                totalPayloadBitsBob = bobSession(im).totalPayloadBits;
-                rxLayoutBob = derive_packet_layout_local(totalPayloadBitsBob, p);
+            metricAccComm = accumulate_image_metric_acc_local(metricAccComm, im, ...
+                bobFrame.metricsComm.mse(im), bobFrame.metricsComm.psnr(im), bobFrame.metricsComm.ssim(im));
+            metricAccComp = accumulate_image_metric_acc_local(metricAccComp, im, ...
+                bobFrame.metricsComp.mse(im), bobFrame.metricsComp.psnr(im), bobFrame.metricsComp.ssim(im));
+            if captureExample && ~isempty(bobFrame.example{im})
+                example.(methods(im)) = bobFrame.example{im};
             end
-            if packetIndependentBitChaos && chaosEnabled
-                payloadBitsRxDec = decrypt_payload_packets_rx_local(payloadBitsRxFrame, bobPacketOk(im, :), p, totalPayloadBitsBob, "known");
-                imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
-            elseif chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
-                if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
-                    payloadBitsRxDec = chaos_decrypt_bits(payloadBitsRxFrame, chaosEncInfo);
-                    imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
-                else
-                    imgRxEnc = payload_bits_to_image(payloadBitsRxFrame, metaBobUse, p.payload);
-                    imgRxComm = chaos_decrypt(imgRxEnc, chaosEncInfo);
-                end
-            else
-                imgRxComm = payload_bits_to_image(payloadBitsRxFrame, metaBobUse, p.payload);
-            end
-            imgRxComp = imgRxComm;
-            if packetConcealActive
-                imgRxComp = conceal_image_from_packets(imgRxComp, bobPacketOk(im, :), rxLayoutBob, metaBobUse, p.payload, packetConcealMode);
-            end
-
-            [psnrNowComm, ssimNowComm, mseNowComm] = image_quality(imgTx, imgRxComm);
-            metricAccComm = accumulate_image_metric_acc_local(metricAccComm, im, mseNowComm, psnrNowComm, ssimNowComm);
-            [psnrNowComp, ssimNowComp, mseNowComp] = image_quality(imgTx, imgRxComp);
-            metricAccComp = accumulate_image_metric_acc_local(metricAccComp, im, mseNowComp, psnrNowComp, ssimNowComp);
-
-            if frameIdx == 1 && ie == exampleIdx
-                example.(methods(im)).EbN0dB = EbN0dB;
-                example.(methods(im)).imgRxComm = imgRxComm;
-                example.(methods(im)).imgRxCompensated = imgRxComp;
-                example.(methods(im)).imgRx = imgRxComp;
-                example.(methods(im)).packetSuccessRate = mean(bobPacketOk(im, :));
-            end
-            clear imgRxComm imgRxComp;
         end
 
         if eveEnabled
+            nErrEve = nErrEve + eveFrame.nErr;
+            nTotEve = nTotEve + eveFrame.nTot;
             for im = 1:numel(methods)
-                payloadBitsEveFrame = evePayloadFrame{im};
-                metaEveUse = meta;
-                totalPayloadBitsEve = totalPayloadBits;
-                rxLayoutEve = derive_packet_layout_local(totalPayloadBitsEve, p);
-                if eveSession(im).known
-                    metaEveUse = eveSession(im).meta;
-                    totalPayloadBitsEve = eveSession(im).totalPayloadBits;
-                    rxLayoutEve = derive_packet_layout_local(totalPayloadBitsEve, p);
+                metricAccCommEve = accumulate_image_metric_acc_local(metricAccCommEve, im, ...
+                    eveFrame.metricsComm.mse(im), eveFrame.metricsComm.psnr(im), eveFrame.metricsComm.ssim(im));
+                metricAccCompEve = accumulate_image_metric_acc_local(metricAccCompEve, im, ...
+                    eveFrame.metricsComp.mse(im), eveFrame.metricsComp.psnr(im), eveFrame.metricsComp.ssim(im));
+                if captureExample && ~isempty(eveFrame.example{im})
+                    exampleEve.(methods(im)) = eveFrame.example{im};
                 end
-                if packetIndependentBitChaos && chaosEnabled && chaosAssumptionEve ~= "none"
-                    payloadBitsEveDec = decrypt_payload_packets_rx_local(payloadBitsEveFrame, evePacketOk(im, :), p, totalPayloadBitsEve, chaosAssumptionEve);
-                    imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
-                elseif chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
-                    if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
-                        payloadBitsEveDec = chaos_decrypt_bits(payloadBitsEveFrame, chaosEncInfoEve);
-                        imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
-                    else
-                        imgEveEnc = payload_bits_to_image(payloadBitsEveFrame, metaEveUse, p.payload);
-                        imgEveComm = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
-                    end
-                else
-                    imgEveComm = payload_bits_to_image(payloadBitsEveFrame, metaEveUse, p.payload);
-                end
-                imgEveComp = imgEveComm;
-                if packetConcealActive
-                    imgEveComp = conceal_image_from_packets(imgEveComp, evePacketOk(im, :), rxLayoutEve, metaEveUse, p.payload, packetConcealMode);
-                end
-
-                [psnrNowCommEve, ssimNowCommEve, mseNowCommEve] = image_quality(imgTx, imgEveComm);
-                metricAccCommEve = accumulate_image_metric_acc_local(metricAccCommEve, im, mseNowCommEve, psnrNowCommEve, ssimNowCommEve);
-                [psnrNowCompEve, ssimNowCompEve, mseNowCompEve] = image_quality(imgTx, imgEveComp);
-                metricAccCompEve = accumulate_image_metric_acc_local(metricAccCompEve, im, mseNowCompEve, psnrNowCompEve, ssimNowCompEve);
-
-                if frameIdx == 1 && ie == exampleIdx
-                    exampleEve.(methods(im)).EbN0dB = EbN0dBEve;
-                    exampleEve.(methods(im)).headerOk = all(evePacketOk(im, :));
-                    exampleEve.(methods(im)).packetSuccessRate = mean(evePacketOk(im, :));
-                    exampleEve.(methods(im)).imgRxComm = imgEveComm;
-                    exampleEve.(methods(im)).imgRxCompensated = imgEveComp;
-                    exampleEve.(methods(im)).imgRx = imgEveComp;
-                end
-                clear imgEveComm imgEveComp;
             end
         end
     end
@@ -720,6 +655,412 @@ validSsim = acc.nSsim > 0;
 mseOut(validMse) = acc.mse(validMse) ./ acc.nMse(validMse);
 psnrOut(validPsnr) = acc.psnr(validPsnr) ./ acc.nPsnr(validPsnr);
 ssimOut(validSsim) = acc.ssim(validSsim) ./ acc.nSsim(validSsim);
+end
+
+function h = empty_phy_header_local()
+% A fixed-field placeholder so we can store PHY headers in a struct array.
+h = struct();
+h.magic = uint16(0);
+h.flags = uint8(0);
+h.hasSessionHeader = false;
+h.packetIndex = uint16(0);
+h.packetDataBytes = uint16(0);
+h.packetDataCrc16 = uint16(0);
+h.headerCrc16 = uint16(0);
+end
+
+function [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
+    methods, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+    packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
+    packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
+    eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+    captureExample, EbN0dB, EbN0dBEve, useParallelMethods)
+
+nMethods = numel(methods);
+nPackets = numel(txPktIndex);
+
+nErrBob = zeros(nMethods, 1);
+nTotBob = zeros(nMethods, 1);
+mseCommBob = nan(nMethods, 1);
+psnrCommBob = nan(nMethods, 1);
+ssimCommBob = nan(nMethods, 1);
+mseCompBob = nan(nMethods, 1);
+psnrCompBob = nan(nMethods, 1);
+ssimCompBob = nan(nMethods, 1);
+exampleBob = cell(nMethods, 1);
+
+% Always preallocate Eve arrays so PARFOR variable classification is stable.
+nErrEve = zeros(nMethods, 1);
+nTotEve = zeros(nMethods, 1);
+mseCommEve = nan(nMethods, 1);
+psnrCommEve = nan(nMethods, 1);
+ssimCommEve = nan(nMethods, 1);
+mseCompEve = nan(nMethods, 1);
+psnrCompEve = nan(nMethods, 1);
+ssimCompEve = nan(nMethods, 1);
+exampleEve = cell(nMethods, 1);
+
+useParfor = logical(useParallelMethods) && local_has_parallel_pool_local();
+if useParfor
+    try
+        parfor im = 1:nMethods
+            [bobRes, eveRes] = local_decode_single_method_local( ...
+                methods(im), txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+                packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
+                packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
+                eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+                captureExample, EbN0dB, EbN0dBEve, nPackets);
+
+            nErrBob(im) = bobRes.nErr;
+            nTotBob(im) = bobRes.nTot;
+            mseCommBob(im) = bobRes.mseComm;
+            psnrCommBob(im) = bobRes.psnrComm;
+            ssimCommBob(im) = bobRes.ssimComm;
+            mseCompBob(im) = bobRes.mseComp;
+            psnrCompBob(im) = bobRes.psnrComp;
+            ssimCompBob(im) = bobRes.ssimComp;
+            exampleBob{im} = bobRes.example;
+
+            if eveEnabled
+                nErrEve(im) = eveRes.nErr;
+                nTotEve(im) = eveRes.nTot;
+                mseCommEve(im) = eveRes.mseComm;
+                psnrCommEve(im) = eveRes.psnrComm;
+                ssimCommEve(im) = eveRes.ssimComm;
+                mseCompEve(im) = eveRes.mseComp;
+                psnrCompEve(im) = eveRes.psnrComp;
+                ssimCompEve(im) = eveRes.ssimComp;
+                exampleEve{im} = eveRes.example;
+            end
+        end
+    catch ME
+        persistent warnedParallel;
+        if isempty(warnedParallel); warnedParallel = false; end %#ok<PSET>
+        if ~warnedParallel
+            warning('SIM:MainLinkParDecodeFailed', ...
+                'Main-link method-parallel decode failed (%s). Falling back to serial.', ME.message);
+            warnedParallel = true;
+        end
+        useParfor = false;
+
+        % Reset outputs; recompute below using serial loop.
+        nErrBob = zeros(nMethods, 1);
+        nTotBob = zeros(nMethods, 1);
+        mseCommBob = nan(nMethods, 1);
+        psnrCommBob = nan(nMethods, 1);
+        ssimCommBob = nan(nMethods, 1);
+        mseCompBob = nan(nMethods, 1);
+        psnrCompBob = nan(nMethods, 1);
+        ssimCompBob = nan(nMethods, 1);
+        exampleBob = cell(nMethods, 1);
+
+        nErrEve = zeros(nMethods, 1);
+        nTotEve = zeros(nMethods, 1);
+        mseCommEve = nan(nMethods, 1);
+        psnrCommEve = nan(nMethods, 1);
+        ssimCommEve = nan(nMethods, 1);
+        mseCompEve = nan(nMethods, 1);
+        psnrCompEve = nan(nMethods, 1);
+        ssimCompEve = nan(nMethods, 1);
+        exampleEve = cell(nMethods, 1);
+    end
+end
+
+if ~useParfor
+    for im = 1:nMethods
+        [bobRes, eveRes] = local_decode_single_method_local( ...
+            methods(im), txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+            packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
+            packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
+            eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+            captureExample, EbN0dB, EbN0dBEve, nPackets);
+
+        nErrBob(im) = bobRes.nErr;
+        nTotBob(im) = bobRes.nTot;
+        mseCommBob(im) = bobRes.mseComm;
+        psnrCommBob(im) = bobRes.psnrComm;
+        ssimCommBob(im) = bobRes.ssimComm;
+        mseCompBob(im) = bobRes.mseComp;
+        psnrCompBob(im) = bobRes.psnrComp;
+        ssimCompBob(im) = bobRes.ssimComp;
+        exampleBob{im} = bobRes.example;
+
+        if eveEnabled
+            nErrEve(im) = eveRes.nErr;
+            nTotEve(im) = eveRes.nTot;
+            mseCommEve(im) = eveRes.mseComm;
+            psnrCommEve(im) = eveRes.psnrComm;
+            ssimCommEve(im) = eveRes.ssimComm;
+            mseCompEve(im) = eveRes.mseComp;
+            psnrCompEve(im) = eveRes.psnrComp;
+            ssimCompEve(im) = eveRes.ssimComp;
+            exampleEve{im} = eveRes.example;
+        end
+    end
+end
+
+bobFrame = struct();
+bobFrame.nErr = nErrBob;
+bobFrame.nTot = nTotBob;
+bobFrame.metricsComm = struct("mse", mseCommBob, "psnr", psnrCommBob, "ssim", ssimCommBob);
+bobFrame.metricsComp = struct("mse", mseCompBob, "psnr", psnrCompBob, "ssim", ssimCompBob);
+bobFrame.example = exampleBob;
+
+eveFrame = struct();
+if eveEnabled
+    eveFrame.nErr = nErrEve;
+    eveFrame.nTot = nTotEve;
+    eveFrame.metricsComm = struct("mse", mseCommEve, "psnr", psnrCommEve, "ssim", ssimCommEve);
+    eveFrame.metricsComp = struct("mse", mseCompEve, "psnr", psnrCompEve, "ssim", ssimCompEve);
+    eveFrame.example = exampleEve;
+end
+end
+
+function [bobRes, eveRes] = local_decode_single_method_local( ...
+    methodName, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+    packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
+    packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
+    eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+    captureExample, EbN0dB, EbN0dBEve, nPackets)
+
+% -------- Bob --------
+sessionBob = rx_session_empty_local();
+payloadFrameBob = zeros(totalPayloadBitsTx, 1, "uint8");
+packetOkBob = false(1, nPackets);
+nErrBob = 0;
+nTotBob = 0;
+
+for pktIdx = 1:nPackets
+    txPayload = txPayloadBits{pktIdx};
+    if bobNom.ok(pktIdx)
+        phy = bobNom.phy(pktIdx);
+        rxState = bobNom.rxState{pktIdx};
+        if isempty(rxState)
+            rxState = derive_rx_packet_state_local(p, double(phy.packetIndex), double(phy.packetDataBytes) * 8);
+        end
+        rData = fit_complex_length_local(bobNom.rData{pktIdx}, rxState.nDataSym);
+        if fhEnabled
+            rData = fh_demodulate(rData, rxState.hopInfo);
+        end
+        if p.rxSync.carrierPll.enable
+            rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+        end
+
+        [rMit, reliability] = mitigate_impulses(rData, methodName, p.mitigation);
+        demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
+        demodDeint = deinterleave_bits(demodSoft, rxState.intState, p.interleaver);
+        dataBitsRxScr = fec_decode(demodDeint, p.fec);
+        packetDataBitsRx = descramble_bits(dataBitsRxScr, rxState.scrambleCfg);
+        packetDataBitsRx = fit_bits_length(packetDataBitsRx, rxState.packetDataBitsLen);
+
+        [payloadPktRx, sessionNext, packetInfo, okPacket] = recover_payload_packet_local(packetDataBitsRx, phy, sessionBob, p);
+        if okPacket
+            sessionBob = sessionNext;
+            if packetInfo.packetIndex == txPktIndex(pktIdx)
+                txBits = txPayload;
+                nCompare = min(numel(payloadPktRx), numel(txBits));
+                if nCompare > 0
+                    nErrBob = nErrBob + sum(payloadPktRx(1:nCompare) ~= txBits(1:nCompare));
+                end
+                if numel(payloadPktRx) < numel(txBits)
+                    nErrBob = nErrBob + (numel(txBits) - numel(payloadPktRx));
+                end
+                nTotBob = nTotBob + numel(txBits);
+            else
+                nErrBob = nErrBob + numel(txPayload);
+                nTotBob = nTotBob + numel(txPayload);
+            end
+
+            payloadFrameBob(packetInfo.range.startBit:packetInfo.range.endBit) = fit_bits_length(payloadPktRx, packetInfo.range.nBits);
+            packetOkBob(packetInfo.packetIndex) = true;
+        else
+            nErrBob = nErrBob + numel(txPayload);
+            nTotBob = nTotBob + numel(txPayload);
+        end
+    else
+        nErrBob = nErrBob + numel(txPayload);
+        nTotBob = nTotBob + numel(txPayload);
+    end
+end
+
+metaBobUse = metaTx;
+totalPayloadBitsBob = totalPayloadBitsTx;
+if isfield(sessionBob, "known") && sessionBob.known
+    metaBobUse = sessionBob.meta;
+    totalPayloadBitsBob = sessionBob.totalPayloadBits;
+end
+rxLayoutBob = derive_packet_layout_local(totalPayloadBitsBob, p);
+
+if packetIndependentBitChaos && chaosEnabled
+    payloadBitsRxDec = decrypt_payload_packets_rx_local(payloadFrameBob, packetOkBob, p, totalPayloadBitsBob, "known");
+    imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
+elseif chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
+    if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
+        payloadBitsRxDec = chaos_decrypt_bits(payloadFrameBob, chaosEncInfo);
+        imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
+    else
+        imgRxEnc = payload_bits_to_image(payloadFrameBob, metaBobUse, p.payload);
+        imgRxComm = chaos_decrypt(imgRxEnc, chaosEncInfo);
+    end
+else
+    imgRxComm = payload_bits_to_image(payloadFrameBob, metaBobUse, p.payload);
+end
+
+imgRxComp = imgRxComm;
+if packetConcealActive
+    imgRxComp = conceal_image_from_packets(imgRxComp, packetOkBob, rxLayoutBob, metaBobUse, p.payload, packetConcealMode);
+end
+
+[psnrNowComm, ssimNowComm, mseNowComm] = image_quality(imgTx, imgRxComm);
+[psnrNowComp, ssimNowComp, mseNowComp] = image_quality(imgTx, imgRxComp);
+
+bobRes = struct();
+bobRes.nErr = nErrBob;
+bobRes.nTot = nTotBob;
+bobRes.mseComm = mseNowComm;
+bobRes.psnrComm = psnrNowComm;
+bobRes.ssimComm = ssimNowComm;
+bobRes.mseComp = mseNowComp;
+bobRes.psnrComp = psnrNowComp;
+bobRes.ssimComp = ssimNowComp;
+bobRes.example = [];
+if captureExample
+    bobRes.example = struct();
+    bobRes.example.EbN0dB = EbN0dB;
+    bobRes.example.imgRxComm = imgRxComm;
+    bobRes.example.imgRxCompensated = imgRxComp;
+    bobRes.example.imgRx = imgRxComp;
+    bobRes.example.packetSuccessRate = mean(packetOkBob);
+end
+
+% -------- Eve --------
+eveRes = struct();
+if ~eveEnabled
+    return;
+end
+
+sessionEve = rx_session_empty_local();
+payloadFrameEve = zeros(totalPayloadBitsTx, 1, "uint8");
+packetOkEve = false(1, nPackets);
+nErrEve = 0;
+nTotEve = 0;
+
+for pktIdx = 1:nPackets
+    txPayload = txPayloadBits{pktIdx};
+    if eveNom.ok(pktIdx)
+        phy = eveNom.phy(pktIdx);
+        rxState = eveNom.rxState{pktIdx};
+        if isempty(rxState)
+            rxState = derive_rx_packet_state_local(p, double(phy.packetIndex), double(phy.packetDataBytes) * 8);
+        end
+        rData = fit_complex_length_local(eveNom.rData{pktIdx}, rxState.nDataSym);
+        if fhEnabled
+            hopInfoEve = eve_hop_info_local(rxState, fhAssumptionEve);
+            rData = fh_demodulate(rData, hopInfoEve);
+        end
+        if p.rxSync.carrierPll.enable
+            rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+        end
+        scrambleCfgEve = eve_scramble_cfg_local(rxState.scrambleCfg, scrambleAssumptionEve);
+
+        [rMitEve, reliabilityEve] = mitigate_impulses(rData, methodName, p.mitigation);
+        demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
+        demodDeintEve = deinterleave_bits(demodSoftEve, rxState.intState, p.interleaver);
+        dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
+        packetDataBitsEve = descramble_bits(dataBitsEveScr, scrambleCfgEve);
+        packetDataBitsEve = fit_bits_length(packetDataBitsEve, rxState.packetDataBitsLen);
+
+        [payloadPktEve, sessionNext, packetInfo, okPacket] = recover_payload_packet_local(packetDataBitsEve, phy, sessionEve, p);
+        if okPacket
+            sessionEve = sessionNext;
+            if packetInfo.packetIndex == txPktIndex(pktIdx)
+                txBits = txPayload;
+                nCompare = min(numel(payloadPktEve), numel(txBits));
+                if nCompare > 0
+                    nErrEve = nErrEve + sum(payloadPktEve(1:nCompare) ~= txBits(1:nCompare));
+                end
+                if numel(payloadPktEve) < numel(txBits)
+                    nErrEve = nErrEve + (numel(txBits) - numel(payloadPktEve));
+                end
+                nTotEve = nTotEve + numel(txBits);
+            else
+                nErrEve = nErrEve + numel(txPayload);
+                nTotEve = nTotEve + numel(txPayload);
+            end
+
+            payloadFrameEve(packetInfo.range.startBit:packetInfo.range.endBit) = fit_bits_length(payloadPktEve, packetInfo.range.nBits);
+            packetOkEve(packetInfo.packetIndex) = true;
+        else
+            nErrEve = nErrEve + numel(txPayload);
+            nTotEve = nTotEve + numel(txPayload);
+        end
+    else
+        nErrEve = nErrEve + numel(txPayload);
+        nTotEve = nTotEve + numel(txPayload);
+    end
+end
+
+metaEveUse = metaTx;
+totalPayloadBitsEve = totalPayloadBitsTx;
+if isfield(sessionEve, "known") && sessionEve.known
+    metaEveUse = sessionEve.meta;
+    totalPayloadBitsEve = sessionEve.totalPayloadBits;
+end
+rxLayoutEve = derive_packet_layout_local(totalPayloadBitsEve, p);
+
+if packetIndependentBitChaos && chaosEnabled && chaosAssumptionEve ~= "none"
+    payloadBitsEveDec = decrypt_payload_packets_rx_local(payloadFrameEve, packetOkEve, p, totalPayloadBitsEve, chaosAssumptionEve);
+    imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
+elseif chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
+    if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
+        payloadBitsEveDec = chaos_decrypt_bits(payloadFrameEve, chaosEncInfoEve);
+        imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
+    else
+        imgEveEnc = payload_bits_to_image(payloadFrameEve, metaEveUse, p.payload);
+        imgEveComm = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
+    end
+else
+    imgEveComm = payload_bits_to_image(payloadFrameEve, metaEveUse, p.payload);
+end
+
+imgEveComp = imgEveComm;
+if packetConcealActive
+    imgEveComp = conceal_image_from_packets(imgEveComp, packetOkEve, rxLayoutEve, metaEveUse, p.payload, packetConcealMode);
+end
+
+[psnrNowCommEve, ssimNowCommEve, mseNowCommEve] = image_quality(imgTx, imgEveComm);
+[psnrNowCompEve, ssimNowCompEve, mseNowCompEve] = image_quality(imgTx, imgEveComp);
+
+eveRes.nErr = nErrEve;
+eveRes.nTot = nTotEve;
+eveRes.mseComm = mseNowCommEve;
+eveRes.psnrComm = psnrNowCommEve;
+eveRes.ssimComm = ssimNowCommEve;
+eveRes.mseComp = mseNowCompEve;
+eveRes.psnrComp = psnrNowCompEve;
+eveRes.ssimComp = ssimNowCompEve;
+eveRes.example = [];
+if captureExample
+    eveRes.example = struct();
+    eveRes.example.EbN0dB = EbN0dBEve;
+    eveRes.example.headerOk = all(packetOkEve);
+    eveRes.example.packetSuccessRate = mean(packetOkEve);
+    eveRes.example.imgRxComm = imgEveComm;
+    eveRes.example.imgRxCompensated = imgEveComp;
+    eveRes.example.imgRx = imgEveComp;
+end
+end
+
+function tf = local_has_parallel_pool_local()
+tf = false;
+if exist("gcp", "file") ~= 2
+    return;
+end
+try
+    tf = ~isempty(gcp("nocreate"));
+catch
+    tf = false;
+end
 end
 
 function session = rx_session_empty_local()
