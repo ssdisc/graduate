@@ -121,6 +121,7 @@ end %示例图默认取最高Eb/N0点；设为具体值时取最近点
 eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
 chaosAssumptionEve = "none";
 chaosEncInfoEve = struct('enabled', false, 'mode', "none");
+eveEbN0dBList = [];
 if eveEnabled
     if ~isfield(p.eve, "ebN0dBOffset"); p.eve.ebN0dBOffset = -6; end
     if ~isfield(p.eve, "scrambleAssumption"); p.eve.scrambleAssumption = "wrong_key"; end
@@ -187,13 +188,9 @@ end
 wardenEnabled = isfield(p, "covert") && isfield(p.covert, "enable") && p.covert.enable ...
     && isfield(p.covert, "warden") && isfield(p.covert.warden, "enable") && p.covert.warden.enable;
 if wardenEnabled
-    wardenThreshold = nan(1, numel(EbN0dBList)); %能量检测阈值
-    wardenPfaEst = nan(1, numel(EbN0dBList)); %实测虚警率
-    wardenPdEst = nan(1, numel(EbN0dBList)); %实测检测率
-    wardenPeEst = nan(1, numel(EbN0dBList)); %实测错误率（误检为有信号）
-    wardenNObs = nan(1, numel(EbN0dBList)); %每点观测符号数
-    wardenPfaTarget = NaN; %目标虚警率（如果仿真中未指定，则使用实测值）
-    wardenNTrials = NaN; %蒙特卡洛试验次数（如果仿真中未指定，则使用仿真中实际的试验次数）
+    wardenPointDetections = cell(1, numel(EbN0dBList));
+    [wardenEbN0dBList, wardenReferenceLink] = local_resolve_warden_ebn0_list( ...
+        EbN0dBList, eveEnabled, eveEbN0dBList, p.covert.warden);
 end
 
 % 将“对外按符号/Hz配置”的信道参数映射到“对内按采样执行”。
@@ -244,18 +241,23 @@ for ie = 1:numel(EbN0dBList)
     end
 
     if wardenEnabled
-        if eveEnabled
-            det = warden_energy_detector(txSymForChannel, N0Eve, channelSample, maxDelaySamples, p.covert.warden);
-        else
-            det = warden_energy_detector(txSymForChannel, N0, channelSample, maxDelaySamples, p.covert.warden);
+        EbN0dBWarden = wardenEbN0dBList(ie);
+        EbN0Warden = 10.^(EbN0dBWarden / 10);
+        N0Warden = ebn0_to_n0(EbN0Warden, modInfo.codeRate, modInfo.bitsPerSymbol, 1.0);
+        fprintf('[SIM]     Warden等效Eb/N0: %.2f dB (%s)\n', EbN0dBWarden, wardenReferenceLink);
+        wardenCfg = p.covert.warden;
+        wardenCfg.referenceLink = wardenReferenceLink;
+        % 同步跳频频点数和过采样率到warden配置，确保两个新层参数与仿真一致
+        if isfield(wardenCfg, "fhNarrowband") && isfield(wardenCfg.fhNarrowband, "enable") && wardenCfg.fhNarrowband.enable
+            if isfield(p, "fh") && isfield(p.fh, "nFreqs")
+                wardenCfg.fhNarrowband.nFreqs = p.fh.nFreqs;
+            end
         end
-        if isnan(wardenPfaTarget); wardenPfaTarget = det.pfaTarget; end
-        if isnan(wardenNTrials); wardenNTrials = det.nTrials; end
-        wardenThreshold(ie) = det.threshold;
-        wardenPfaEst(ie) = det.pfaEst;
-        wardenPdEst(ie) = det.pdEst;
-        wardenPeEst(ie) = det.peEst;
-        wardenNObs(ie) = det.nObs;
+        if isfield(wardenCfg, "cyclostationary") && isfield(wardenCfg.cyclostationary, "enable") && wardenCfg.cyclostationary.enable
+            wardenCfg.cyclostationary.sps = waveform.sps;
+        end
+        det = warden_energy_detector(txSymForChannel, N0Warden, channelSample, maxDelaySamples, wardenCfg);
+        wardenPointDetections{ie} = det;
     end
 
 
@@ -662,15 +664,8 @@ end
 
 if wardenEnabled
     results.covert = struct();
-    results.covert.warden = struct();
-    results.covert.warden.pfaTarget = wardenPfaTarget;
-    results.covert.warden.nObs = wardenNObs;
-    results.covert.warden.nTrials = wardenNTrials;
-    results.covert.warden.threshold = wardenThreshold;
-    results.covert.warden.pfaEst = wardenPfaEst;
-    results.covert.warden.pdEst = wardenPdEst;
-    results.covert.warden.peEst = wardenPeEst;
-    results.covert.warden.ebN0dB = EbN0dBList;
+    results.covert.warden = local_pack_warden_results( ...
+        wardenPointDetections, EbN0dBList, wardenEbN0dBList, wardenReferenceLink);
     if eveEnabled
         results.covert.warden.eveEbN0dB = eveEbN0dBList;
     end
@@ -1105,5 +1100,121 @@ switch upper(string(mod.type))
         bitsPerSym = 1;
     otherwise
         error("Unsupported modulation for receiver state derivation: %s", mod.type);
+end
+end
+
+function [wardenEbN0dBList, referenceLink] = local_resolve_warden_ebn0_list(bobEbN0dBList, eveEnabled, eveEbN0dBList, wardenCfg)
+referenceLink = "bob";
+if isfield(wardenCfg, "referenceLink")
+    referenceLink = lower(string(wardenCfg.referenceLink));
+end
+
+switch referenceLink
+    case "bob"
+        wardenEbN0dBList = bobEbN0dBList;
+    case "eve"
+        if eveEnabled && ~isempty(eveEbN0dBList)
+            wardenEbN0dBList = eveEbN0dBList;
+        else
+            referenceLink = "bob";
+            wardenEbN0dBList = bobEbN0dBList;
+        end
+    case "independent"
+        offsetDb = -10;
+        if isfield(wardenCfg, "ebN0dBOffset")
+            offsetDb = double(wardenCfg.ebN0dBOffset);
+        end
+        wardenEbN0dBList = bobEbN0dBList + offsetDb;
+    otherwise
+        error("Unknown covert.warden.referenceLink: %s", string(wardenCfg.referenceLink));
+end
+end
+
+function w = local_pack_warden_results(detCells, bobEbN0dBList, wardenEbN0dBList, referenceLink)
+firstIdx = find(~cellfun(@isempty, detCells), 1, 'first');
+if isempty(firstIdx)
+    error("Warden enabled but no detector outputs were collected.");
+end
+
+template = detCells{firstIdx};
+w = struct();
+w.primaryLayer = template.primaryLayer;
+w.referenceLink = string(referenceLink);
+w.pfaTarget = template.pfaTarget;
+w.nObs = local_collect_scalar_series(detCells, "nObs");
+w.nTrials = template.nTrials;
+w.ebN0dB = bobEbN0dBList;
+w.wardenEbN0dB = wardenEbN0dBList;
+w.layers = struct();
+w.layers.energyNp = local_collect_warden_layer(detCells, "energyNp");
+w.layers.energyOpt = local_collect_warden_layer(detCells, "energyOpt");
+w.layers.energyOptUncertain = local_collect_warden_layer(detCells, "energyOptUncertain");
+w.layers.energyFhNarrow = local_collect_warden_layer(detCells, "energyFhNarrow");
+w.layers.cyclostationaryOpt = local_collect_warden_layer(detCells, "cyclostationaryOpt");
+
+np = w.layers.energyNp;
+w.threshold = np.threshold;
+w.pfaEst = np.pfa;
+w.pdEst = np.pd;
+w.pmdEst = np.pmd;
+w.xiEst = np.xi;
+w.peEst = np.pe;
+
+opt = w.layers.energyOpt;
+w.thresholdOpt = opt.threshold;
+w.pfaOpt = opt.pfa;
+w.pdOpt = opt.pd;
+w.pmdOpt = opt.pmd;
+w.xiOpt = opt.xi;
+w.peOpt = opt.pe;
+
+unc = w.layers.energyOptUncertain;
+w.thresholdUncertain = unc.threshold;
+w.pfaUncertain = unc.pfa;
+w.pdUncertain = unc.pd;
+w.pmdUncertain = unc.pmd;
+w.xiUncertain = unc.xi;
+w.peUncertain = unc.pe;
+end
+
+function values = local_collect_scalar_series(detCells, fieldName)
+values = nan(1, numel(detCells));
+for i = 1:numel(detCells)
+    values(i) = detCells{i}.(fieldName);
+end
+end
+
+function layer = local_collect_warden_layer(detCells, layerName)
+layerName = char(string(layerName));
+template = detCells{find(~cellfun(@isempty, detCells), 1, 'first')}.layers.(layerName);
+nPoints = numel(detCells);
+
+layer = struct();
+layer.name = template.name;
+layer.criterion = template.criterion;
+layer.referenceLink = template.referenceLink;
+layer.noiseUncertaintyDb = template.noiseUncertaintyDb;
+layer.pfaTarget = template.pfaTarget;
+layer.nObs = nan(1, nPoints);
+layer.delayMaxSamples = nan(1, nPoints);
+layer.thresholdScanCount = nan(1, nPoints);
+layer.threshold = nan(1, nPoints);
+layer.pfa = nan(1, nPoints);
+layer.pd = nan(1, nPoints);
+layer.pmd = nan(1, nPoints);
+layer.xi = nan(1, nPoints);
+layer.pe = nan(1, nPoints);
+
+for i = 1:nPoints
+    point = detCells{i}.layers.(layerName);
+    layer.nObs(i) = point.nObs;
+    layer.delayMaxSamples(i) = point.delayMaxSamples;
+    layer.thresholdScanCount(i) = point.thresholdScanCount;
+    layer.threshold(i) = point.threshold;
+    layer.pfa(i) = point.pfa;
+    layer.pd(i) = point.pd;
+    layer.pmd(i) = point.pmd;
+    layer.xi(i) = point.xi;
+    layer.pe(i) = point.pe;
 end
 end

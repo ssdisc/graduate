@@ -8,9 +8,9 @@ function [y, impMask, chState] = channel_bg_impulsive(x, N0, ch)
 %        .impulseProb      - 脉冲噪声出现概率
 %        .impulseToBgRatio - 脉冲噪声功率与背景噪声功率比
 %        .multipath.enable/.pathDelays/.pathGainsDb（可选，pathDelays单位: sample）
-%        .singleTone.enable/.toBgRatio/.normFreq（可选，normFreq单位: cycles/sample）
-%        .narrowband.enable/.toBgRatio/.centerFreq/.bandwidth（可选，单位: cycles/sample）
-%        .sweep.enable/.toBgRatio/.startFreq/.stopFreq/.periodSamples（可选）
+%        .singleTone.enable/.powerMode/.power/.toBgRatio/.normFreq（可选，normFreq单位: cycles/sample）
+%        .narrowband.enable/.powerMode/.power/.toBgRatio/.centerFreq/.bandwidth（可选）
+%        .sweep.enable/.powerMode/.power/.toBgRatio/.startFreq/.stopFreq/.periodSamples（可选）
 %        .syncImpairment.enable/.timingOffset/.phaseOffsetRad（可选，timingOffset单位: sample）
 %
 % 输出:
@@ -95,10 +95,8 @@ jammer = complex(zeros(size(x)));
 singleToneEnable = false;
 if isfield(ch, "singleTone") && isfield(ch.singleTone, "enable") && ch.singleTone.enable
     singleToneEnable = true;
-    toneRatio = 10;
     toneFreq = 0.08;
     randomPhase = true;
-    if isfield(ch.singleTone, "toBgRatio"); toneRatio = ch.singleTone.toBgRatio; end
     if isfield(ch.singleTone, "normFreq"); toneFreq = ch.singleTone.normFreq; end
     if isfield(ch.singleTone, "randomPhase"); randomPhase = logical(ch.singleTone.randomPhase); end
     if abs(toneFreq) >= 0.5
@@ -108,7 +106,8 @@ if isfield(ch, "singleTone") && isfield(ch.singleTone, "enable") && ch.singleTon
     if randomPhase
         phi0 = 2*pi*rand();
     end
-    toneAmp = sqrt(max(toneRatio, 0) * N0);
+    tonePow = local_interference_power(ch.singleTone, N0, 10 * N0);
+    toneAmp = sqrt(tonePow);
     jammer = jammer + toneAmp * exp(1j * (2*pi*toneFreq*n + phi0));
 end
 
@@ -116,10 +115,8 @@ end
 narrowbandEnable = false;
 if isfield(ch, "narrowband") && isfield(ch.narrowband, "enable") && ch.narrowband.enable
     narrowbandEnable = true;
-    nbRatio = 8;
     nbFc = 0.12;
     nbBw = 0.08;
-    if isfield(ch.narrowband, "toBgRatio"); nbRatio = ch.narrowband.toBgRatio; end
     if isfield(ch.narrowband, "centerFreq"); nbFc = ch.narrowband.centerFreq; end
     if isfield(ch.narrowband, "bandwidth"); nbBw = ch.narrowband.bandwidth; end
     if abs(nbFc) >= 0.5
@@ -135,7 +132,7 @@ if isfield(ch, "narrowband") && isfield(ch.narrowband, "enable") && ch.narrowban
     nb = ifft(ifftshift(W));
     nb = nb .* exp(1j * 2*pi*nbFc*n);
 
-    targetPow = max(nbRatio, 0) * N0;
+    targetPow = local_interference_power(ch.narrowband, N0, 8 * N0);
     nowPow = mean(abs(nb).^2);
     if nowPow > 0
         nb = nb * sqrt(targetPow / nowPow);
@@ -147,13 +144,11 @@ end
 sweepEnable = false;
 if isfield(ch, "sweep") && isfield(ch.sweep, "enable") && ch.sweep.enable
     sweepEnable = true;
-    swRatio = 8;
     swF0 = -0.2;
     swF1 = 0.2;
     swPeriod = numel(x);
     swRandomPhase = true;
 
-    if isfield(ch.sweep, "toBgRatio"); swRatio = ch.sweep.toBgRatio; end
     if isfield(ch.sweep, "startFreq"); swF0 = ch.sweep.startFreq; end
     if isfield(ch.sweep, "stopFreq"); swF1 = ch.sweep.stopFreq; end
     if isfield(ch.sweep, "periodSymbols"); swPeriod = ch.sweep.periodSymbols; end
@@ -178,7 +173,7 @@ if isfield(ch, "sweep") && isfield(ch.sweep, "enable") && ch.sweep.enable
     sweepPhase = phi0 + 2*pi*cumsum(instFreq);
     sweepJam = exp(1j * sweepPhase);
 
-    targetPow = max(swRatio, 0) * N0;
+    targetPow = local_interference_power(ch.sweep, N0, 8 * N0);
     nowPow = mean(abs(sweepJam).^2);
     if nowPow > 0
         sweepJam = sweepJam * sqrt(targetPow / nowPow);
@@ -198,5 +193,32 @@ if nargout >= 3
     chState.syncImpairmentEnable = syncImpEnable;
     chState.timingOffset = timingOffset;
     chState.phaseOffsetRad = phaseOffsetRad;
+end
+end
+
+function targetPow = local_interference_power(cfg, N0, legacyDefault)
+targetPow = legacyDefault;
+
+if isfield(cfg, "powerMode") && strlength(string(cfg.powerMode)) > 0
+    switch lower(string(cfg.powerMode))
+        case "absolute"
+            if isfield(cfg, "power") && ~isempty(cfg.power)
+                targetPow = max(double(cfg.power), 0);
+                return;
+            end
+        case "relative_to_bg"
+            if isfield(cfg, "toBgRatio") && ~isempty(cfg.toBgRatio)
+                targetPow = max(double(cfg.toBgRatio), 0) * N0;
+                return;
+            end
+        otherwise
+            error("Unsupported interference powerMode: %s", string(cfg.powerMode));
+    end
+end
+
+if isfield(cfg, "power") && ~isempty(cfg.power)
+    targetPow = max(double(cfg.power), 0);
+elseif isfield(cfg, "toBgRatio") && ~isempty(cfg.toBgRatio)
+    targetPow = max(double(cfg.toBgRatio), 0) * N0;
 end
 end

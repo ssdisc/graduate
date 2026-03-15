@@ -420,21 +420,51 @@ end
 
 if isfield(results, "covert") && isfield(results.covert, "warden")
     w = results.covert.warden;
-    x = w.ebN0dB;
-    xlab = "E_b/N_0 (dB)";
-    if isfield(w, "eveEbN0dB")
-        x = w.eveEbN0dB;
-        xlab = "E_b/N_0 at Eve (dB)";
-    end
+    [x, xlab] = local_get_warden_axis(w);
     fig6 = local_create_line_figure("Warden");
-    ax6 = axes(fig6);
-    wardenValues = [w.pdEst(:).'; w.pfaEst(:).'; w.peEst(:).'];
-    local_plot_series_matrix(ax6, x, wardenValues, "linear");
-    local_apply_line_labels(ax6, ...
+    tl6 = tiledlayout(fig6, 2, 1, "TileSpacing", "compact", "Padding", "compact");
+
+    ax6a = nexttile(tl6);
+    if isfield(w, "layers") && isfield(w.layers, "energyNp")
+        np = w.layers.energyNp;
+        wardenValues = [np.pd(:).'; np.pfa(:).'; np.pe(:).'; np.xi(:).'];
+    else
+        wardenValues = [w.pdEst(:).'; w.pfaEst(:).'; w.peEst(:).'];
+    end
+    local_plot_series_matrix(ax6a, x, wardenValues, "linear");
+    local_apply_line_labels(ax6a, ...
         xlab, ...
         "Probability", ...
-        sprintf("Energy detector: P_FA target=%.3g, nObs=%d, nTrials=%d", w.pfaTarget, round(w.nObs(1)), round(w.nTrials)));
-    local_style_legend(ax6, ["P_D", "P_{FA}", "P_e"], "best");
+        sprintf("Energy NP layer: P_FA target=%.3g, nObs=%d, nTrials=%d", w.pfaTarget, round(w.nObs(1)), round(w.nTrials)));
+    if size(wardenValues, 1) >= 4
+        local_style_legend(ax6a, ["P_D", "P_{FA}", "P_e", "\xi"], "best");
+    else
+        local_style_legend(ax6a, ["P_D", "P_{FA}", "P_e"], "best");
+    end
+
+    ax6b = nexttile(tl6);
+    covertValues = [];
+    covertLabels = strings(1, 0);
+    if isfield(w, "layers") && isfield(w.layers, "energyOpt")
+        covertValues = [covertValues; w.layers.energyOpt.xi(:).'; w.layers.energyOpt.pe(:).'];
+        covertLabels = [covertLabels, "\xi^* (opt)", "P_e^* (opt)"];
+    end
+    if isfield(w, "layers") && isfield(w.layers, "energyOptUncertain")
+        covertValues = [covertValues; ...
+            w.layers.energyOptUncertain.xi(:).'; ...
+            w.layers.energyOptUncertain.pe(:).'];
+        covertLabels = [covertLabels, "\xi^* (opt+uncert.)", "P_e^* (opt+uncert.)"];
+    end
+    if isempty(covertValues)
+        covertValues = [w.xiEst(:).'; w.peEst(:).'];
+        covertLabels = ["\xi", "P_e"];
+    end
+    local_plot_series_matrix(ax6b, x, covertValues, "linear");
+    local_apply_line_labels(ax6b, ...
+        xlab, ...
+        "Covert metric", ...
+        sprintf("Primary layer: %s", local_get_primary_warden_layer(w)));
+    local_style_legend(ax6b, covertLabels, "best");
     exportgraphics(fig6, fullfile(outDir, "warden.png"));
     close(fig6);
 end
@@ -762,6 +792,36 @@ titleLines = { ...
     char(string(nameLine)); ...
     sprintf("Eb/N0=%.0fdB", ebN0Val); ...
     char(string(metricLine))};
+end
+
+function [x, xlab] = local_get_warden_axis(w)
+x = w.ebN0dB;
+xlab = "E_b/N_0 at Bob (dB)";
+if isfield(w, "wardenEbN0dB")
+    x = w.wardenEbN0dB;
+    ref = "warden";
+    if isfield(w, "referenceLink")
+        ref = lower(string(w.referenceLink));
+    end
+    switch ref
+        case "bob"
+            xlab = "E_b/N_0 at Bob (dB)";
+        case "eve"
+            xlab = "E_b/N_0 at Eve/Warden (dB)";
+        otherwise
+            xlab = "E_b/N_0 at Warden (dB)";
+    end
+elseif isfield(w, "eveEbN0dB")
+    x = w.eveEbN0dB;
+    xlab = "E_b/N_0 at Eve/Warden (dB)";
+end
+end
+
+function layerName = local_get_primary_warden_layer(w)
+layerName = "energyNp";
+if isfield(w, "primaryLayer") && strlength(string(w.primaryLayer)) > 0
+    layerName = string(w.primaryLayer);
+end
 end
 
 function txt = local_metric_line(label, mseVal, psnrVal, ssimVal, includeSsim)

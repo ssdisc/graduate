@@ -49,8 +49,35 @@ end
 
 if isfield(results, "covert") && isfield(results.covert, "warden")
     w = results.covert.warden;
-    s.wardenPdAtMaxPoint = w.pdEst(end);
-    s.wardenPeAtMaxPoint = w.peEst(end);
+    primaryLayer = local_get_primary_warden_layer(w);
+    s.wardenPrimaryLayer = primaryLayer;
+    primaryLayerField = char(primaryLayer);
+    if isfield(w, "layers") && isfield(w.layers, primaryLayerField)
+        layer = w.layers.(primaryLayerField);
+        s.wardenPdAtMaxPoint = layer.pd(end);
+        s.wardenPmdAtMaxPoint = layer.pmd(end);
+        s.wardenXiAtMaxPoint = layer.xi(end);
+        s.wardenPeAtMaxPoint = layer.pe(end);
+    else
+        s.wardenPdAtMaxPoint = w.pdEst(end);
+        if isfield(w, "pmdEst")
+            s.wardenPmdAtMaxPoint = w.pmdEst(end);
+            s.wardenXiAtMaxPoint = w.xiEst(end);
+        end
+        s.wardenPeAtMaxPoint = w.peEst(end);
+    end
+    if isfield(w, "layers") && isfield(w.layers, "energyNp")
+        s.wardenNpPdAtMaxPoint = w.layers.energyNp.pd(end);
+        s.wardenNpPeAtMaxPoint = w.layers.energyNp.pe(end);
+    end
+    if isfield(w, "layers") && isfield(w.layers, "energyFhNarrow")
+        s.wardenFhNarrowXiAtMaxPoint = w.layers.energyFhNarrow.xi(end);
+        s.wardenFhNarrowPeAtMaxPoint = w.layers.energyFhNarrow.pe(end);
+    end
+    if isfield(w, "layers") && isfield(w.layers, "cyclostationaryOpt")
+        s.wardenCycloXiAtMaxPoint = w.layers.cyclostationaryOpt.xi(end);
+        s.wardenCycloPeAtMaxPoint = w.layers.cyclostationaryOpt.pe(end);
+    end
 end
 
 s.spectrum99ObwHz = results.spectrum.bw99Hz;
@@ -78,5 +105,12 @@ if isfield(results, "psnrCompensated")
 end
 if isfield(results, "ssimCompensated")
     compMetrics.ssim = results.ssimCompensated;
+end
+end
+
+function layerName = local_get_primary_warden_layer(w)
+layerName = "energyNp";
+if isfield(w, "primaryLayer") && strlength(string(w.primaryLayer)) > 0
+    layerName = string(w.primaryLayer);
 end
 end
