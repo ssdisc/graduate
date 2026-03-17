@@ -96,6 +96,9 @@ EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
 methods = string(p.mitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
 ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
+packetFrontEndBobVals = nan(1, numel(EbN0dBList));
+packetHeaderBobVals = nan(1, numel(EbN0dBList));
+packetSuccessBobVals = nan(numel(methods), numel(EbN0dBList));
 mseCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的MSE
 psnrCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的PSNR
 ssimCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的SSIM
@@ -133,6 +136,9 @@ if eveEnabled
 
     eveEbN0dBList = EbN0dBList + double(p.eve.ebN0dBOffset);
     berEve = nan(numel(methods), numel(EbN0dBList));
+    packetFrontEndEveVals = nan(1, numel(EbN0dBList));
+    packetHeaderEveVals = nan(1, numel(EbN0dBList));
+    packetSuccessEveVals = nan(numel(methods), numel(EbN0dBList));
     mseCommEveVals = nan(numel(methods), numel(EbN0dBList));
     psnrCommEveVals = nan(numel(methods), numel(EbN0dBList));
     ssimCommEveVals = nan(numel(methods), numel(EbN0dBList));
@@ -335,6 +341,9 @@ for ie = 1:numel(EbN0dBList)
 
     nErr = zeros(numel(methods), 1);
     nTot = zeros(numel(methods), 1);
+    packetFrontEndBobAcc = 0;
+    packetHeaderBobAcc = 0;
+    packetSuccessBobAcc = zeros(numel(methods), 1);
     metricAccComm = init_image_metric_acc_local(numel(methods));
     metricAccComp = init_image_metric_acc_local(numel(methods));
 
@@ -342,6 +351,9 @@ for ie = 1:numel(EbN0dBList)
     if eveEnabled
         nErrEve = zeros(numel(methods), 1);
         nTotEve = zeros(numel(methods), 1);
+        packetFrontEndEveAcc = 0;
+        packetHeaderEveAcc = 0;
+        packetSuccessEveAcc = zeros(numel(methods), 1);
         metricAccCommEve = init_image_metric_acc_local(numel(methods));
         metricAccCompEve = init_image_metric_acc_local(numel(methods));
     end
@@ -382,6 +394,7 @@ for ie = 1:numel(EbN0dBList)
         phyHeaderTemplate = empty_phy_header_local();
         bobNom = struct();
         bobNom.ok = false(nPackets, 1);
+        bobNom.headerOk = false(nPackets, 1);
         bobNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
         bobNom.rxState = cell(nPackets, 1);
         bobNom.rData = cell(nPackets, 1);
@@ -390,6 +403,7 @@ for ie = 1:numel(EbN0dBList)
         eveNom = struct();
         if eveEnabled
             eveNom.ok = false(nPackets, 1);
+            eveNom.headerOk = false(nPackets, 1);
             eveNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
             eveNom.rxState = cell(nPackets, 1);
             eveNom.rData = cell(nPackets, 1);
@@ -397,7 +411,7 @@ for ie = 1:numel(EbN0dBList)
         end
 
         % ============ 分包发收（同步+PHY提取） ============
-        phyHeaderSymLen = phy_header_symbol_length_local(p.frame);
+        phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
         bobSyncCtrl = init_packet_sync_ctrl_local();
         if eveEnabled
             eveSyncCtrl = init_packet_sync_ctrl_local();
@@ -422,6 +436,7 @@ for ie = 1:numel(EbN0dBList)
             bobPhy = phyHeaderTemplate;
             rxStateBobNominal = [];
             rDataBobNominal = complex(zeros(0, 1));
+            bobHeaderOk = false;
             [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
             if bobOk
                 preLen = numel(syncSymBob);
@@ -445,14 +460,16 @@ for ie = 1:numel(EbN0dBList)
                 end
 
                 if bobOk
-                    bobPhyBits = decode_phy_header_symbols_local(rPhyBob, p.frame);
+                    bobPhyBits = decode_phy_header_symbols(rPhyBob, p.frame, p.fec, p.softMetric);
                     [bobPhyParsed, bobOk] = parse_phy_header_bits(bobPhyBits, p.frame);
                     if bobOk
                         bobPhy = bobPhyParsed;
+                        bobHeaderOk = true;
                     end
                 end
                 if bobOk
-                    rxStateBobNominal = derive_rx_packet_state_local(p, double(bobPhy.packetIndex), double(bobPhy.packetDataBytes) * 8);
+                    rxStateBobNominal = derive_rx_packet_state_local( ...
+                        p, double(bobPhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(bobPhy.packetIndex), bobPhy));
                     dataStart = phyStart + phyHeaderSymLen;
                     [rDataBobRaw, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, syncCfgUse, p.mod);
                     if bobOk && eqBobOk
@@ -465,6 +482,7 @@ for ie = 1:numel(EbN0dBList)
                 end
             end
             bobNom.ok(pktIdx) = bobOk;
+            bobNom.headerOk(pktIdx) = bobHeaderOk;
             if bobOk
                 bobNom.phy(pktIdx) = bobPhy;
                 bobNom.rxState{pktIdx} = rxStateBobNominal;
@@ -482,6 +500,7 @@ for ie = 1:numel(EbN0dBList)
                 evePhy = phyHeaderTemplate;
                 rxStateEveNominal = [];
                 rDataEveNominal = complex(zeros(0, 1));
+                eveHeaderOk = false;
                 [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local(rxEve, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, eveSyncCtrl);
                 if eveOk
                     preLenEve = numel(syncSymEve);
@@ -504,14 +523,16 @@ for ie = 1:numel(EbN0dBList)
                     end
 
                     if eveOk
-                        evePhyBits = decode_phy_header_symbols_local(rPhyEve, p.frame);
+                        evePhyBits = decode_phy_header_symbols(rPhyEve, p.frame, p.fec, p.softMetric);
                         [evePhyParsed, eveOk] = parse_phy_header_bits(evePhyBits, p.frame);
                         if eveOk
                             evePhy = evePhyParsed;
+                            eveHeaderOk = true;
                         end
                     end
                     if eveOk
-                        rxStateEveNominal = derive_rx_packet_state_local(p, double(evePhy.packetIndex), double(evePhy.packetDataBytes) * 8);
+                        rxStateEveNominal = derive_rx_packet_state_local( ...
+                            p, double(evePhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(evePhy.packetIndex), evePhy));
                         dataStartEve = phyStartEve + phyHeaderSymLen;
                         [rDataEveRaw, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, syncCfgUse, p.mod);
                         if eveOk && eqEveOk
@@ -524,6 +545,7 @@ for ie = 1:numel(EbN0dBList)
                     end
                 end
                 eveNom.ok(pktIdx) = eveOk;
+                eveNom.headerOk(pktIdx) = eveHeaderOk;
                 if eveOk
                     eveNom.phy(pktIdx) = evePhy;
                     eveNom.rxState{pktIdx} = rxStateEveNominal;
@@ -536,6 +558,12 @@ for ie = 1:numel(EbN0dBList)
                         rDataEveNominal, rxStateEveNominal, hopInfoEvePrep, p, fhEnabled);
                 end
             end
+        end
+        packetFrontEndBobAcc = packetFrontEndBobAcc + mean(double(bobNom.ok));
+        packetHeaderBobAcc = packetHeaderBobAcc + mean(double(bobNom.headerOk));
+        if eveEnabled
+            packetFrontEndEveAcc = packetFrontEndEveAcc + mean(double(eveNom.ok));
+            packetHeaderEveAcc = packetHeaderEveAcc + mean(double(eveNom.headerOk));
         end
 
         % ============ 按方法解调/译码与统计（可并行） ============
@@ -554,6 +582,7 @@ for ie = 1:numel(EbN0dBList)
 
         nErr = nErr + bobFrame.nErr;
         nTot = nTot + bobFrame.nTot;
+        packetSuccessBobAcc = packetSuccessBobAcc + bobFrame.packetSuccessRate;
         for im = 1:numel(methods)
             metricAccComm = accumulate_image_metric_acc_local(metricAccComm, im, ...
                 bobFrame.metricsComm.mse(im), bobFrame.metricsComm.psnr(im), bobFrame.metricsComm.ssim(im));
@@ -567,6 +596,7 @@ for ie = 1:numel(EbN0dBList)
         if eveEnabled
             nErrEve = nErrEve + eveFrame.nErr;
             nTotEve = nTotEve + eveFrame.nTot;
+            packetSuccessEveAcc = packetSuccessEveAcc + eveFrame.packetSuccessRate;
             for im = 1:numel(methods)
                 metricAccCommEve = accumulate_image_metric_acc_local(metricAccCommEve, im, ...
                     eveFrame.metricsComm.mse(im), eveFrame.metricsComm.psnr(im), eveFrame.metricsComm.ssim(im));
@@ -581,6 +611,9 @@ for ie = 1:numel(EbN0dBList)
 
     % --- 当前Eb/N0点的性能统计 ---
     ber(:, ie) = nErr ./ max(nTot, 1);
+    packetFrontEndBobVals(ie) = packetFrontEndBobAcc / p.sim.nFramesPerPoint;
+    packetHeaderBobVals(ie) = packetHeaderBobAcc / p.sim.nFramesPerPoint;
+    packetSuccessBobVals(:, ie) = packetSuccessBobAcc / p.sim.nFramesPerPoint;
 
     [mseOutComm, psnrOutComm, ssimOutComm] = finalize_image_metric_acc_local(metricAccComm);
     [mseOutComp, psnrOutComp, ssimOutComp] = finalize_image_metric_acc_local(metricAccComp);
@@ -594,6 +627,9 @@ for ie = 1:numel(EbN0dBList)
 
     if eveEnabled
         berEve(:, ie) = nErrEve ./ max(nTotEve, 1);
+        packetFrontEndEveVals(ie) = packetFrontEndEveAcc / p.sim.nFramesPerPoint;
+        packetHeaderEveVals(ie) = packetHeaderEveAcc / p.sim.nFramesPerPoint;
+        packetSuccessEveVals(:, ie) = packetSuccessEveAcc / p.sim.nFramesPerPoint;
 
         [mseOutCommEve, psnrOutCommEve, ssimOutCommEve] = finalize_image_metric_acc_local(metricAccCommEve);
         [mseOutCompEve, psnrOutCompEve, ssimOutCompEve] = finalize_image_metric_acc_local(metricAccCompEve);
@@ -625,6 +661,11 @@ results.params = p;
 results.ebN0dB = EbN0dBList;
 results.methods = methods;
 results.ber = ber;
+results.packetDiagnostics = struct();
+results.packetDiagnostics.bob = struct( ...
+    "frontEndSuccessRate", packetFrontEndBobVals, ...
+    "headerSuccessRate", packetHeaderBobVals, ...
+    "payloadSuccessRate", packetSuccessBobVals);
 results.packetConceal = struct("configured", packetConcealEnable, "active", packetConcealActive, "mode", packetConcealMode);
 results.imageMetrics = struct();
 results.imageMetrics.communication = struct("mse", mseCommVals, "psnr", psnrCommVals, "ssim", ssimCommVals);
@@ -656,6 +697,10 @@ if eveEnabled
     results.eve = struct();
     results.eve.ebN0dB = eveEbN0dBList;
     results.eve.ber = berEve;
+    results.eve.packetDiagnostics = struct( ...
+        "frontEndSuccessRate", packetFrontEndEveVals, ...
+        "headerSuccessRate", packetHeaderEveVals, ...
+        "payloadSuccessRate", packetSuccessEveVals);
     results.eve.imageMetrics = struct();
     results.eve.imageMetrics.communication = struct("mse", mseCommEveVals, "psnr", psnrCommEveVals, "ssim", ssimCommEveVals);
     results.eve.imageMetrics.compensated = struct("mse", mseCompEveVals, "psnr", psnrCompEveVals, "ssim", ssimCompEveVals);
@@ -759,6 +804,7 @@ ssimCommBob = nan(nMethods, 1);
 mseCompBob = nan(nMethods, 1);
 psnrCompBob = nan(nMethods, 1);
 ssimCompBob = nan(nMethods, 1);
+packetSuccessBob = zeros(nMethods, 1);
 exampleBob = cell(nMethods, 1);
 
 % Always preallocate Eve arrays so PARFOR variable classification is stable.
@@ -770,6 +816,7 @@ ssimCommEve = nan(nMethods, 1);
 mseCompEve = nan(nMethods, 1);
 psnrCompEve = nan(nMethods, 1);
 ssimCompEve = nan(nMethods, 1);
+packetSuccessEve = zeros(nMethods, 1);
 exampleEve = cell(nMethods, 1);
 
 useParfor = logical(useParallelMethods) && local_has_parallel_pool_local();
@@ -791,6 +838,7 @@ if useParfor
             mseCompBob(im) = bobRes.mseComp;
             psnrCompBob(im) = bobRes.psnrComp;
             ssimCompBob(im) = bobRes.ssimComp;
+            packetSuccessBob(im) = bobRes.packetSuccessRate;
             exampleBob{im} = bobRes.example;
 
             if eveEnabled
@@ -802,6 +850,7 @@ if useParfor
                 mseCompEve(im) = eveRes.mseComp;
                 psnrCompEve(im) = eveRes.psnrComp;
                 ssimCompEve(im) = eveRes.ssimComp;
+                packetSuccessEve(im) = eveRes.packetSuccessRate;
                 exampleEve{im} = eveRes.example;
             end
         end
@@ -824,6 +873,7 @@ if useParfor
         mseCompBob = nan(nMethods, 1);
         psnrCompBob = nan(nMethods, 1);
         ssimCompBob = nan(nMethods, 1);
+        packetSuccessBob = zeros(nMethods, 1);
         exampleBob = cell(nMethods, 1);
 
         nErrEve = zeros(nMethods, 1);
@@ -834,6 +884,7 @@ if useParfor
         mseCompEve = nan(nMethods, 1);
         psnrCompEve = nan(nMethods, 1);
         ssimCompEve = nan(nMethods, 1);
+        packetSuccessEve = zeros(nMethods, 1);
         exampleEve = cell(nMethods, 1);
     end
 end
@@ -855,6 +906,7 @@ if ~useParfor
         mseCompBob(im) = bobRes.mseComp;
         psnrCompBob(im) = bobRes.psnrComp;
         ssimCompBob(im) = bobRes.ssimComp;
+        packetSuccessBob(im) = bobRes.packetSuccessRate;
         exampleBob{im} = bobRes.example;
 
         if eveEnabled
@@ -866,6 +918,7 @@ if ~useParfor
             mseCompEve(im) = eveRes.mseComp;
             psnrCompEve(im) = eveRes.psnrComp;
             ssimCompEve(im) = eveRes.ssimComp;
+            packetSuccessEve(im) = eveRes.packetSuccessRate;
             exampleEve{im} = eveRes.example;
         end
     end
@@ -874,6 +927,7 @@ end
 bobFrame = struct();
 bobFrame.nErr = nErrBob;
 bobFrame.nTot = nTotBob;
+bobFrame.packetSuccessRate = packetSuccessBob;
 bobFrame.metricsComm = struct("mse", mseCommBob, "psnr", psnrCommBob, "ssim", ssimCommBob);
 bobFrame.metricsComp = struct("mse", mseCompBob, "psnr", psnrCompBob, "ssim", ssimCompBob);
 bobFrame.example = exampleBob;
@@ -882,6 +936,7 @@ eveFrame = struct();
 if eveEnabled
     eveFrame.nErr = nErrEve;
     eveFrame.nTot = nTotEve;
+    eveFrame.packetSuccessRate = packetSuccessEve;
     eveFrame.metricsComm = struct("mse", mseCommEve, "psnr", psnrCommEve, "ssim", ssimCommEve);
     eveFrame.metricsComp = struct("mse", mseCompEve, "psnr", psnrCompEve, "ssim", ssimCompEve);
     eveFrame.example = exampleEve;
@@ -896,7 +951,7 @@ function [bobRes, eveRes] = local_decode_single_method_local( ...
     captureExample, EbN0dB, EbN0dBEve, nPackets)
 
 % -------- Bob --------
-sessionBob = rx_session_empty_local();
+sessionBob = local_init_rx_session_local(p, metaTx, nPackets);
 payloadFrameBob = zeros(totalPayloadBitsTx, 1, "uint8");
 packetOkBob = false(1, nPackets);
 nErrBob = 0;
@@ -908,7 +963,8 @@ nTotBob = 0;
                 phy = bobNom.phy(pktIdx);
                 rxState = bobNom.rxState{pktIdx};
                 if isempty(rxState)
-                    rxState = derive_rx_packet_state_local(p, double(phy.packetIndex), double(phy.packetDataBytes) * 8);
+                    rxState = derive_rx_packet_state_local( ...
+                        p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
                 end
         rData = [];
         if isfield(bobNom, "rDataPrepared") && numel(bobNom.rDataPrepared) >= pktIdx && ~isempty(bobNom.rDataPrepared{pktIdx})
@@ -1000,14 +1056,17 @@ bobRes.ssimComm = ssimNowComm;
 bobRes.mseComp = mseNowComp;
 bobRes.psnrComp = psnrNowComp;
 bobRes.ssimComp = ssimNowComp;
+bobRes.packetSuccessRate = mean(packetOkBob);
 bobRes.example = [];
 if captureExample
     bobRes.example = struct();
     bobRes.example.EbN0dB = EbN0dB;
+    bobRes.example.frontEndSuccessRate = mean(double(bobNom.ok));
+    bobRes.example.headerSuccessRate = mean(double(bobNom.headerOk));
     bobRes.example.imgRxComm = imgRxComm;
     bobRes.example.imgRxCompensated = imgRxComp;
     bobRes.example.imgRx = imgRxComp;
-    bobRes.example.packetSuccessRate = mean(packetOkBob);
+    bobRes.example.packetSuccessRate = bobRes.packetSuccessRate;
 end
 
 % -------- Eve --------
@@ -1016,7 +1075,7 @@ if ~eveEnabled
     return;
 end
 
-sessionEve = rx_session_empty_local();
+sessionEve = local_init_rx_session_local(p, metaTx, nPackets);
 payloadFrameEve = zeros(totalPayloadBitsTx, 1, "uint8");
 packetOkEve = false(1, nPackets);
 nErrEve = 0;
@@ -1028,7 +1087,8 @@ nTotEve = 0;
             phy = eveNom.phy(pktIdx);
             rxState = eveNom.rxState{pktIdx};
             if isempty(rxState)
-                rxState = derive_rx_packet_state_local(p, double(phy.packetIndex), double(phy.packetDataBytes) * 8);
+                rxState = derive_rx_packet_state_local( ...
+                    p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
             end
         rData = [];
         if isfield(eveNom, "rDataPrepared") && numel(eveNom.rDataPrepared) >= pktIdx && ~isempty(eveNom.rDataPrepared{pktIdx})
@@ -1121,12 +1181,14 @@ eveRes.ssimComm = ssimNowCommEve;
 eveRes.mseComp = mseNowCompEve;
 eveRes.psnrComp = psnrNowCompEve;
 eveRes.ssimComp = ssimNowCompEve;
+eveRes.packetSuccessRate = mean(packetOkEve);
 eveRes.example = [];
 if captureExample
     eveRes.example = struct();
     eveRes.example.EbN0dB = EbN0dBEve;
-    eveRes.example.headerOk = all(packetOkEve);
-    eveRes.example.packetSuccessRate = mean(packetOkEve);
+    eveRes.example.frontEndSuccessRate = mean(double(eveNom.ok));
+    eveRes.example.headerSuccessRate = mean(double(eveNom.headerOk));
+    eveRes.example.packetSuccessRate = eveRes.packetSuccessRate;
     eveRes.example.imgRxComm = imgEveComm;
     eveRes.example.imgRxCompensated = imgEveComp;
     eveRes.example.imgRx = imgEveComp;
@@ -1243,6 +1305,13 @@ session.totalPackets = NaN;
 session.meta = struct();
 end
 
+function session = local_init_rx_session_local(p, metaTx, nPackets)
+session = rx_session_empty_local();
+if ~session_header_enabled(p.frame)
+    session = learn_rx_session_local(local_preshared_session_meta_local(metaTx, nPackets));
+end
+end
+
 function session = learn_rx_session_local(metaRx)
 session = rx_session_empty_local();
 session.known = true;
@@ -1251,7 +1320,16 @@ session.totalPackets = double(metaRx.totalPackets);
 session.meta = metaRx;
 end
 
+function metaOut = local_preshared_session_meta_local(metaTx, nPackets)
+metaOut = metaTx;
+metaOut.totalPayloadBytes = uint32(metaTx.payloadBytes);
+metaOut.totalPackets = uint16(nPackets);
+end
+
 function state = derive_rx_packet_state_local(p, pktIdx, packetDataBitsLen)
+if nargin < 3 || isempty(packetDataBitsLen) || ~isfinite(packetDataBitsLen)
+    packetDataBitsLen = local_fixed_packet_data_bits_len_local(p, pktIdx);
+end
 packetDataBitsLen = max(0, round(double(packetDataBitsLen)));
 bitsPerSym = bits_per_symbol_local(p.mod);
 codedBitsLen = coded_bits_length_local(packetDataBitsLen, p.fec);
@@ -1279,9 +1357,9 @@ packetInfo = struct();
 packetInfo.packetIndex = double(phyHeader.packetIndex);
 packetInfo.range = struct('startBit', 1, 'endBit', 0, 'nBits', 0);
 
-packetDataBitsLen = double(phyHeader.packetDataBytes) * 8;
+packetDataBitsLen = local_packet_data_bits_len_from_header_local(p, double(phyHeader.packetIndex), phyHeader);
 packetDataBitsRx = fit_bits_length(packetDataBitsRx, packetDataBitsLen);
-ok = packet_data_crc_valid_local(packetDataBitsRx, phyHeader);
+ok = packet_data_crc_valid_local(packetDataBitsRx, phyHeader, p);
 if ~ok
     return;
 end
@@ -1320,14 +1398,30 @@ end
 payloadPktRx = fit_bits_length(payloadPktRx, packetInfo.range.nBits);
 end
 
-function ok = packet_data_crc_valid_local(packetDataBitsRx, phyHeader)
-needBits = double(phyHeader.packetDataBytes) * 8;
+function ok = packet_data_crc_valid_local(packetDataBitsRx, phyHeader, p)
+needBits = local_packet_data_bits_len_from_header_local(p, double(phyHeader.packetIndex), phyHeader);
 if numel(packetDataBitsRx) < needBits
     ok = false;
     return;
 end
 crcNow = crc16_ccitt_bits(packetDataBitsRx(1:needBits));
 ok = uint16(phyHeader.packetDataCrc16) == uint16(crcNow);
+end
+
+function nBits = local_packet_data_bits_len_from_header_local(p, pktIdx, phyHeader)
+if isfield(phyHeader, "packetDataBytes") && double(phyHeader.packetDataBytes) > 0
+    nBits = double(phyHeader.packetDataBytes) * 8;
+else
+    nBits = local_fixed_packet_data_bits_len_local(p, pktIdx);
+end
+end
+
+function nBits = local_fixed_packet_data_bits_len_local(p, pktIdx)
+offsets = derive_packet_state_offsets(p, pktIdx);
+nBits = double(offsets.nominalPayloadBits);
+if offsets.hasSessionHeader
+    nBits = nBits + double(offsets.sessionHeaderLenBits);
+end
 end
 
 function ok = packet_index_valid_local(packetIndex, session)
@@ -1495,21 +1589,6 @@ else
 end
 end
 
-function repeat = phy_header_repeat_local(frameCfg)
-repeat = 3;
-if isfield(frameCfg, "phyHeaderRepeat") && ~isempty(frameCfg.phyHeaderRepeat)
-    repeat = max(1, round(double(frameCfg.phyHeaderRepeat)));
-end
-end
-
-function nBits = phy_header_length_bits_local(~)
-nBits = 16 + 8 + 16 + 16 + 16 + 16;
-end
-
-function nSym = phy_header_symbol_length_local(frameCfg)
-nSym = phy_header_length_bits_local(frameCfg) * phy_header_repeat_local(frameCfg);
-end
-
 function ctrl = init_packet_sync_ctrl_local()
 ctrl = struct();
 ctrl.forceLongSearch = true;
@@ -1578,23 +1657,6 @@ n = 2;
 if isfield(rxSync, "maxShortSyncMisses") && ~isempty(rxSync.maxShortSyncMisses)
     n = max(1, round(double(rxSync.maxShortSyncMisses)));
 end
-end
-
-function bits = decode_phy_header_symbols_local(rSym, frameCfg)
-repeat = phy_header_repeat_local(frameCfg);
-rSym = rSym(:);
-if repeat <= 1
-    bits = uint8(real(rSym) < 0);
-else
-    nGroups = floor(numel(rSym) / repeat);
-    if nGroups <= 0
-        bits = uint8([]);
-        return;
-    end
-    votes = reshape(real(rSym(1:nGroups * repeat)) < 0, repeat, nGroups);
-    bits = uint8(sum(votes, 1) >= ceil(repeat / 2)).';
-end
-bits = fit_bits_length(bits, phy_header_length_bits_local(frameCfg));
 end
 
 function nBits = coded_bits_length_local(nInfoBits, fec)

@@ -16,7 +16,7 @@ end
 pktIdx = max(1, round(double(pktIdx)));
 
 nominalPayloadBits = local_nominal_payload_bits(p);
-sessionHeaderLenBits = local_session_header_length_bits();
+sessionHeaderLenBits = local_session_header_length_bits(p.frame);
 bitsPerSym = local_bits_per_symbol(p.mod);
 fhEnabled = local_fh_enabled(p);
 
@@ -47,6 +47,10 @@ offsets.fhOffsetHops = fhOffsetHops;
 end
 
 function tf = local_has_session_header(frameCfg, pktIdx)
+if ~session_header_enabled(frameCfg)
+    tf = false;
+    return;
+end
 tf = (pktIdx == 1) || (is_long_sync_packet(frameCfg, pktIdx) && local_repeat_session_header_on_resync(frameCfg));
 end
 
@@ -69,7 +73,11 @@ if isfield(p, "packet") && isstruct(p.packet) && isfield(p.packet, "enable") && 
 end
 end
 
-function nBits = local_session_header_length_bits()
+function nBits = local_session_header_length_bits(frameCfg)
+if ~session_header_enabled(frameCfg)
+    nBits = 0;
+    return;
+end
 nBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16;
 end
 

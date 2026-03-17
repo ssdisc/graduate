@@ -12,6 +12,9 @@ if ~isfield(syncCfg, "enableFractionalTiming"); syncCfg.enableFractionalTiming =
 if ~isfield(syncCfg, "fractionalRange"); syncCfg.fractionalRange = 0.5; end
 if ~isfield(syncCfg, "fractionalStep"); syncCfg.fractionalStep = 0.05; end
 if ~isfield(syncCfg, "estimateCfo"); syncCfg.estimateCfo = false; end
+if ~isfield(syncCfg, "minCorrPeakToMedian"); syncCfg.minCorrPeakToMedian = 0; end
+if ~isfield(syncCfg, "minCorrPeakToSecond"); syncCfg.minCorrPeakToSecond = 0; end
+if ~isfield(syncCfg, "corrExclusionRadius"); syncCfg.corrExclusionRadius = []; end
 if ~isfield(syncCfg, "minSearchIndex"); syncCfg.minSearchIndex = 1; end
 if ~isfield(syncCfg, "maxSearchIndex"); syncCfg.maxSearchIndex = inf; end
 
@@ -22,6 +25,7 @@ idxAxis = (1:numel(r)).';
 dp = p(2:end) .* conj(p(1:end-1)); % 差分前导，用于CFO鲁棒捕获
 
 info = struct("coarseIdx", [], "fineIdx", [], "fineFrac", 0, "corrPeak", NaN, ...
+    "corrPeakToMedian", NaN, "corrPeakToSecond", NaN, "syncAccepted", false, ...
     "cfoRadPerSample", 0, ...
     "chanGainEstimate", complex(NaN, NaN), "phaseEstimateRad", NaN, ...
     "amplitudeEstimate", NaN, "compensated", false);
@@ -115,6 +119,15 @@ info.fineIdx = k;
 info.fineFrac = fracBest;
 info.corrPeak = peak;
 
+[peakToMedian, peakToSecond] = local_sync_confidence_metrics(cWin, k, searchMin, peak, local_corr_exclusion_radius(syncCfg));
+info.corrPeakToMedian = peakToMedian;
+info.corrPeakToSecond = peakToSecond;
+if local_sync_confidence_failed(syncCfg, peakToMedian, peakToSecond)
+    idx = [];
+    return;
+end
+info.syncAccepted = true;
+
 % 用前导估计载波偏移与复增益并进行补偿
 if logical(syncCfg.compensateCarrier)
     preTimes = idx + (0:numel(p)-1).';
@@ -158,5 +171,46 @@ phaseVec = unwrap(angle(z));
 coef = polyfit(nAbs(:), phaseVec, 1);
 wHat = coef(1);
 phiHat = coef(2);
+end
+
+function [peakToMedian, peakToSecond] = local_sync_confidence_metrics(cWin, kGlobal, searchMin, peak, exclusionRadius)
+if isempty(cWin)
+    peakToMedian = 0;
+    peakToSecond = 0;
+    return;
+end
+
+floorNow = median(cWin);
+peakToMedian = peak / max(floorNow, 1e-12);
+
+kLocal = round(double(kGlobal)) - round(double(searchMin)) + 1;
+kLocal = min(max(kLocal, 1), numel(cWin));
+mask = true(size(cWin));
+lo = max(1, kLocal - exclusionRadius);
+hi = min(numel(cWin), kLocal + exclusionRadius);
+mask(lo:hi) = false;
+if any(mask)
+    secondPeak = max(cWin(mask));
+else
+    secondPeak = floorNow;
+end
+peakToSecond = peak / max(secondPeak, 1e-12);
+end
+
+function tf = local_sync_confidence_failed(syncCfg, peakToMedian, peakToSecond)
+tf = false;
+if isfield(syncCfg, "minCorrPeakToMedian") && double(syncCfg.minCorrPeakToMedian) > 0
+    tf = tf || (peakToMedian < double(syncCfg.minCorrPeakToMedian));
+end
+if isfield(syncCfg, "minCorrPeakToSecond") && double(syncCfg.minCorrPeakToSecond) > 0
+    tf = tf || (peakToSecond < double(syncCfg.minCorrPeakToSecond));
+end
+end
+
+function radius = local_corr_exclusion_radius(syncCfg)
+radius = 4;
+if isfield(syncCfg, "corrExclusionRadius") && ~isempty(syncCfg.corrExclusionRadius)
+    radius = max(0, round(double(syncCfg.corrExclusionRadius)));
+end
 end
 

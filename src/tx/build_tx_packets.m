@@ -29,6 +29,11 @@ if ~packetEnable
     pktBitsPerPacket = max(pktBitsPerPacket, totalBits);
 end
 
+useCompactPhy = local_use_compact_phy_header(p.frame);
+if useCompactPhy && ~packetEnable
+    error("frame.phyHeaderMode=compact_fec requires packet.enable=true so the receiver can infer fixed packet length.");
+end
+
 nPackets = max(1, ceil(totalBits / pktBitsPerPacket));
 if nPackets > 65535
     error("分包数量过大(%d)，超出uint16可表示范围。", nPackets);
@@ -37,12 +42,15 @@ end
 sessionMeta = meta;
 sessionMeta.totalPayloadBytes = uint32(meta.payloadBytes);
 sessionMeta.totalPackets = uint16(nPackets);
-[sessionHeaderBits, sessionHeader] = build_session_header_bits(sessionMeta, p.frame);
+sessionHeader = struct();
+sessionHeaderBits = uint8([]);
+if session_header_enabled(p.frame)
+    [sessionHeaderBits, sessionHeader] = build_session_header_bits(sessionMeta, p.frame);
+end
 sessionHeaderLenBits = numel(sessionHeaderBits);
 
-phyHeaderLenBits = 16 + 8 + 16 + 16 + 16 + 16;
-phyRepeat = phy_header_repeat_local(p.frame);
-phyHeaderSymLen = phyHeaderLenBits * phyRepeat;
+phyHeaderLenBits = phy_header_length_bits(p.frame);
+phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
 [~, firstSyncSym] = make_packet_sync(p.frame, 1);
 [~, shortSyncSym] = make_packet_sync(p.frame, 2);
 
@@ -72,6 +80,10 @@ for pktIdx = 1:nPackets
         chaosPktCfg = derive_packet_chaos_cfg(p.chaosEncrypt, pktIdx);
         payloadPkt = chaos_encrypt_bits(payloadPktPlain, chaosPktCfg);
     end
+    payloadPktTx = payloadPkt;
+    if useCompactPhy
+        payloadPktTx = fit_bits_length(payloadPktTx, pktBitsPerPacket);
+    end
     payloadPktBytes = ceil(numel(payloadPkt) / 8);
     if payloadPktBytes > 65535
         error("单包payload过大(%d bytes)，超出uint16可表示范围。", payloadPktBytes);
@@ -80,9 +92,9 @@ for pktIdx = 1:nPackets
     offsetsPkt = derive_packet_state_offsets(p, pktIdx);
     hasSessionHeader = offsetsPkt.hasSessionHeader;
     if hasSessionHeader
-        packetDataBits = [sessionHeaderBits; payloadPkt];
+        packetDataBits = [sessionHeaderBits; payloadPktTx];
     else
-        packetDataBits = payloadPkt;
+        packetDataBits = payloadPktTx;
     end
     packetDataBitsLen = numel(packetDataBits);
     packetDataBytes = ceil(packetDataBitsLen / 8);
@@ -93,10 +105,12 @@ for pktIdx = 1:nPackets
     phyMeta = struct();
     phyMeta.hasSessionHeader = hasSessionHeader;
     phyMeta.packetIndex = uint16(pktIdx);
-    phyMeta.packetDataBytes = uint16(packetDataBytes);
+    if ~useCompactPhy
+        phyMeta.packetDataBytes = uint16(packetDataBytes);
+    end
     phyMeta.packetDataCrc16 = crc16_ccitt_bits(packetDataBits);
     [phyHeaderBits, phyHeader] = build_phy_header_bits(phyMeta, p.frame);
-    phyHeaderSym = modulate_repeated_bpsk_bits_local(phyHeaderBits, phyRepeat);
+    phyHeaderSym = encode_phy_header_symbols(phyHeaderBits, p.frame, p.fec);
 
     scrambleCfgPkt = derive_packet_scramble_cfg(p.scramble, pktIdx, offsetsPkt.scrambleOffsetBits);
     dataBitsTxScr = scramble_bits(packetDataBits, scrambleCfgPkt);
@@ -177,20 +191,6 @@ end
 nHops = ceil(double(nSym) / double(p.fh.symbolsPerHop));
 end
 
-function repeat = phy_header_repeat_local(frameCfg)
-repeat = 3;
-if isfield(frameCfg, "phyHeaderRepeat") && ~isempty(frameCfg.phyHeaderRepeat)
-    repeat = max(1, round(double(frameCfg.phyHeaderRepeat)));
-end
-end
-
-function sym = modulate_repeated_bpsk_bits_local(bits, repeat)
-bits = uint8(bits(:) ~= 0);
-repeat = max(1, round(double(repeat)));
-sym = 1 - 2 * double(repelem(bits, repeat));
-sym = sym(:);
-end
-
 function nBits = coded_bits_length_local(nInfoBits, fec)
 numInputBits = log2(fec.trellis.numInputSymbols);
 numOutputBits = log2(fec.trellis.numOutputSymbols);
@@ -215,5 +215,12 @@ if cond
     bits = bitsTrue;
 else
     bits = bitsFalse;
+end
+end
+
+function tf = local_use_compact_phy_header(frameCfg)
+tf = true;
+if isfield(frameCfg, "phyHeaderMode") && strlength(string(frameCfg.phyHeaderMode)) > 0
+    tf = lower(string(frameCfg.phyHeaderMode)) == "compact_fec";
 end
 end

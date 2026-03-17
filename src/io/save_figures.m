@@ -29,7 +29,7 @@ local_plot_series_matrix(ax1, EbN0dB, results.ber, "logy");
 local_apply_line_labels(ax1, "E_b/N_0 (dB)", "BER (payload)");
 local_format_ber_axis(ax1, EbN0dB, results.ber);
 local_style_legend(ax1, methods, "southwest");
-exportgraphics(fig1, fullfile(outDir, "ber.png"));
+local_export_figure(fig1, fullfile(outDir, "ber.png"), "");
 close(fig1);
 
 fig2 = local_create_line_figure("PSNR (Communication)");
@@ -37,8 +37,7 @@ ax2 = axes(fig2);
 local_plot_series_matrix(ax2, EbN0dB, commMetrics.psnr, "linear");
 local_apply_line_labels(ax2, "E_b/N_0 (dB)", "PSNR (dB, communication only)");
 local_style_legend(ax2, methods, "southeast");
-exportgraphics(fig2, fullfile(outDir, "psnr.png"));
-exportgraphics(fig2, fullfile(outDir, "psnr_comm.png"));
+local_export_figure(fig2, fullfile(outDir, "psnr.png"), fullfile(outDir, "psnr_comm.png"));
 close(fig2);
 
 fig2m = local_create_line_figure("MSE (Communication)");
@@ -46,8 +45,7 @@ ax2m = axes(fig2m);
 local_plot_series_matrix(ax2m, EbN0dB, commMetrics.mse, "logy");
 local_apply_line_labels(ax2m, "E_b/N_0 (dB)", "MSE (communication only)");
 local_style_legend(ax2m, methods, "northeast");
-exportgraphics(fig2m, fullfile(outDir, "mse.png"));
-exportgraphics(fig2m, fullfile(outDir, "mse_comm.png"));
+local_export_figure(fig2m, fullfile(outDir, "mse.png"), fullfile(outDir, "mse_comm.png"));
 close(fig2m);
 
 if packetConcealActive
@@ -56,7 +54,7 @@ if packetConcealActive
     local_plot_series_matrix(ax2c, EbN0dB, compMetrics.psnr, "linear");
     local_apply_line_labels(ax2c, "E_b/N_0 (dB)", "PSNR (dB, after concealment)");
     local_style_legend(ax2c, methods, "southeast");
-    exportgraphics(fig2c, fullfile(outDir, "psnr_compensated.png"));
+    local_export_figure(fig2c, fullfile(outDir, "psnr_compensated.png"), "");
     close(fig2c);
 
     fig2cm = local_create_line_figure("MSE (Compensated)");
@@ -64,7 +62,7 @@ if packetConcealActive
     local_plot_series_matrix(ax2cm, EbN0dB, compMetrics.mse, "logy");
     local_apply_line_labels(ax2cm, "E_b/N_0 (dB)", "MSE (after concealment)");
     local_style_legend(ax2cm, methods, "northeast");
-    exportgraphics(fig2cm, fullfile(outDir, "mse_compensated.png"));
+    local_export_figure(fig2cm, fullfile(outDir, "mse_compensated.png"), "");
     close(fig2cm);
 end
 
@@ -75,7 +73,7 @@ if isfield(results, "kl")
     local_plot_series_matrix(ax2k, results.kl.ebN0dB, klValues, "linear");
     local_apply_line_labels(ax2k, "E_b/N_0 (dB)", "KL divergence");
     local_style_legend(ax2k, ["KL(P_{sig}||P_{noise})", "Symmetric KL"], "best");
-    exportgraphics(fig2k, fullfile(outDir, "kl.png"));
+    local_export_figure(fig2k, fullfile(outDir, "kl.png"), "");
     close(fig2k);
 end
 
@@ -87,8 +85,7 @@ if isfield(results, "eve")
     local_plot_series_matrix(ax2b, results.eve.ebN0dB, commMetricsEve.psnr, "linear");
     local_apply_line_labels(ax2b, "E_b/N_0 at Eve (dB)", "PSNR (dB, communication only)");
     local_style_legend(ax2b, methods, "southeast");
-    exportgraphics(fig2b, fullfile(outDir, "psnr_eve.png"));
-    exportgraphics(fig2b, fullfile(outDir, "psnr_eve_comm.png"));
+    local_export_figure(fig2b, fullfile(outDir, "psnr_eve.png"), fullfile(outDir, "psnr_eve_comm.png"));
     close(fig2b);
 
     if isfield(commMetricsEve, "mse")
@@ -97,8 +94,7 @@ if isfield(results, "eve")
         local_plot_series_matrix(ax2bm, results.eve.ebN0dB, commMetricsEve.mse, "logy");
         local_apply_line_labels(ax2bm, "E_b/N_0 at Eve (dB)", "MSE (communication only)");
         local_style_legend(ax2bm, methods, "northeast");
-        exportgraphics(fig2bm, fullfile(outDir, "mse_eve.png"));
-        exportgraphics(fig2bm, fullfile(outDir, "mse_eve_comm.png"));
+        local_export_figure(fig2bm, fullfile(outDir, "mse_eve.png"), fullfile(outDir, "mse_eve_comm.png"));
         close(fig2bm);
     end
 
@@ -108,7 +104,7 @@ if isfield(results, "eve")
         local_plot_series_matrix(ax2bc, results.eve.ebN0dB, compMetricsEve.psnr, "linear");
         local_apply_line_labels(ax2bc, "E_b/N_0 at Eve (dB)", "PSNR (dB, after concealment)");
         local_style_legend(ax2bc, methods, "southeast");
-        exportgraphics(fig2bc, fullfile(outDir, "psnr_eve_compensated.png"));
+        local_export_figure(fig2bc, fullfile(outDir, "psnr_eve_compensated.png"), "");
         close(fig2bc);
 
         fig2bcm = local_create_line_figure("MSE (Eve, Compensated)");
@@ -116,7 +112,7 @@ if isfield(results, "eve")
         local_plot_series_matrix(ax2bcm, results.eve.ebN0dB, compMetricsEve.mse, "logy");
         local_apply_line_labels(ax2bcm, "E_b/N_0 at Eve (dB)", "MSE (after concealment)");
         local_style_legend(ax2bcm, methods, "northeast");
-        exportgraphics(fig2bcm, fullfile(outDir, "mse_eve_compensated.png"));
+        local_export_figure(fig2bcm, fullfile(outDir, "mse_eve_compensated.png"), "");
         close(fig2bcm);
     end
 
@@ -126,7 +122,7 @@ if isfield(results, "eve")
     local_apply_line_labels(ax1b, "E_b/N_0 at Eve (dB)", "BER (payload)");
     local_format_ber_axis(ax1b, results.eve.ebN0dB, results.eve.ber);
     local_style_legend(ax1b, methods, "southwest");
-    exportgraphics(fig1b, fullfile(outDir, "ber_eve.png"));
+    local_export_figure(fig1b, fullfile(outDir, "ber_eve.png"), "");
     close(fig1b);
 end
 
@@ -137,7 +133,7 @@ local_apply_line_labels(ax3, ...
     "Frequency (kHz)", ...
     "PSD (dB/Hz)", ...
     sprintf("99%% OBW=%.1f Hz,  \\eta=%.3f b/s/Hz", results.spectrum.bw99Hz, results.spectrum.etaBpsHz));
-exportgraphics(fig3, fullfile(outDir, "psd.png"));
+local_export_figure(fig3, fullfile(outDir, "psd.png"), "");
 close(fig3);
 
 % ========== 分开保存每种方法的结果图片 ==========
@@ -151,7 +147,7 @@ end
 figTx = figure("Name", "TX Image", "Visible", "off");
 imshow(imgTx);
 title("TX (原图)", "FontSize", 14);
-exportgraphics(figTx, fullfile(imagesDir, "00_tx_original.png"), 'Resolution', 200);
+local_export_figure(figTx, fullfile(imagesDir, "00_tx_original.png"), "", 'Resolution', 200);
 close(figTx);
 
 exampleVariants = local_example_variants(packetConcealActive);
@@ -179,7 +175,7 @@ for k = 1:numel(methods)
                 "FontSize", 12);
 
             filename = sprintf("%02d_rx_%s_%s.png", k, variant.fileTag, lower(strrep(methods(k), " ", "_")));
-            exportgraphics(figRx, fullfile(imagesDir, filename), 'Resolution', 200);
+            local_export_figure(figRx, fullfile(imagesDir, filename), "", 'Resolution', 200);
             close(figRx);
         end
     end
@@ -220,7 +216,7 @@ for k = 1:numel(methods)
         end
 
         filename = sprintf("compare_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
-        exportgraphics(figCmp, fullfile(imagesDir, filename), 'Resolution', 200);
+        local_export_figure(figCmp, fullfile(imagesDir, filename), "", 'Resolution', 200);
         close(figCmp);
     end
 end
@@ -259,9 +255,9 @@ for iv = 1:numel(exampleVariants)
             title(sprintf("RX (%s) - %s", variant.shortLabel, methods(k)));
         end
     end
-    exportgraphics(fig4, fullfile(outDir, sprintf("images_%s.png", variant.summaryTag)), 'Resolution', 150);
+    local_export_figure(fig4, fullfile(outDir, sprintf("images_%s.png", variant.summaryTag)), "", 'Resolution', 150);
     if variant.key == "communication"
-        exportgraphics(fig4, fullfile(outDir, "images.png"), 'Resolution', 150);
+        local_copy_export_alias(fullfile(outDir, sprintf("images_%s.png", variant.summaryTag)), fullfile(outDir, "images.png"));
     end
     close(fig4);
 end
@@ -337,7 +333,7 @@ if isfield(results, "eve") && isfield(results.eve, "example")
             end
 
             filename = sprintf("bob_vs_eve_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
-            exportgraphics(figEve, fullfile(eveDir, filename), 'Resolution', 200);
+            local_export_figure(figEve, fullfile(eveDir, filename), "", 'Resolution', 200);
             close(figEve);
         end
     end
@@ -410,9 +406,9 @@ if isfield(results, "eve") && isfield(results.eve, "example")
                 title(sprintf("Eve (%s) - %s", variant.shortLabel, methods(k)));
             end
         end
-        exportgraphics(fig5, fullfile(outDir, sprintf("intercept_%s.png", variant.summaryTag)), 'Resolution', 150);
+        local_export_figure(fig5, fullfile(outDir, sprintf("intercept_%s.png", variant.summaryTag)), "", 'Resolution', 150);
         if variant.key == "communication"
-            exportgraphics(fig5, fullfile(outDir, "intercept.png"), 'Resolution', 150);
+            local_copy_export_alias(fullfile(outDir, sprintf("intercept_%s.png", variant.summaryTag)), fullfile(outDir, "intercept.png"));
         end
         close(fig5);
     end
@@ -465,14 +461,32 @@ if isfield(results, "covert") && isfield(results.covert, "warden")
         "Covert metric", ...
         sprintf("Primary layer: %s", local_get_primary_warden_layer(w)));
     local_style_legend(ax6b, covertLabels, "best");
-    exportgraphics(fig6, fullfile(outDir, "warden.png"));
+    local_export_figure(fig6, fullfile(outDir, "warden.png"), "");
     close(fig6);
 end
 end
 
 function fig = local_create_line_figure(name)
-fig = figure("Name", name, "Color", "w");
+fig = figure("Name", name, "Color", "w", "Visible", "off");
 fig.Position = [100 100 1000 632];
+end
+
+function local_export_figure(fig, primaryPath, aliasPath, varargin)
+fprintf('[SIM][FIG] 导出 %s\n', char(string(primaryPath)));
+exportgraphics(fig, primaryPath, varargin{:});
+if nargin >= 3 && strlength(string(aliasPath)) > 0
+    local_copy_export_alias(primaryPath, aliasPath);
+end
+end
+
+function local_copy_export_alias(primaryPath, aliasPath)
+fprintf('[SIM][FIG] 复制 %s\n', char(string(aliasPath)));
+[ok, msg] = copyfile(primaryPath, aliasPath, 'f');
+if ~ok
+    error("save_figures:AliasCopyFailed", ...
+        "Failed to copy exported figure from %s to %s: %s", ...
+        char(string(primaryPath)), char(string(aliasPath)), msg);
+end
 end
 
 function local_plot_series_matrix(ax, x, values, scaleMode, useDiscreteXAxis, showMarkers)

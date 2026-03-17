@@ -76,11 +76,18 @@ p.frame.packetSyncPnInit = [0 0 0 0 1];
 p.frame.packetSyncChaosMethod = "logistic";
 p.frame.packetSyncChaosParams = struct("mu", 3.9999, "x0", 0.1414213562373095);
 p.frame.resyncIntervalPackets = 1; % 当前主线每包都用长PN前导；短同步字在现接收链路下仅保留为实验选项
+p.frame.sessionHeaderMode = "preshared";   % "preshared" | "inline"
 p.frame.repeatSessionHeaderOnResync = false; % 即便所有包都用长前导，默认仍只在首包发送会话头以降低开销
 p.frame.magic16 = hex2dec('A55A');
-p.frame.phyMagic16 = hex2dec('3AC5');      % PHY小头魔术字
-p.frame.sessionMagic16 = hex2dec('C7E1');  % 会话头魔术字
-p.frame.phyHeaderRepeat = 3;               % PHY小头每比特重复次数（BPSK）
+p.frame.phyHeaderMode = "compact_fec";   % "compact_fec" | "legacy_repeat"
+p.frame.phyMagic16 = hex2dec('3AC5');      % legacy模式使用16bit魔术字；compact_fec默认复用其低8位
+p.frame.sessionMagic16 = hex2dec('C7E1');  % inline模式下的会话头魔术字
+p.frame.phyHeaderRepeat = 3;               % legacy_repeat模式下的PHY小头每比特重复次数（BPSK）
+p.frame.phyHeaderRepeatCompact =2;        % compact_fec模式下的PHY小头编码后重复次数
+p.frame.phyHeaderSoftBits = 5;             % compact_fec模式下的PHY小头软判决量化位数
+p.frame.phyHeaderPilotLength = 0;          % 默认关闭；当前这版pilot补偿会拉低PHY头成功率
+p.frame.phyHeaderPilotPolynomial = [1 0 0 1 1]; % x^4 + x + 1
+p.frame.phyHeaderPilotInit = [0 0 0 1];
 
 
 % 5) 扰码（用作白化/轻量加密）
@@ -238,6 +245,9 @@ p.rxSync.enableFractionalTiming = true; % 分数符号定时估计
 p.rxSync.fractionalRange = 0.5;         % 分数搜索范围（sample）
 p.rxSync.fractionalStep = 0.05;         % 分数搜索步长（sample）
 p.rxSync.estimateCfo = true;            % 用前导估计残余CFO并前馈补偿
+p.rxSync.minCorrPeakToMedian = 0;       % 默认关闭；当前链路需先标定分布后再启用
+p.rxSync.minCorrPeakToSecond = 0;       % 默认关闭；当前链路需先标定分布后再启用
+p.rxSync.corrExclusionRadius = 4;       % 计算次峰时忽略主峰附近的相关窗口半径
 p.rxSync.maxShortSyncMisses = 2;        % 连续短同步失配阈值，超限后切回长前导搜索
 % 多径信道估计与均衡（仅在channel.multipath.enable=true时生效）
 p.rxSync.multipathEq = struct();

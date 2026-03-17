@@ -30,6 +30,18 @@ s.packetConcealActive = false;
 if isfield(results, "packetConceal") && isfield(results.packetConceal, "active")
     s.packetConcealActive = logical(results.packetConceal.active);
 end
+if isfield(results, "packetDiagnostics") && isfield(results.packetDiagnostics, "bob")
+    bobDiag = results.packetDiagnostics.bob;
+    if isfield(bobDiag, "frontEndSuccessRate")
+        s.frontEndSuccessRateAtMaxEbN0 = bobDiag.frontEndSuccessRate(end);
+    end
+    if isfield(bobDiag, "headerSuccessRate")
+        s.headerSuccessRateAtMaxEbN0 = bobDiag.headerSuccessRate(end);
+    end
+    if isfield(bobDiag, "payloadSuccessRate")
+        s.payloadSuccessRateAtMaxEbN0 = bobDiag.payloadSuccessRate(:, end);
+    end
+end
 s.klSymAtMaxEbN0 = results.kl.symmetric(end);
 
 if isfield(results, "eve")
@@ -45,6 +57,18 @@ if isfield(results, "eve")
     s.eveCompMseAtMaxEbN0 = compMetricsEve.mse(:, end);
     s.eveCompPsnrAtMaxEbN0 = compMetricsEve.psnr(:, end);
     s.eveCompSsimAtMaxEbN0 = compMetricsEve.ssim(:, end);
+    if isfield(results.eve, "packetDiagnostics")
+        eveDiag = results.eve.packetDiagnostics;
+        if isfield(eveDiag, "frontEndSuccessRate")
+            s.eveFrontEndSuccessRateAtMaxEbN0 = eveDiag.frontEndSuccessRate(end);
+        end
+        if isfield(eveDiag, "headerSuccessRate")
+            s.eveHeaderSuccessRateAtMaxEbN0 = eveDiag.headerSuccessRate(end);
+        end
+        if isfield(eveDiag, "payloadSuccessRate")
+            s.evePayloadSuccessRateAtMaxEbN0 = eveDiag.payloadSuccessRate(:, end);
+        end
+    end
 end
 
 if isfield(results, "covert") && isfield(results.covert, "warden")
