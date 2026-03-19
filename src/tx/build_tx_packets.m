@@ -31,7 +31,7 @@ end
 
 useCompactPhy = local_use_compact_phy_header(p.frame);
 if useCompactPhy && ~packetEnable
-    error("frame.phyHeaderMode=compact_fec requires packet.enable=true so the receiver can infer fixed packet length.");
+    error("packet.enable=false requires frame.phyHeaderMode='legacy_repeat'; compact_fec omits packetDataBytes so the receiver cannot infer the protected payload length.");
 end
 
 nPackets = max(1, ceil(totalBits / pktBitsPerPacket));

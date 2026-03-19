@@ -57,7 +57,7 @@ p.payload.dct.quantStep = 16;
 % 3.5) 分包传输（最小版本）
 p.packet = struct();
 p.packet.enable = true;                % 启用图像分包
-p.packet.payloadBitsPerPacket = 2048; % 每包载荷比特数（需为8的整数倍）
+p.packet.payloadBitsPerPacket = 1024; % 每包载荷比特数（需为8的整数倍）
 p.packet.concealLostPackets = true;    % 丢包后图像/块域补偿（仅影响重建图像）
 p.packet.concealMode = "blend";      % "nearest" | "blend"
 
@@ -88,6 +88,11 @@ p.frame.phyHeaderSoftBits = 5;             % compact_fec模式下的PHY小头软
 p.frame.phyHeaderPilotLength = 0;          % 默认关闭；当前这版pilot补偿会拉低PHY头成功率
 p.frame.phyHeaderPilotPolynomial = [1 0 0 1 1]; % x^4 + x + 1
 p.frame.phyHeaderPilotInit = [0 0 0 1];
+
+if ~p.packet.enable
+    % compact_fec不携带packetDataBytes，关闭分包时无法从PHY头恢复整图受保护长度。
+    p.frame.phyHeaderMode = "legacy_repeat";
+end
 
 
 % 5) 扰码（用作白化/轻量加密）

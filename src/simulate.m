@@ -416,20 +416,24 @@ for ie = 1:numel(EbN0dBList)
         if eveEnabled
             eveSyncCtrl = init_packet_sync_ctrl_local();
         end
+        frameDelaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
+        frameDelay = round(double(frameDelaySym) * waveform.sps);
+        channelSampleBob = local_freeze_channel_realization_local(channelSample);
+        if eveEnabled
+            channelSampleEve = local_freeze_channel_realization_local(channelSample);
+        end
 
         for pktIdx = 1:nPackets
             pkt = txPackets(pktIdx);
 
-            % 加入随机传播时延
-            delaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
-            delay = round(double(delaySym) * waveform.sps);
-            tx = [zeros(delay, 1); pkt.txSymForChannel];
+            % 同一帧内固定传播时延，避免每个分包都经历一次新的起始时刻跳变。
+            tx = [zeros(frameDelay, 1); pkt.txSymForChannel];
 
-            rx = channel_bg_impulsive(tx, N0, channelSample);
+            rx = channel_bg_impulsive(tx, N0, channelSampleBob);
             rx = pulse_rx_to_symbol_rate(rx, waveform);
 
             if eveEnabled
-                rxEve = channel_bg_impulsive(tx, N0Eve, channelSample);
+                rxEve = channel_bg_impulsive(tx, N0Eve, channelSampleEve);
                 rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
             end
 
@@ -1593,6 +1597,35 @@ function ctrl = init_packet_sync_ctrl_local()
 ctrl = struct();
 ctrl.forceLongSearch = true;
 ctrl.shortSyncMisses = 0;
+end
+
+function chOut = local_freeze_channel_realization_local(chIn)
+% Freeze one packet-independent channel realization per simulated frame.
+%
+% default_params documents Rayleigh taps as "每帧随机". The main packet loop
+% calls channel_bg_impulsive once per packet, so we explicitly materialize the
+% random multipath coefficients here to avoid re-randomizing them on every
+% packet within the same frame.
+chOut = chIn;
+
+if ~isfield(chOut, "multipath") || ~isstruct(chOut.multipath) ...
+        || ~isfield(chOut.multipath, "enable") || ~chOut.multipath.enable
+    return;
+end
+if ~isfield(chOut.multipath, "pathGainsDb") || isempty(chOut.multipath.pathGainsDb)
+    error("multipath启用时需提供pathGainsDb。");
+end
+
+gDb = double(chOut.multipath.pathGainsDb(:));
+amp = 10.^(gDb / 20);
+if isfield(chOut.multipath, "rayleigh") && chOut.multipath.rayleigh
+    cplxAmp = amp .* (randn(size(amp)) + 1j * randn(size(amp))) / sqrt(2);
+    chOut.multipath.pathGainsDb = 20 * log10(max(abs(cplxAmp), 1e-12));
+    chOut.multipath.pathPhasesRad = angle(cplxAmp);
+    chOut.multipath.rayleigh = false;
+elseif ~isfield(chOut.multipath, "pathPhasesRad") || isempty(chOut.multipath.pathPhasesRad)
+    chOut.multipath.pathPhasesRad = 2 * pi * rand(size(amp));
+end
 end
 
 function [startIdx, rxSync, syncSymUse, ctrl, ok] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, ctrl)
