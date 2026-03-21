@@ -166,7 +166,7 @@ p.channel.singleTone.freqHz = 800;      % 单音频率（Hz）
 p.channel.singleTone.randomPhase = true;
 % 可选：窄带噪声干扰
 p.channel.narrowband = struct();
-p.channel.narrowband.enable = true;
+p.channel.narrowband.enable = false;
 p.channel.narrowband.powerMode = "absolute"; % "absolute" | "relative_to_bg"(兼容旧口径)
 p.channel.narrowband.power = 0.01;       % 窄带噪声固定接收功率（线性值）
 p.channel.narrowband.centerHz = 1200;   % 窄带噪声中心频率（Hz）
