@@ -90,6 +90,10 @@ if isfield(reference, "features")
     ok = ok && isfield(candidate, "features") ...
         && isequal(string(candidate.features(:)).', string(reference.features(:)).');
 end
+if isfield(reference, "trainingLogicVersion")
+    ok = ok && isfield(candidate, "trainingLogicVersion") ...
+        && isequal(candidate.trainingLogicVersion, reference.trainingLogicVersion);
+end
 end
 
 function ok = local_model_is_trained(candidate, reference)

@@ -14,6 +14,7 @@ function model = ml_impulse_lr_model()
 model = struct();
 model.name = "impulse_lr_v1";
 model.features = ["abs_r" "absdiff_abs" "abs_over_median"];
+model.trainingLogicVersion = 3;
 
 % 训练数据的归一化（z-score）参数
 model.mu = [1.2426; 0.63232774; 1.0477313];

@@ -1,4 +1,4 @@
-function [txSym, rxSym, impSymMask] = ml_simulate_training_chain(txSym, p, N0)
+function [txSym, rxSym, impSymMask, impScoreSym] = ml_simulate_training_chain(txSym, p, N0)
 %ML_SIMULATE_TRAINING_CHAIN  生成与主仿真一致的训练符号链路样本。
 %
 % 输入:
@@ -9,7 +9,8 @@ function [txSym, rxSym, impSymMask] = ml_simulate_training_chain(txSym, p, N0)
 % 输出:
 %   txSym      - 对齐后的理想符号目标
 %   rxSym      - 经过 waveform/channel/rx 处理后的接收符号
-%   impSymMask - 对齐到符号率的脉冲影响掩码
+%   impSymMask - 对齐到符号率的脉冲影响掩码（宽松定义）
+%   impScoreSym- 对齐到符号率的脉冲影响连续得分
 
 txSym = txSym(:);
 nSym = numel(txSym);
@@ -29,7 +30,7 @@ txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
 rxSym = pulse_rx_to_symbol_rate(rxSample, waveform);
 rxSym = local_fit_length(rxSym, nSym);
 
-impScoreSym = pulse_rx_to_symbol_rate(double(impMaskSample(:)), waveform);
+impScoreSym = abs(pulse_rx_to_symbol_rate(double(impMaskSample(:)), waveform));
 impScoreSym = local_fit_length(impScoreSym, nSym);
 impSymMask = abs(impScoreSym) > 1e-9;
 

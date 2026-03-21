@@ -19,6 +19,32 @@ arguments
     opts.earlyStoppingPatience (1,1) double {mustBeInteger, mustBePositive} = 5
     opts.earlyStoppingMinDelta (1,1) double {mustBeNonnegative} = 1e-5
     opts.minEpochs (1,1) double {mustBeInteger, mustBePositive} = 5
+    opts.labelScoreThreshold (1,1) double {mustBePositive} = 0.1
+    opts.minPositiveRate (1,1) double {mustBeNonnegative} = 0.002
+    opts.maxPositiveRate (1,1) double {mustBePositive} = 0.35
+    opts.thresholdPolicy (1,1) string = "min_pe_under_pfa"
+    opts.thresholdPfaSlack (1,1) double {mustBeNonnegative} = 0
+    opts.impulseEnableProbability (1,1) double = 1.0
+    opts.impulseProbRange (1,2) double = [NaN NaN]
+    opts.impulseToBgRatioRange (1,2) double = [NaN NaN]
+    opts.singleToneProbability (1,1) double = 0.0
+    opts.singleTonePowerRange (1,2) double = [NaN NaN]
+    opts.singleToneFreqHzRange (1,2) double = [NaN NaN]
+    opts.narrowbandProbability (1,1) double = 0.0
+    opts.narrowbandPowerRange (1,2) double = [NaN NaN]
+    opts.narrowbandCenterHzRange (1,2) double = [NaN NaN]
+    opts.narrowbandBandwidthHzRange (1,2) double = [NaN NaN]
+    opts.sweepProbability (1,1) double = 0.0
+    opts.sweepPowerRange (1,2) double = [NaN NaN]
+    opts.sweepStartHzRange (1,2) double = [NaN NaN]
+    opts.sweepStopHzRange (1,2) double = [NaN NaN]
+    opts.sweepPeriodSymbolsRange (1,2) double = [NaN NaN]
+    opts.syncImpairmentProbability (1,1) double = 0.0
+    opts.timingOffsetSymbolsRange (1,2) double = [NaN NaN]
+    opts.phaseOffsetRadRange (1,2) double = [NaN NaN]
+    opts.multipathProbability (1,1) double = 0.0
+    opts.multipathRayleighProbability (1,1) double = 0.5
+    opts.maxAdditionalImpairments (1,1) double {mustBeInteger, mustBeNonnegative} = 2
     opts.saveArtifacts (1,1) logical = false
     opts.saveDir (1,1) string = "models"
     opts.saveTag (1,1) string = ""
@@ -43,7 +69,32 @@ if opts.verbose
     fprintf("正在为LR生成训练/验证/测试数据...\n");
 end
 
-dataset = ml_generate_impulse_blocks(p, opts.nBlocks, opts.blockLen, opts.ebN0dBRange);
+dataset = ml_generate_impulse_blocks(p, opts.nBlocks, opts.blockLen, opts.ebN0dBRange, ...
+    "labelScoreThreshold", opts.labelScoreThreshold, ...
+    "impulseEnableProbability", opts.impulseEnableProbability, ...
+    "impulseProbRange", opts.impulseProbRange, ...
+    "impulseToBgRatioRange", opts.impulseToBgRatioRange, ...
+    "singleToneProbability", opts.singleToneProbability, ...
+    "singleTonePowerRange", opts.singleTonePowerRange, ...
+    "singleToneFreqHzRange", opts.singleToneFreqHzRange, ...
+    "narrowbandProbability", opts.narrowbandProbability, ...
+    "narrowbandPowerRange", opts.narrowbandPowerRange, ...
+    "narrowbandCenterHzRange", opts.narrowbandCenterHzRange, ...
+    "narrowbandBandwidthHzRange", opts.narrowbandBandwidthHzRange, ...
+    "sweepProbability", opts.sweepProbability, ...
+    "sweepPowerRange", opts.sweepPowerRange, ...
+    "sweepStartHzRange", opts.sweepStartHzRange, ...
+    "sweepStopHzRange", opts.sweepStopHzRange, ...
+    "sweepPeriodSymbolsRange", opts.sweepPeriodSymbolsRange, ...
+    "syncImpairmentProbability", opts.syncImpairmentProbability, ...
+    "timingOffsetSymbolsRange", opts.timingOffsetSymbolsRange, ...
+    "phaseOffsetRadRange", opts.phaseOffsetRadRange, ...
+    "multipathProbability", opts.multipathProbability, ...
+    "multipathRayleighProbability", opts.multipathRayleighProbability, ...
+    "maxAdditionalImpairments", opts.maxAdditionalImpairments);
+datasetSummary = ml_validate_dataset_labels(dataset, ...
+    "minPositiveRate", opts.minPositiveRate, ...
+    "maxPositiveRate", opts.maxPositiveRate);
 split = ml_split_dataset_indices(dataset.nBlocks, opts.valFraction, opts.testFraction, opts.splitSeed);
 if split.nVal < 1 || split.nTest < 1
     error("当前LR训练流程要求独立的验证集和测试集，请增大 nBlocks 或调整 val/test 占比。");
@@ -81,6 +132,11 @@ weights(trainPos) = wPos;
 weights(trainNeg) = wNeg;
 
 if opts.verbose
+    fprintf("训练标签总体正样本率：%.2f%%（块均值 %.2f%%，范围 %.2f%%~%.2f%%）\n", ...
+        100 * datasetSummary.overallPosRate, ...
+        100 * datasetSummary.blockPosRateMean, ...
+        100 * datasetSummary.blockPosRateMin, ...
+        100 * datasetSummary.blockPosRateMax);
     fprintf("数据划分：train=%d, val=%d, test=%d\n", split.nTrain, split.nVal, split.nTest);
     fprintf("训练集脉冲率：%.2f%%，验证集：%.2f%%，测试集：%.2f%%\n", ...
         100 * trainPosRate, 100 * valPosRate, 100 * testPosRate);
@@ -158,7 +214,8 @@ trainLosses = trainLosses(1:epochsCompleted);
 valLosses = valLosses(1:epochsCompleted);
 
 pVal = local_lr_predict(XnVal, w, b);
-threshold = ml_select_threshold_for_pfa(pVal, yVal, opts.pfaTarget);
+[threshold, thresholdMetrics, thresholdSelection] = ml_select_threshold_for_pfa(pVal, yVal, opts.pfaTarget, ...
+    "policy", opts.thresholdPolicy, "pfaSlack", opts.thresholdPfaSlack);
 pTest = local_lr_predict(XnTest, w, b);
 
 valMetrics = ml_binary_metrics(pVal, yVal, threshold);
@@ -167,6 +224,7 @@ testMetrics = ml_binary_metrics(pTest, yTest, threshold);
 model = struct();
 model.name = "impulse_lr_custom";
 model.features = ["abs_r" "absdiff_abs" "abs_over_median"];
+model.trainingLogicVersion = 3;
 model.mu = mu(:);
 model.sigma = sigma(:);
 model.w = w(:);
@@ -180,6 +238,11 @@ report.nSamples = dataset.nBlocks * dataset.blockLen;
 report.ebN0dBRange = dataset.ebN0dBRange;
 report.ebN0dBPerBlock = dataset.ebN0dBPerBlock;
 report.rngSeed = rngSeed;
+report.trainingOptions = opts;
+report.trainingContext = ml_capture_training_context(p);
+report.datasetSummary = datasetSummary;
+report.channelSampling = dataset.channelSampling;
+report.channelProfileSummary = dataset.channelProfileSummary;
 report.pfaTarget = opts.pfaTarget;
 report.epochs = opts.epochs;
 report.epochsCompleted = epochsCompleted;
@@ -198,6 +261,7 @@ report.train = struct("posRate", trainPosRate, "wPos", wPos, "wNeg", wNeg);
 report.validation = local_pack_metrics_report(valMetrics, valPosRate);
 report.test = local_pack_metrics_report(testMetrics, testPosRate);
 report.threshold = threshold;
+report.thresholdMetrics = thresholdMetrics;
 report.pfaEst = testMetrics.pfa;
 report.pdEst = testMetrics.pd;
 report.peEst = testMetrics.pe;
@@ -207,10 +271,9 @@ report.earlyStopping = struct( ...
     "minDelta", opts.earlyStoppingMinDelta, ...
     "minEpochs", opts.minEpochs, ...
     "monitor", "validation_loss");
-report.selection = struct( ...
-    "bestCheckpointBy", "validation_loss", ...
-    "thresholdBy", "validation_set_pfa_target", ...
-    "testSetHeldOut", true);
+report.selection = thresholdSelection;
+report.selection.bestCheckpointBy = "validation_loss";
+report.selection.testSetHeldOut = true;
 report.artifacts = local_empty_artifacts_report();
 
 if opts.saveArtifacts

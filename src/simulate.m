@@ -399,6 +399,8 @@ for ie = 1:numel(EbN0dBList)
         bobNom.rxState = cell(nPackets, 1);
         bobNom.rData = cell(nPackets, 1);
         bobNom.rDataPrepared = cell(nPackets, 1);
+        bobNom.preambleRx = cell(nPackets, 1);
+        bobNom.preambleRef = cell(nPackets, 1);
 
         eveNom = struct();
         if eveEnabled
@@ -408,6 +410,8 @@ for ie = 1:numel(EbN0dBList)
             eveNom.rxState = cell(nPackets, 1);
             eveNom.rData = cell(nPackets, 1);
             eveNom.rDataPrepared = cell(nPackets, 1);
+            eveNom.preambleRx = cell(nPackets, 1);
+            eveNom.preambleRef = cell(nPackets, 1);
         end
 
         % ============ 分包发收（同步+PHY提取） ============
@@ -440,11 +444,15 @@ for ie = 1:numel(EbN0dBList)
             bobPhy = phyHeaderTemplate;
             rxStateBobNominal = [];
             rDataBobNominal = complex(zeros(0, 1));
+            rPreBobNominal = complex(zeros(0, 1));
             bobHeaderOk = false;
             [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
             if bobOk
                 preLen = numel(syncSymBob);
                 [rPreBob, preOk] = extract_fractional_block(rxBobSync, startIdx, preLen, syncCfgUse, struct('type', 'BPSK'));
+                if preOk
+                    rPreBobNominal = rPreBob;
+                end
                 phyStart = startIdx + preLen;
                 [rPhyBobRaw, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
 
@@ -459,6 +467,7 @@ for ie = 1:numel(EbN0dBList)
                     if eqBobOk
                         yPrePhy = [rPreBob; rPhyBobRaw];
                         yEq = local_apply_equalizer_block_local(yPrePhy, eqBob);
+                        rPreBobNominal = yEq(1:preLen);
                         rPhyBob = yEq(preLen+1:end);
                     end
                 end
@@ -491,6 +500,10 @@ for ie = 1:numel(EbN0dBList)
                 bobNom.phy(pktIdx) = bobPhy;
                 bobNom.rxState{pktIdx} = rxStateBobNominal;
                 bobNom.rData{pktIdx} = [];
+                if ~isempty(rPreBobNominal)
+                    bobNom.preambleRx{pktIdx} = fit_complex_length_local(rPreBobNominal, numel(syncSymBob));
+                    bobNom.preambleRef{pktIdx} = syncSymBob(:);
+                end
                 hopInfoBob = struct('enable', false);
                 if fhEnabled && isfield(rxStateBobNominal, "hopInfo")
                     hopInfoBob = rxStateBobNominal.hopInfo;
@@ -504,11 +517,15 @@ for ie = 1:numel(EbN0dBList)
                 evePhy = phyHeaderTemplate;
                 rxStateEveNominal = [];
                 rDataEveNominal = complex(zeros(0, 1));
+                rPreEveNominal = complex(zeros(0, 1));
                 eveHeaderOk = false;
                 [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local(rxEve, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, eveSyncCtrl);
                 if eveOk
                     preLenEve = numel(syncSymEve);
                     [rPreEve, preOkEve] = extract_fractional_block(rxEveSync, startIdxEve, preLenEve, syncCfgUse, struct('type', 'BPSK'));
+                    if preOkEve
+                        rPreEveNominal = rPreEve;
+                    end
                     phyStartEve = startIdxEve + preLenEve;
                     [rPhyEveRaw, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
 
@@ -522,6 +539,7 @@ for ie = 1:numel(EbN0dBList)
                         if eqEveOk
                             yPrePhy = [rPreEve; rPhyEveRaw];
                             yEq = local_apply_equalizer_block_local(yPrePhy, eqEve);
+                            rPreEveNominal = yEq(1:preLenEve);
                             rPhyEve = yEq(preLenEve+1:end);
                         end
                     end
@@ -554,6 +572,10 @@ for ie = 1:numel(EbN0dBList)
                     eveNom.phy(pktIdx) = evePhy;
                     eveNom.rxState{pktIdx} = rxStateEveNominal;
                     eveNom.rData{pktIdx} = [];
+                    if ~isempty(rPreEveNominal)
+                        eveNom.preambleRx{pktIdx} = fit_complex_length_local(rPreEveNominal, numel(syncSymEve));
+                        eveNom.preambleRef{pktIdx} = syncSymEve(:);
+                    end
                     hopInfoEvePrep = struct('enable', false);
                     if fhEnabled
                         hopInfoEvePrep = eve_hop_info_local(rxStateEveNominal, fhAssumptionEve);
@@ -960,6 +982,7 @@ payloadFrameBob = zeros(totalPayloadBitsTx, 1, "uint8");
 packetOkBob = false(1, nPackets);
 nErrBob = 0;
 nTotBob = 0;
+calStateBob = local_init_threshold_calibration_state_local(methodName, p.mitigation);
 
         for pktIdx = 1:nPackets
             txPayload = txPayloadBits{pktIdx};
@@ -983,7 +1006,10 @@ nTotBob = 0;
             end
         end
 
-        [rMit, reliability] = mitigate_impulses(rData, methodName, p.mitigation);
+        calStateBob = local_update_threshold_from_preamble_local( ...
+            calStateBob, bobNom.preambleRx{pktIdx}, bobNom.preambleRef{pktIdx});
+        mitBob = local_apply_threshold_calibration_local(p.mitigation, calStateBob);
+        [rMit, reliability] = mitigate_impulses(rData, methodName, mitBob);
         demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
         demodDeint = deinterleave_bits(demodSoft, rxState.intState, p.interleaver);
         dataBitsRxScr = fec_decode(demodDeint, p.fec);
@@ -1010,6 +1036,8 @@ nTotBob = 0;
 
             payloadFrameBob(packetInfo.range.startBit:packetInfo.range.endBit) = fit_bits_length(payloadPktRx, packetInfo.range.nBits);
             packetOkBob(packetInfo.packetIndex) = true;
+            calStateBob = local_update_threshold_from_packet_local( ...
+                calStateBob, rData, packetDataBitsRx, rxState.scrambleCfg, rxState, p);
         else
             nErrBob = nErrBob + numel(txPayload);
             nTotBob = nTotBob + numel(txPayload);
@@ -1061,6 +1089,7 @@ bobRes.mseComp = mseNowComp;
 bobRes.psnrComp = psnrNowComp;
 bobRes.ssimComp = ssimNowComp;
 bobRes.packetSuccessRate = mean(packetOkBob);
+bobRes.thresholdCalibration = local_pack_threshold_calibration_state_local(calStateBob);
 bobRes.example = [];
 if captureExample
     bobRes.example = struct();
@@ -1071,6 +1100,7 @@ if captureExample
     bobRes.example.imgRxCompensated = imgRxComp;
     bobRes.example.imgRx = imgRxComp;
     bobRes.example.packetSuccessRate = bobRes.packetSuccessRate;
+    bobRes.example.thresholdCalibration = bobRes.thresholdCalibration;
 end
 
 % -------- Eve --------
@@ -1084,6 +1114,7 @@ payloadFrameEve = zeros(totalPayloadBitsTx, 1, "uint8");
 packetOkEve = false(1, nPackets);
 nErrEve = 0;
 nTotEve = 0;
+calStateEve = local_init_threshold_calibration_state_local(methodName, p.mitigation);
 
     for pktIdx = 1:nPackets
         txPayload = txPayloadBits{pktIdx};
@@ -1109,7 +1140,10 @@ nTotEve = 0;
         end
         scrambleCfgEve = eve_scramble_cfg_local(rxState.scrambleCfg, scrambleAssumptionEve);
 
-        [rMitEve, reliabilityEve] = mitigate_impulses(rData, methodName, p.mitigation);
+        calStateEve = local_update_threshold_from_preamble_local( ...
+            calStateEve, eveNom.preambleRx{pktIdx}, eveNom.preambleRef{pktIdx});
+        mitEve = local_apply_threshold_calibration_local(p.mitigation, calStateEve);
+        [rMitEve, reliabilityEve] = mitigate_impulses(rData, methodName, mitEve);
         demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
         demodDeintEve = deinterleave_bits(demodSoftEve, rxState.intState, p.interleaver);
         dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
@@ -1136,6 +1170,8 @@ nTotEve = 0;
 
             payloadFrameEve(packetInfo.range.startBit:packetInfo.range.endBit) = fit_bits_length(payloadPktEve, packetInfo.range.nBits);
             packetOkEve(packetInfo.packetIndex) = true;
+            calStateEve = local_update_threshold_from_packet_local( ...
+                calStateEve, rData, packetDataBitsEve, scrambleCfgEve, rxState, p);
         else
             nErrEve = nErrEve + numel(txPayload);
             nTotEve = nTotEve + numel(txPayload);
@@ -1186,6 +1222,7 @@ eveRes.mseComp = mseNowCompEve;
 eveRes.psnrComp = psnrNowCompEve;
 eveRes.ssimComp = ssimNowCompEve;
 eveRes.packetSuccessRate = mean(packetOkEve);
+eveRes.thresholdCalibration = local_pack_threshold_calibration_state_local(calStateEve);
 eveRes.example = [];
 if captureExample
     eveRes.example = struct();
@@ -1196,6 +1233,316 @@ if captureExample
     eveRes.example.imgRxComm = imgEveComm;
     eveRes.example.imgRxCompensated = imgEveComp;
     eveRes.example.imgRx = imgEveComp;
+    eveRes.example.thresholdCalibration = eveRes.thresholdCalibration;
+end
+end
+
+function state = local_init_threshold_calibration_state_local(methodName, mitigation)
+state = struct( ...
+    "enabled", false, ...
+    "methodName", string(methodName), ...
+    "modelKind", "", ...
+    "model", struct(), ...
+    "threshold", NaN, ...
+    "baseThreshold", NaN, ...
+    "minThreshold", NaN, ...
+    "maxThreshold", NaN, ...
+    "targetCleanPfa", NaN, ...
+    "bufferMaxSamples", 0, ...
+    "minBufferSamples", 0, ...
+    "minPreambleTrustedSamples", 0, ...
+    "minPacketTrustedSamples", 0, ...
+    "preambleUpdateAlpha", 0, ...
+    "packetUpdateAlpha", 0, ...
+    "preambleResidualAlpha", 0, ...
+    "packetResidualAlpha", 0, ...
+    "scoreBuffer", zeros(0, 1), ...
+    "preambleUpdates", 0, ...
+    "packetUpdates", 0, ...
+    "lastCandidateThreshold", NaN, ...
+    "lastSource", "");
+
+if ~isfield(mitigation, "thresholdCalibration") || ~isstruct(mitigation.thresholdCalibration)
+    return;
+end
+cfg = mitigation.thresholdCalibration;
+if ~(isfield(cfg, "enable") && logical(cfg.enable))
+    return;
+end
+
+supportedMethods = ["ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard"];
+if isfield(cfg, "methods") && ~isempty(cfg.methods)
+    supportedMethods = lower(string(cfg.methods(:).'));
+end
+methodName = lower(string(methodName));
+if ~any(methodName == supportedMethods)
+    return;
+end
+
+[model, modelKind] = local_threshold_calibration_model_local(methodName, mitigation);
+baseThreshold = local_scalar_threshold_local(model.threshold);
+targetCleanPfa = local_get_required_numeric_local(cfg, "targetCleanPfa");
+if ~(targetCleanPfa > 0 && targetCleanPfa < 1)
+    error("mitigation.thresholdCalibration.targetCleanPfa 必须在 (0,1) 内。");
+end
+
+minThreshold = max(local_get_required_numeric_local(cfg, "minThresholdAbs"), ...
+    local_get_required_numeric_local(cfg, "thresholdMinScale") * baseThreshold);
+maxThreshold = min(local_get_required_numeric_local(cfg, "maxThresholdAbs"), ...
+    local_get_required_numeric_local(cfg, "thresholdMaxScale") * baseThreshold);
+if ~(minThreshold < maxThreshold)
+    error("在线阈值校准上下界无效：minThreshold=%.4f, maxThreshold=%.4f。", minThreshold, maxThreshold);
+end
+
+state.enabled = true;
+state.methodName = methodName;
+state.modelKind = modelKind;
+state.model = model;
+state.threshold = min(max(baseThreshold, minThreshold), maxThreshold);
+state.baseThreshold = baseThreshold;
+state.minThreshold = minThreshold;
+state.maxThreshold = maxThreshold;
+state.targetCleanPfa = targetCleanPfa;
+state.bufferMaxSamples = local_get_required_integer_local(cfg, "bufferMaxSamples");
+state.minBufferSamples = local_get_required_integer_local(cfg, "minBufferSamples");
+state.minPreambleTrustedSamples = local_get_required_integer_local(cfg, "minPreambleTrustedSamples");
+state.minPacketTrustedSamples = local_get_required_integer_local(cfg, "minPacketTrustedSamples");
+state.preambleUpdateAlpha = local_get_required_numeric_local(cfg, "preambleUpdateAlpha");
+state.packetUpdateAlpha = local_get_required_numeric_local(cfg, "packetUpdateAlpha");
+state.preambleResidualAlpha = local_get_required_numeric_local(cfg, "preambleResidualAlpha");
+state.packetResidualAlpha = local_get_required_numeric_local(cfg, "packetResidualAlpha");
+end
+
+function mitigationOut = local_apply_threshold_calibration_local(mitigationIn, state)
+mitigationOut = mitigationIn;
+if ~(isstruct(state) && isfield(state, "enabled") && state.enabled)
+    return;
+end
+
+switch state.modelKind
+    case "lr"
+        mitigationOut.ml.threshold = state.threshold;
+    case "cnn"
+        mitigationOut.mlCnn.threshold = state.threshold;
+    case "gru"
+        mitigationOut.mlGru.threshold = state.threshold;
+    otherwise
+        error("未知的阈值校准模型类型: %s", state.modelKind);
+end
+end
+
+function state = local_update_threshold_from_preamble_local(state, rxPre, refPre)
+if ~(isstruct(state) && isfield(state, "enabled") && state.enabled)
+    return;
+end
+scores = local_ml_score_vector_local(state, rxPre);
+trusted = local_reference_trust_mask_local(rxPre, refPre, state.preambleResidualAlpha, state.minPreambleTrustedSamples);
+state = local_absorb_clean_scores_local(state, scores(trusted), state.preambleUpdateAlpha, "preamble");
+end
+
+function state = local_update_threshold_from_packet_local(state, rxData, packetDataBits, scrambleCfg, rxState, p)
+if ~(isstruct(state) && isfield(state, "enabled") && state.enabled)
+    return;
+end
+refSym = local_reencode_packet_symbols_local(packetDataBits, scrambleCfg, rxState, p);
+scores = local_ml_score_vector_local(state, rxData);
+trusted = local_reference_trust_mask_local(rxData, refSym, state.packetResidualAlpha, state.minPacketTrustedSamples);
+state = local_absorb_clean_scores_local(state, scores(trusted), state.packetUpdateAlpha, "packet");
+end
+
+function summary = local_pack_threshold_calibration_state_local(state)
+summary = struct( ...
+    "enabled", false, ...
+    "methodName", string(state.methodName), ...
+    "modelKind", "", ...
+    "baseThreshold", NaN, ...
+    "finalThreshold", NaN, ...
+    "minThreshold", NaN, ...
+    "maxThreshold", NaN, ...
+    "bufferedSamples", 0, ...
+    "preambleUpdates", 0, ...
+    "packetUpdates", 0, ...
+    "lastCandidateThreshold", NaN, ...
+    "lastSource", "");
+if ~(isstruct(state) && isfield(state, "enabled") && state.enabled)
+    return;
+end
+summary.enabled = true;
+summary.methodName = string(state.methodName);
+summary.modelKind = string(state.modelKind);
+summary.baseThreshold = state.baseThreshold;
+summary.finalThreshold = state.threshold;
+summary.minThreshold = state.minThreshold;
+summary.maxThreshold = state.maxThreshold;
+summary.bufferedSamples = numel(state.scoreBuffer);
+summary.preambleUpdates = state.preambleUpdates;
+summary.packetUpdates = state.packetUpdates;
+summary.lastCandidateThreshold = state.lastCandidateThreshold;
+summary.lastSource = string(state.lastSource);
+end
+
+function [model, modelKind] = local_threshold_calibration_model_local(methodName, mitigation)
+methodName = lower(string(methodName));
+switch methodName
+    case "ml_blanking"
+        model = mitigation.ml;
+        modelKind = "lr";
+    case {"ml_cnn", "ml_cnn_hard"}
+        model = mitigation.mlCnn;
+        modelKind = "cnn";
+    case {"ml_gru", "ml_gru_hard"}
+        model = mitigation.mlGru;
+        modelKind = "gru";
+    otherwise
+        error("方法 %s 不支持在线阈值校准。", methodName);
+end
+end
+
+function scores = local_ml_score_vector_local(state, r)
+r = r(:);
+if isempty(r)
+    scores = zeros(0, 1);
+    return;
+end
+
+switch state.modelKind
+    case "lr"
+        model = state.model;
+        model.threshold = state.threshold;
+        [~, scores] = ml_impulse_detect(r, model);
+    case "cnn"
+        model = state.model;
+        model.threshold = state.threshold;
+        [~, ~, ~, scores] = ml_cnn_impulse_detect(r, model);
+    case "gru"
+        model = state.model;
+        model.threshold = state.threshold;
+        [~, ~, ~, scores] = ml_gru_impulse_detect(r, model);
+    otherwise
+        error("未知的阈值校准模型类型: %s", state.modelKind);
+end
+
+scores = double(gather(scores(:)));
+scores = max(min(scores, 1), 0);
+end
+
+function state = local_absorb_clean_scores_local(state, scoresTrusted, updateAlpha, sourceName)
+scoresTrusted = double(scoresTrusted(:));
+scoresTrusted = scoresTrusted(isfinite(scoresTrusted));
+scoresTrusted = max(min(scoresTrusted, 1), 0);
+if isempty(scoresTrusted)
+    return;
+end
+
+state.scoreBuffer = [state.scoreBuffer; scoresTrusted];
+if numel(state.scoreBuffer) > state.bufferMaxSamples
+    state.scoreBuffer = state.scoreBuffer(end - state.bufferMaxSamples + 1:end);
+end
+if numel(state.scoreBuffer) < state.minBufferSamples
+    return;
+end
+
+candidate = local_quantile_local(state.scoreBuffer, 1 - state.targetCleanPfa);
+candidate = min(max(candidate, state.minThreshold), state.maxThreshold);
+state.threshold = min(max((1 - updateAlpha) * state.threshold + updateAlpha * candidate, ...
+    state.minThreshold), state.maxThreshold);
+state.lastCandidateThreshold = candidate;
+state.lastSource = string(sourceName);
+switch lower(string(sourceName))
+    case "preamble"
+        state.preambleUpdates = state.preambleUpdates + 1;
+    case "packet"
+        state.packetUpdates = state.packetUpdates + 1;
+    otherwise
+        error("未知的阈值校准来源: %s", string(sourceName));
+end
+end
+
+function trusted = local_reference_trust_mask_local(rx, ref, residualAlpha, minTrustedSamples)
+rx = rx(:);
+ref = ref(:);
+n = min(numel(rx), numel(ref));
+trusted = false(n, 1);
+if n <= 0
+    return;
+end
+rx = rx(1:n);
+ref = ref(1:n);
+den = sum(abs(ref).^2);
+if den > eps
+    hHat = (ref' * rx) / den;
+else
+    hHat = 1;
+end
+refAligned = hHat * ref;
+residual = abs(rx - refAligned);
+medResidual = median(residual);
+residualMad = median(abs(residual - medResidual));
+thr = medResidual + residualAlpha * max(residualMad, 1e-8);
+trusted = residual <= thr;
+if nnz(trusted) < minTrustedSamples && n >= minTrustedSamples
+    [~, order] = sort(residual, "ascend");
+    trusted(order(1:minTrustedSamples)) = true;
+end
+end
+
+function refSym = local_reencode_packet_symbols_local(packetDataBits, scrambleCfg, rxState, p)
+packetDataBits = uint8(packetDataBits(:) ~= 0);
+bitsScr = scramble_bits(packetDataBits, scrambleCfg);
+codedBits = fec_encode(bitsScr, p.fec);
+[codedBitsInt, ~] = interleave_bits(codedBits, p.interleaver);
+[refSym, ~] = modulate_bits(codedBitsInt, p.mod);
+refSym = fit_complex_length_local(refSym, rxState.nDataSym);
+end
+
+function value = local_scalar_threshold_local(rawValue)
+rawValue = double(gather(rawValue));
+if isempty(rawValue) || ~isfinite(rawValue(1))
+    error("模型threshold无效，无法初始化在线阈值校准。");
+end
+value = rawValue(1);
+if value < 0 || value > 1
+    error("模型threshold=%.4f 超出 [0,1] 范围。", value);
+end
+end
+
+function value = local_get_required_numeric_local(s, fieldName)
+if ~isfield(s, fieldName) || isempty(s.(fieldName))
+    error("配置缺少字段: %s。", fieldName);
+end
+value = double(s.(fieldName));
+if ~isscalar(value) || ~isfinite(value)
+    error("配置字段 %s 必须是有限标量。", fieldName);
+end
+end
+
+function value = local_get_required_integer_local(s, fieldName)
+value = local_get_required_numeric_local(s, fieldName);
+if abs(value - round(value)) > 1e-12 || value < 1
+    error("配置字段 %s 必须是正整数。", fieldName);
+end
+value = round(value);
+end
+
+function q = local_quantile_local(x, qLevel)
+x = sort(double(x(:)));
+if isempty(x)
+    q = NaN;
+    return;
+end
+qLevel = min(max(double(qLevel), 0), 1);
+if numel(x) == 1
+    q = x;
+    return;
+end
+pos = 1 + (numel(x) - 1) * qLevel;
+lo = floor(pos);
+hi = ceil(pos);
+if lo == hi
+    q = x(lo);
+else
+    w = pos - lo;
+    q = (1 - w) * x(lo) + w * x(hi);
 end
 end
 

@@ -93,8 +93,9 @@ switch lower(string(method))
         % 对检测到的脉冲使用清洁符号，否则使用原始符号
         rOut = r;
         if model.trained
-            % 混合：使用脉冲概率加权的清洁估计
-            rOut = (1 - pImp) .* r + pImp .* cleanSym;
+            % 使用由threshold门控后的软权重，避免低于阈值的样本也被过度修正。
+            blendWeight = local_threshold_gate_probability(pImp, model.threshold);
+            rOut = (1 - blendWeight) .* r + blendWeight .* cleanSym;
         else
             % 未训练：退回到置零
             rOut(mask) = 0;
@@ -129,7 +130,8 @@ switch lower(string(method))
 
         rOut = r;
         if model.trained
-            rOut = (1 - pImp) .* r + pImp .* cleanSym;
+            blendWeight = local_threshold_gate_probability(pImp, model.threshold);
+            rOut = (1 - blendWeight) .* r + blendWeight .* cleanSym;
         else
             rOut(mask) = 0;
         end
@@ -162,4 +164,20 @@ if requireTrained && ~(isfield(model, "trained") && logical(model.trained))
     error("mitigate_impulses:MissingTrainedModel", ...
         "Method %s requires a trained ML model, but the loaded model is not trained.", char(methodName));
 end
+end
+
+function w = local_threshold_gate_probability(p, threshold)
+p = double(gather(p(:)));
+threshold = double(gather(threshold));
+if isempty(threshold) || ~isfinite(threshold)
+    error("ML模型threshold无效，无法计算软门控权重。");
+end
+threshold = min(max(threshold(1), 0), 0.999);
+w = zeros(size(p));
+if threshold >= 0.999
+    return;
+end
+active = p >= threshold;
+w(active) = (p(active) - threshold) / max(1 - threshold, eps);
+w = max(min(w, 1), 0);
 end
