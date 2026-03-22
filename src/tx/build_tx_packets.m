@@ -48,6 +48,7 @@ if session_header_enabled(p.frame)
     [sessionHeaderBits, sessionHeader] = build_session_header_bits(sessionMeta, p.frame);
 end
 sessionHeaderLenBits = numel(sessionHeaderBits);
+[sessionFrames, sessionFramePlan] = build_session_frames(sessionHeaderBits, p, waveform);
 
 phyHeaderLenBits = phy_header_length_bits(p.frame);
 phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
@@ -59,9 +60,17 @@ packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...
     && isfield(p.chaosEncrypt, "enable") && p.chaosEncrypt.enable;
 
 if packetEnable
-    maxPacketDataBits = sessionHeaderLenBits + pktBitsPerPacket;
+    if packet_has_session_header(p.frame, 1)
+        maxPacketDataBits = sessionHeaderLenBits + pktBitsPerPacket;
+    else
+        maxPacketDataBits = pktBitsPerPacket;
+    end
 else
-    maxPacketDataBits = sessionHeaderLenBits + totalBits;
+    if packet_has_session_header(p.frame, 1)
+        maxPacketDataBits = sessionHeaderLenBits + totalBits;
+    else
+        maxPacketDataBits = totalBits;
+    end
 end
 maxPacketDataSym = n_symbols_for_info_bits_local(p, maxPacketDataBits);
 packetStrideBits = maxPacketDataBits;
@@ -174,7 +183,9 @@ plan.fhEnabled = fhEnabled;
 plan.packetChaosEnable = packetChaosEnable;
 plan.waveform = waveform;
 plan.modInfo = modInfoRef;
-plan.txBurstForChannel = vertcat(txBurstChannelParts{:});
+plan.sessionFrames = sessionFrames;
+plan.sessionFramePlan = sessionFramePlan;
+plan.txBurstForChannel = vertcat(sessionFramePlan.txBurstForChannel(:), vertcat(txBurstChannelParts{:}));
 end
 
 function nSym = n_symbols_for_info_bits_local(p, nInfoBits)

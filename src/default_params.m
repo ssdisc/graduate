@@ -76,12 +76,13 @@ p.frame.packetSyncPnInit = [0 0 0 0 1];
 p.frame.packetSyncChaosMethod = "logistic";
 p.frame.packetSyncChaosParams = struct("mu", 3.9999, "x0", 0.1414213562373095);
 p.frame.resyncIntervalPackets = 1; % 当前主线每包都用长PN前导；短同步字在现接收链路下仅保留为实验选项
-p.frame.sessionHeaderMode = "preshared";   % "preshared" | "inline"
-p.frame.repeatSessionHeaderOnResync = false; % 即便所有包都用长前导，默认仍只在首包发送会话头以降低开销
+p.frame.sessionHeaderMode = "session_frame_repeat";   % "preshared" | "embedded_each_frame" | "session_frame_repeat" | "session_frame_strong"
+p.frame.sessionFrameRepeatCount = 3; % dedicated会话帧连续突发次数，仅session_frame_repeat有效，取值3~5
+p.frame.sessionStrongRepeat = 8; % strong会话帧：卷积码后逐比特重复次数，等效极低码率FEC
 p.frame.magic16 = hex2dec('A55A');
 p.frame.phyHeaderMode = "compact_fec";   % "compact_fec" | "legacy_repeat"
 p.frame.phyMagic16 = hex2dec('3AC5');      % legacy模式使用16bit魔术字；compact_fec默认复用其低8位
-p.frame.sessionMagic16 = hex2dec('C7E1');  % inline模式下的会话头魔术字
+p.frame.sessionMagic16 = hex2dec('C7E1');  % 会话头魔术字（内嵌模式与dedicated会话帧共用）
 p.frame.phyHeaderRepeat = 3;               % legacy_repeat模式下的PHY小头每比特重复次数（BPSK）
 p.frame.phyHeaderRepeatCompact =2;        % compact_fec模式下的PHY小头编码后重复次数
 p.frame.phyHeaderSoftBits = 5;             % compact_fec模式下的PHY小头软判决量化位数
@@ -116,7 +117,7 @@ p.interleaver.nRows = 64;
 
 % 8) 调制
 p.mod = struct();
-p.mod.type = 'BPSK'; % 'BPSK' | 'QPSK' | 'MSK'（默认BPSK）
+p.mod.type = 'QPSK'; % 'BPSK' | 'QPSK' | 'MSK'（默认QPSK）
 
 % 9) 跳频（Frequency Hopping，默认采用混沌跳频）
 p.fh = struct();

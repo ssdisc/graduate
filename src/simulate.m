@@ -72,6 +72,8 @@ end
 % 构建按包发送计划（每包独立同步/头部/载荷）
 [txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, packetIndependentBitChaos, waveform);
 nPackets = numel(txPackets);
+sessionFrames = txPlan.sessionFrames;
+hasDedicatedSessionFrames = ~isempty(sessionFrames);
 % 主链路译码统计仅依赖每包payload比特（避免在并行worker间广播巨大的txPackets结构体）
 txPktIndex = (1:nPackets).';
 txPayloadBits = {txPackets.payloadBits}.';
@@ -436,6 +438,10 @@ for ie = 1:numel(EbN0dBList)
             eveNom.preambleRx = cell(nPackets, 1);
             eveNom.preambleRef = cell(nPackets, 1);
         end
+        bobNom.session = local_init_session_nominal_local(numel(sessionFrames));
+        if eveEnabled
+            eveNom.session = local_init_session_nominal_local(numel(sessionFrames));
+        end
 
         % ============ 分包发收（同步+PHY提取） ============
         phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
@@ -448,6 +454,15 @@ for ie = 1:numel(EbN0dBList)
         channelSampleBob = local_freeze_channel_realization_local(channelSample);
         if eveEnabled
             channelSampleEve = local_freeze_channel_realization_local(channelSample);
+        end
+
+        if hasDedicatedSessionFrames
+            bobNom.session = local_capture_session_frames_nominal_local( ...
+                sessionFrames, N0, channelSampleBob, frameDelay, syncCfgUseBob, bobRxSync, p, waveform, firstSyncSym, shortSyncSym);
+            if eveEnabled
+                eveNom.session = local_capture_session_frames_nominal_local( ...
+                    sessionFrames, N0Eve, channelSampleEve, frameDelay, syncCfgUseEve, eveRxSync, p, waveform, firstSyncSym, shortSyncSym);
+            end
         end
 
         for pktIdx = 1:nPackets
@@ -623,7 +638,7 @@ for ie = 1:numel(EbN0dBList)
         end
         captureExample = (frameIdx == 1 && ie == exampleIdx);
         [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
-            methods, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+            methods, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
             packetConcealActive, packetConcealMode, imgTx, meta, totalPayloadBits, ...
             bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
@@ -849,7 +864,7 @@ h.headerCrc16 = uint16(0);
 end
 
 function [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
-    methods, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+    methods, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
     packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
     bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
@@ -887,7 +902,7 @@ if useParfor
     try
         parfor im = 1:nMethods
             [bobRes, eveRes] = local_decode_single_method_local( ...
-                methods(im), txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+                methods(im), txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
                 packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
                 packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
                 bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
@@ -956,7 +971,7 @@ end
 if ~useParfor
     for im = 1:nMethods
         [bobRes, eveRes] = local_decode_single_method_local( ...
-            methods(im), txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+            methods(im), txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
             packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
             bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
@@ -1009,7 +1024,7 @@ end
 end
 
 function [bobRes, eveRes] = local_decode_single_method_local( ...
-    methodName, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
+    methodName, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
     packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
     bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
@@ -1023,6 +1038,8 @@ packetOkBob = false(1, nPackets);
 nErrBob = 0;
 nTotBob = 0;
 calStateBob = local_init_threshold_calibration_state_local(methodName, bobMitigation);
+[sessionBob, calStateBob] = local_recover_session_from_nominal_local( ...
+    sessionBob, bobNom.session, sessionFrames, methodName, bobMitigation, p, calStateBob);
 
         for pktIdx = 1:nPackets
             txPayload = txPayloadBits{pktIdx};
@@ -1136,6 +1153,8 @@ if captureExample
     bobRes.example.EbN0dB = EbN0dB;
     bobRes.example.frontEndSuccessRate = mean(double(bobNom.ok));
     bobRes.example.headerSuccessRate = mean(double(bobNom.headerOk));
+    bobRes.example.sessionKnown = logical(sessionBob.known);
+    bobRes.example.sessionFrameFrontEndSuccessRate = local_nominal_success_rate_local(bobNom.session);
     bobRes.example.imgRxComm = imgRxComm;
     bobRes.example.imgRxCompensated = imgRxComp;
     bobRes.example.imgRx = imgRxComp;
@@ -1156,6 +1175,8 @@ packetOkEve = false(1, nPackets);
 nErrEve = 0;
 nTotEve = 0;
 calStateEve = local_init_threshold_calibration_state_local(methodName, eveMitigation);
+[sessionEve, calStateEve] = local_recover_session_from_nominal_local( ...
+    sessionEve, eveNom.session, sessionFrames, methodName, eveMitigation, p, calStateEve);
 
     for pktIdx = 1:nPackets
         txPayload = txPayloadBits{pktIdx};
@@ -1271,6 +1292,8 @@ if captureExample
     eveRes.example.EbN0dB = EbN0dBEve;
     eveRes.example.frontEndSuccessRate = mean(double(eveNom.ok));
     eveRes.example.headerSuccessRate = mean(double(eveNom.headerOk));
+    eveRes.example.sessionKnown = logical(sessionEve.known);
+    eveRes.example.sessionFrameFrontEndSuccessRate = local_nominal_success_rate_local(eveNom.session);
     eveRes.example.packetSuccessRate = eveRes.packetSuccessRate;
     eveRes.example.imgRxComm = imgEveComm;
     eveRes.example.imgRxCompensated = imgEveComp;
@@ -1691,6 +1714,188 @@ end
 yPrep = r;
 end
 
+function nom = local_init_session_nominal_local(nFrames)
+nom = struct();
+nom.ok = false(nFrames, 1);
+nom.rDataPrepared = cell(nFrames, 1);
+nom.preambleRx = cell(nFrames, 1);
+nom.preambleRef = cell(nFrames, 1);
+end
+
+function nom = local_capture_session_frames_nominal_local(sessionFrames, N0, channelSample, frameDelay, syncCfgUse, rxSyncCfg, p, waveform, firstSyncSym, shortSyncSym)
+nom = local_init_session_nominal_local(numel(sessionFrames));
+if isempty(sessionFrames)
+    return;
+end
+
+syncCtrl = init_packet_sync_ctrl_local();
+for frameIdx = 1:numel(sessionFrames)
+    sessionFrame = sessionFrames(frameIdx);
+    tx = [zeros(frameDelay, 1); sessionFrame.txSymForChannel];
+    rx = channel_bg_impulsive(tx, N0, channelSample);
+    rx = pulse_rx_to_symbol_rate(rx, waveform);
+
+    [startIdx, rxSync, syncSymUse, syncCtrl, ok] = acquire_packet_sync_local( ...
+        rx, syncCfgUse, p, 1, firstSyncSym, shortSyncSym, syncCtrl);
+    if ~ok
+        continue;
+    end
+
+    preLen = numel(syncSymUse);
+    [rPre, preOk] = extract_fractional_block(rxSync, startIdx, preLen, syncCfgUse, struct("type", "BPSK"));
+    if preOk
+        nom.preambleRx{frameIdx} = fit_complex_length_local(rPre, numel(syncSymUse));
+        nom.preambleRef{frameIdx} = syncSymUse(:);
+    end
+
+    dataStart = startIdx + preLen;
+    [rDataRaw, ok] = extract_fractional_block(rxSync, dataStart, sessionFrame.nDataSym, syncCfgUse, sessionFrame.modCfg);
+    if ~ok
+        continue;
+    end
+
+    rDataUse = rDataRaw;
+    if preOk && local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
+        chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
+        eqCfg = rxSyncCfg.multipathEq;
+        [eq, eqOk] = multipath_equalizer_from_preamble(syncSymUse(:), rPre, eqCfg, N0, chLenSymbols);
+        if eqOk
+            yEq = local_apply_equalizer_block_local([rPre; rDataRaw], eq);
+            nom.preambleRx{frameIdx} = fit_complex_length_local(yEq(1:preLen), numel(syncSymUse));
+            rDataUse = yEq(preLen+1:end);
+        end
+    end
+
+    rxStateSession = struct("nDataSym", sessionFrame.nDataSym);
+    nom.rDataPrepared{frameIdx} = local_prepare_data_symbols_local( ...
+        rDataUse, rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false);
+    nom.ok(frameIdx) = true;
+end
+end
+
+function [sessionOut, calState] = local_recover_session_from_nominal_local(sessionIn, sessionNom, sessionFrames, methodName, mitigation, p, calState)
+sessionOut = sessionIn;
+if sessionOut.known || isempty(sessionFrames)
+    return;
+end
+if ~isfield(sessionNom, "ok") || isempty(sessionNom.ok)
+    return;
+end
+
+rMitList = cell(0, 1);
+for frameIdx = 1:min(numel(sessionFrames), numel(sessionNom.ok))
+    if ~sessionNom.ok(frameIdx)
+        continue;
+    end
+    if isempty(sessionNom.rDataPrepared{frameIdx})
+        continue;
+    end
+
+    calState = local_update_threshold_from_preamble_local( ...
+        calState, sessionNom.preambleRx{frameIdx}, sessionNom.preambleRef{frameIdx});
+    mitUse = local_apply_threshold_calibration_local(mitigation, calState);
+    rData = fit_complex_length_local(sessionNom.rDataPrepared{frameIdx}, sessionFrames(frameIdx).nDataSym);
+    [rMit, reliability] = mitigate_impulses(rData, methodName, mitUse);
+    [metaSession, okFrame] = local_try_decode_session_frame_local(rMit, reliability, sessionFrames(frameIdx), p);
+    if okFrame
+        sessionOut = learn_rx_session_local(metaSession);
+        return;
+    end
+
+    rMitList{end+1, 1} = fit_complex_length_local(rMit, sessionFrames(frameIdx).nDataSym); %#ok<AGROW>
+end
+
+if numel(rMitList) >= 2
+    rCombined = local_average_session_symbols_local(rMitList);
+    [metaSession, okFrame] = local_try_decode_session_frame_local(rCombined, [], sessionFrames(1), p);
+    if okFrame
+        sessionOut = learn_rx_session_local(metaSession);
+    end
+end
+end
+
+function [metaSession, ok] = local_try_decode_session_frame_local(rData, reliability, sessionFrame, p)
+metaSession = struct();
+ok = false;
+
+switch string(sessionFrame.decodeKind)
+    case "payload_like"
+        demodSoft = demodulate_to_softbits(rData, sessionFrame.modCfg, sessionFrame.fecCfg, p.softMetric, reliability);
+        demodDeint = deinterleave_bits(demodSoft, sessionFrame.intState, p.interleaver);
+        sessionBits = fec_decode(demodDeint, sessionFrame.fecCfg);
+    case "strong_bpsk"
+        rComb = local_repeat_combine_symbols_local(rData, sessionFrame.bitRepeat);
+        reliabilityComb = local_repeat_combine_reliability_local(reliability, sessionFrame.bitRepeat);
+        demodSoft = demodulate_to_softbits(rComb, sessionFrame.modCfg, sessionFrame.fecCfg, p.softMetric, reliabilityComb);
+        sessionBits = fec_decode(demodSoft, sessionFrame.fecCfg);
+    otherwise
+        error("Unsupported session frame decodeKind: %s", string(sessionFrame.decodeKind));
+end
+
+sessionBits = fit_bits_length(sessionBits, sessionFrame.infoBitsLen);
+[metaSession, ~, ok] = parse_session_header_bits(sessionBits, p.frame);
+end
+
+function y = local_repeat_combine_symbols_local(x, repeat)
+if repeat <= 1
+    y = x(:);
+    return;
+end
+
+nGroups = floor(numel(x) / repeat);
+if nGroups <= 0
+    y = complex(zeros(0, 1));
+    return;
+end
+x = reshape(x(1:nGroups * repeat), repeat, nGroups);
+y = sum(x, 1).';
+end
+
+function y = local_repeat_combine_reliability_local(x, repeat)
+if isempty(x)
+    y = [];
+    return;
+end
+if repeat <= 1
+    y = x(:);
+    return;
+end
+
+nGroups = floor(numel(x) / repeat);
+if nGroups <= 0
+    y = [];
+    return;
+end
+x = reshape(double(x(1:nGroups * repeat)), repeat, nGroups);
+y = mean(x, 1).';
+end
+
+function y = local_average_session_symbols_local(parts)
+if isempty(parts)
+    y = complex(zeros(0, 1));
+    return;
+end
+
+nSym = min(cellfun(@numel, parts));
+if nSym <= 0
+    y = complex(zeros(0, 1));
+    return;
+end
+
+mat = complex(zeros(nSym, numel(parts)));
+for k = 1:numel(parts)
+    mat(:, k) = parts{k}(1:nSym);
+end
+y = mean(mat, 2);
+end
+
+function rate = local_nominal_success_rate_local(nom)
+rate = 0;
+if isfield(nom, "ok") && ~isempty(nom.ok)
+    rate = mean(double(nom.ok));
+end
+end
+
 function session = rx_session_empty_local()
 session = struct();
 session.known = false;
@@ -1761,7 +1966,7 @@ end
 packetIndex = double(phyHeader.packetIndex);
 if phyHeader.hasSessionHeader
     [metaSession, payloadPktRx, okSession] = parse_session_header_bits(packetDataBitsRx, p.frame);
-    allowSessionRefresh = (packetIndex == 1) || (is_long_sync_packet(p.frame, packetIndex) && repeat_session_header_on_resync_local(p.frame));
+    allowSessionRefresh = packet_has_session_header(p.frame, packetIndex);
     ok = ok && okSession && allowSessionRefresh;
     if ok && isfield(sessionIn, "known") && sessionIn.known
         ok = session_meta_compatible_local(sessionIn.meta, metaSession);
@@ -2071,13 +2276,6 @@ else
     if ctrl.shortSyncMisses >= max_short_sync_misses_local(syncCfgUse)
         ctrl.forceLongSearch = true;
     end
-end
-end
-
-function tf = repeat_session_header_on_resync_local(frameCfg)
-tf = false;
-if isfield(frameCfg, "repeatSessionHeaderOnResync") && ~isempty(frameCfg.repeatSessionHeaderOnResync)
-    tf = logical(frameCfg.repeatSessionHeaderOnResync);
 end
 end
 

@@ -81,18 +81,7 @@ magic8 = uint8(bitand(local_phy_magic(frameCfg), uint16(255)));
 end
 
 function tf = local_has_session_header(frameCfg, pktIdx)
-if ~session_header_enabled(frameCfg)
-    tf = false;
-    return;
-end
-tf = (pktIdx == 1) || (is_long_sync_packet(frameCfg, pktIdx) && local_repeat_session_header_on_resync(frameCfg));
-end
-
-function tf = local_repeat_session_header_on_resync(frameCfg)
-tf = false;
-if isfield(frameCfg, "repeatSessionHeaderOnResync") && ~isempty(frameCfg.repeatSessionHeaderOnResync)
-    tf = logical(frameCfg.repeatSessionHeaderOnResync);
-end
+tf = packet_has_session_header(frameCfg, pktIdx);
 end
 
 function mode = local_phy_header_mode(frameCfg)
