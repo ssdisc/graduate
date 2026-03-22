@@ -30,6 +30,8 @@ if ~isfield(p.rxSync.carrierPll, "enable"); p.rxSync.carrierPll.enable = false; 
 if ~isfield(p.rxSync.carrierPll, "alpha"); p.rxSync.carrierPll.alpha = 0.02; end
 if ~isfield(p.rxSync.carrierPll, "beta"); p.rxSync.carrierPll.beta = 3e-4; end
 if ~isfield(p.rxSync.carrierPll, "maxFreq"); p.rxSync.carrierPll.maxFreq = 0.1; end
+bobRxSync = p.rxSync;
+bobMitigation = p.mitigation;
 waveform = resolve_waveform_cfg(p);
 
 %% 发送端（TRANSMITTER）
@@ -93,7 +95,7 @@ modInfo = txPlan.modInfo;
 %% 仿真参数初始化与配置
 
 EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
-methods = string(p.mitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
+methods = string(bobMitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
 ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
 packetFrontEndBobVals = nan(1, numel(EbN0dBList));
@@ -125,16 +127,21 @@ else
 end %示例图默认取最高Eb/N0点；设为具体值时取最近点
 
 eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
-scrambleAssumptionEve = "known";
-fhAssumptionEve = "known";
-chaosAssumptionEve = "none";
+scrambleAssumptionEve = "";
+fhAssumptionEve = "";
+chaosAssumptionEve = "";
+chaosApproxDeltaEve = NaN;
 chaosEncInfoEve = struct('enabled', false, 'mode', "none");
 eveEbN0dBList = [];
+eveRxSync = struct();
+eveMitigation = struct();
 if eveEnabled
-    if ~isfield(p.eve, "ebN0dBOffset"); p.eve.ebN0dBOffset = -6; end
-    if ~isfield(p.eve, "scrambleAssumption"); p.eve.scrambleAssumption = "wrong_key"; end
+    eveCfg = local_validate_eve_config_local(p.eve, methods);
+    eveRxSync = eveCfg.rxSync;
+    eveMitigation = eveCfg.mitigation;
+    chaosApproxDeltaEve = double(eveCfg.chaosApproxDelta);
 
-    eveEbN0dBList = EbN0dBList + double(p.eve.ebN0dBOffset);
+    eveEbN0dBList = EbN0dBList + double(eveCfg.ebN0dBOffset);
     berEve = nan(numel(methods), numel(EbN0dBList));
     packetFrontEndEveVals = nan(1, numel(EbN0dBList));
     packetHeaderEveVals = nan(1, numel(EbN0dBList));
@@ -147,27 +154,25 @@ if eveEnabled
     ssimCompEveVals = nan(numel(methods), numel(EbN0dBList));
     exampleEve = struct();
 
-    scrambleAssumptionEve = lower(string(p.eve.scrambleAssumption));
+    scrambleAssumptionEve = lower(string(eveCfg.scrambleAssumption));
     switch scrambleAssumptionEve
         case {"known", "none", "wrong_key"}
             % 有效配置
         otherwise
-            error("Unknown eve.scrambleAssumption: %s", string(p.eve.scrambleAssumption));
+            error("Unknown eve.scrambleAssumption: %s", string(eveCfg.scrambleAssumption));
     end
 
     % Eve对跳频的知识（具体每包序列在后面统一预计算）
-    if ~isfield(p.eve, 'fhAssumption'); p.eve.fhAssumption = "none"; end
-    fhAssumptionEve = lower(string(p.eve.fhAssumption));
+    fhAssumptionEve = lower(string(eveCfg.fhAssumption));
     switch fhAssumptionEve
         case {"known", "none", "partial"}
             % 有效配置
         otherwise
-            error("Unknown eve.fhAssumption: %s", string(p.eve.fhAssumption));
+            error("Unknown eve.fhAssumption: %s", string(eveCfg.fhAssumption));
     end
 
     % Eve对混沌加密的知识
-    if ~isfield(p.eve, 'chaosAssumption'); p.eve.chaosAssumption = "none"; end
-    chaosAssumptionEve = lower(string(p.eve.chaosAssumption));
+    chaosAssumptionEve = lower(string(eveCfg.chaosAssumption));
     switch chaosAssumptionEve
         case "known"
             if packetIndependentBitChaos
@@ -179,20 +184,29 @@ if eveEnabled
         case "none"
             % Eve不知道混沌加密，不解密（看到的是加密图像）
             chaosEncInfoEve = struct('enabled', false);
+        case "approximate"
+            if chaosEnabled
+                if packetIndependentBitChaos
+                    chaosEncInfoEve = struct('enabled', true, 'mode', "payload_bits_packet");
+                else
+                    chaosEncInfoEve = perturb_chaos_enc_info(chaosEncInfo, chaosApproxDeltaEve);
+                end
+            else
+                chaosEncInfoEve = struct('enabled', false);
+            end
         case "wrong_key"
             if chaosEnabled
                 if packetIndependentBitChaos
                     chaosEncInfoEve = struct('enabled', true, 'mode', "payload_bits_packet");
                 else
                     % Eve使用错误的混沌密钥
-                    chaosEncInfoEve = chaosEncInfo;
-                    chaosEncInfoEve.chaosParams.x0 = chaosEncInfo.chaosParams.x0 + 1e-10;  % 微小扰动
+                    chaosEncInfoEve = perturb_chaos_enc_info(chaosEncInfo, local_wrong_key_delta_local(1));
                 end
             else
                 chaosEncInfoEve = struct('enabled', false);
             end
         otherwise
-            error("Unknown eve.chaosAssumption: %s", string(p.eve.chaosAssumption));
+            error("Unknown eve.chaosAssumption: %s", string(eveCfg.chaosAssumption));
     end
 end
 
@@ -261,19 +275,20 @@ if numel(methods) > 1
         fprintf('[SIM] NOTE: impulse/tone/narrowband/sweep all disabled. Most mitigation methods will behave like \"none\".\n');
     end
 end
-dllEnabled = isfield(p.rxSync, "timingDll") && isfield(p.rxSync.timingDll, "enable") ...
-    && p.rxSync.timingDll.enable;
-syncEnabled = p.rxSync.compensateCarrier || p.rxSync.fineSearchRadius > 0 || ...
-    p.rxSync.enableFractionalTiming || p.rxSync.carrierPll.enable || dllEnabled;
+syncEnabledBob = local_sync_enabled_local(bobRxSync);
+syncEnabledEve = false;
+if eveEnabled
+    syncEnabledEve = local_sync_enabled_local(eveRxSync);
+end
 mpEnabled = isfield(p.channel, "multipath") && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable;
 if waveform.enable
     pulseTxt = sprintf('ON(sps=%d)', waveform.sps);
 else
     pulseTxt = 'OFF';
 end
-fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, Pulse=%s, RxSync=%s, MP=%s\n', ...
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, Pulse=%s, RxSync(B/E)=%s/%s, MP=%s\n', ...
     on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
-    on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabled), on_off_text(mpEnabled));
+    on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabledBob), on_off_text(syncEnabledEve), on_off_text(mpEnabled));
 if simUseParallel || wardenUseParallel
     fprintf('[SIM] Parallel requested: MainLink=%s(mode=%s, workers=%d), Warden=%s(workers=%d)\n', ...
         on_off_text(simUseParallel), char(simParallelMode), simNWorkers, ...
@@ -362,9 +377,9 @@ for ie = 1:numel(EbN0dBList)
     totalPayloadBits = numel(payloadBits);
     for frameIdx = 1:p.sim.nFramesPerPoint
         globalFrameIdx = globalFrameIdx + 1;
-        syncCfgUse = p.rxSync;
-        if ~isfield(syncCfgUse, "minSearchIndex"); syncCfgUse.minSearchIndex = 1; end
-        if ~isfield(syncCfgUse, "maxSearchIndex") || ~isfinite(double(syncCfgUse.maxSearchIndex))
+        syncCfgUseBob = bobRxSync;
+        if ~isfield(syncCfgUseBob, "minSearchIndex"); syncCfgUseBob.minSearchIndex = 1; end
+        if ~isfield(syncCfgUseBob, "maxSearchIndex") || ~isfinite(double(syncCfgUseBob.maxSearchIndex))
             mpExtra = 0;
             if isfield(p, "channel") && isfield(p.channel, "multipath") ...
                     && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable ...
@@ -378,9 +393,17 @@ for ie = 1:numel(EbN0dBList)
                 end
             end
             if isfield(p, "channel") && isfield(p.channel, "maxDelaySymbols")
-                syncCfgUse.maxSearchIndex = double(p.channel.maxDelaySymbols) + mpExtra + 6;
+                syncCfgUseBob.maxSearchIndex = double(p.channel.maxDelaySymbols) + mpExtra + 6;
             else
-                syncCfgUse.maxSearchIndex = inf;
+                syncCfgUseBob.maxSearchIndex = inf;
+            end
+        end
+        syncCfgUseEve = struct();
+        if eveEnabled
+            syncCfgUseEve = eveRxSync;
+            if ~isfield(syncCfgUseEve, "minSearchIndex"); syncCfgUseEve.minSearchIndex = 1; end
+            if ~isfield(syncCfgUseEve, "maxSearchIndex") || ~isfinite(double(syncCfgUseEve.maxSearchIndex))
+                syncCfgUseEve.maxSearchIndex = syncCfgUseBob.maxSearchIndex;
             end
         end
 
@@ -446,23 +469,23 @@ for ie = 1:numel(EbN0dBList)
             rDataBobNominal = complex(zeros(0, 1));
             rPreBobNominal = complex(zeros(0, 1));
             bobHeaderOk = false;
-            [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
+            [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUseBob, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
             if bobOk
                 preLen = numel(syncSymBob);
-                [rPreBob, preOk] = extract_fractional_block(rxBobSync, startIdx, preLen, syncCfgUse, struct('type', 'BPSK'));
+                [rPreBob, preOk] = extract_fractional_block(rxBobSync, startIdx, preLen, syncCfgUseBob, struct('type', 'BPSK'));
                 if preOk
                     rPreBobNominal = rPreBob;
                 end
                 phyStart = startIdx + preLen;
-                [rPhyBobRaw, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
+                [rPhyBobRaw, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUseBob, struct('type', 'BPSK'));
 
                 % 多径信道估计 + 线性均衡（先救PHY头，避免“整包判失败”导致BER饱和）
                 eqBob = struct();
                 eqBobOk = false;
                 rPhyBob = rPhyBobRaw;
-                if bobOk && preOk && local_multipath_eq_enabled_local(p)
+                if bobOk && preOk && local_multipath_eq_enabled_local(p.channel, bobRxSync)
                     chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
-                    eqCfg = p.rxSync.multipathEq;
+                    eqCfg = bobRxSync.multipathEq;
                     [eqBob, eqBobOk] = multipath_equalizer_from_preamble(syncSymBob(:), rPreBob, eqCfg, N0, chLenSymbols);
                     if eqBobOk
                         yPrePhy = [rPreBob; rPhyBobRaw];
@@ -484,7 +507,7 @@ for ie = 1:numel(EbN0dBList)
                     rxStateBobNominal = derive_rx_packet_state_local( ...
                         p, double(bobPhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(bobPhy.packetIndex), bobPhy));
                     dataStart = phyStart + phyHeaderSymLen;
-                    [rDataBobRaw, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, syncCfgUse, p.mod);
+                    [rDataBobRaw, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, syncCfgUseBob, p.mod);
                     if bobOk && eqBobOk
                         yAll = [rPreBob; rPhyBobRaw; rDataBobRaw];
                         yEqAll = local_apply_equalizer_block_local(yAll, eqBob);
@@ -509,7 +532,7 @@ for ie = 1:numel(EbN0dBList)
                     hopInfoBob = rxStateBobNominal.hopInfo;
                 end
                 bobNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
-                    rDataBobNominal, rxStateBobNominal, hopInfoBob, p, fhEnabled);
+                    rDataBobNominal, rxStateBobNominal, hopInfoBob, p.mod, bobRxSync, fhEnabled);
             end
 
             if eveEnabled
@@ -519,22 +542,22 @@ for ie = 1:numel(EbN0dBList)
                 rDataEveNominal = complex(zeros(0, 1));
                 rPreEveNominal = complex(zeros(0, 1));
                 eveHeaderOk = false;
-                [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local(rxEve, syncCfgUse, p, pktIdx, firstSyncSym, shortSyncSym, eveSyncCtrl);
+                [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local(rxEve, syncCfgUseEve, p, pktIdx, firstSyncSym, shortSyncSym, eveSyncCtrl);
                 if eveOk
                     preLenEve = numel(syncSymEve);
-                    [rPreEve, preOkEve] = extract_fractional_block(rxEveSync, startIdxEve, preLenEve, syncCfgUse, struct('type', 'BPSK'));
+                    [rPreEve, preOkEve] = extract_fractional_block(rxEveSync, startIdxEve, preLenEve, syncCfgUseEve, struct('type', 'BPSK'));
                     if preOkEve
                         rPreEveNominal = rPreEve;
                     end
                     phyStartEve = startIdxEve + preLenEve;
-                    [rPhyEveRaw, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUse, struct('type', 'BPSK'));
+                    [rPhyEveRaw, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUseEve, struct('type', 'BPSK'));
 
                     eqEve = struct();
                     eqEveOk = false;
                     rPhyEve = rPhyEveRaw;
-                    if eveOk && preOkEve && local_multipath_eq_enabled_local(p)
+                    if eveOk && preOkEve && local_multipath_eq_enabled_local(p.channel, eveRxSync)
                         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
-                        eqCfg = p.rxSync.multipathEq;
+                        eqCfg = eveRxSync.multipathEq;
                         [eqEve, eqEveOk] = multipath_equalizer_from_preamble(syncSymEve(:), rPreEve, eqCfg, N0Eve, chLenSymbols);
                         if eqEveOk
                             yPrePhy = [rPreEve; rPhyEveRaw];
@@ -556,7 +579,7 @@ for ie = 1:numel(EbN0dBList)
                         rxStateEveNominal = derive_rx_packet_state_local( ...
                             p, double(evePhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(evePhy.packetIndex), evePhy));
                         dataStartEve = phyStartEve + phyHeaderSymLen;
-                        [rDataEveRaw, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, syncCfgUse, p.mod);
+                        [rDataEveRaw, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, syncCfgUseEve, p.mod);
                         if eveOk && eqEveOk
                             yAll = [rPreEve; rPhyEveRaw; rDataEveRaw];
                             yEqAll = local_apply_equalizer_block_local(yAll, eqEve);
@@ -581,7 +604,7 @@ for ie = 1:numel(EbN0dBList)
                         hopInfoEvePrep = eve_hop_info_local(rxStateEveNominal, fhAssumptionEve);
                     end
                     eveNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
-                        rDataEveNominal, rxStateEveNominal, hopInfoEvePrep, p, fhEnabled);
+                        rDataEveNominal, rxStateEveNominal, hopInfoEvePrep, p.mod, eveRxSync, fhEnabled);
                 end
             end
         end
@@ -603,7 +626,8 @@ for ie = 1:numel(EbN0dBList)
             methods, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
             packetConcealActive, packetConcealMode, imgTx, meta, totalPayloadBits, ...
-            eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+            bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
+            eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
             captureExample, EbN0dB, EbN0dBEveLocal, useParallelMethods);
 
         nErr = nErr + bobFrame.nErr;
@@ -721,12 +745,21 @@ results.kl = struct("ebN0dB", EbN0dBList, ...
 
 if eveEnabled
     results.eve = struct();
+    results.eve.methods = methods;
     results.eve.ebN0dB = eveEbN0dBList;
     results.eve.ber = berEve;
     results.eve.packetDiagnostics = struct( ...
         "frontEndSuccessRate", packetFrontEndEveVals, ...
         "headerSuccessRate", packetHeaderEveVals, ...
         "payloadSuccessRate", packetSuccessEveVals);
+    results.eve.assumptions = struct( ...
+        "scramble", string(scrambleAssumptionEve), ...
+        "fh", string(fhAssumptionEve), ...
+        "chaos", string(chaosAssumptionEve), ...
+        "chaosApproxDelta", chaosApproxDeltaEve);
+    results.eve.receiver = struct( ...
+        "rxSync", local_pack_rx_sync_summary_local(eveRxSync), ...
+        "mitigation", local_pack_mitigation_summary_local(eveMitigation));
     results.eve.imageMetrics = struct();
     results.eve.imageMetrics.communication = struct("mse", mseCommEveVals, "psnr", psnrCommEveVals, "ssim", ssimCommEveVals);
     results.eve.imageMetrics.compensated = struct("mse", mseCompEveVals, "psnr", psnrCompEveVals, "ssim", ssimCompEveVals);
@@ -737,7 +770,10 @@ if eveEnabled
     results.eve.psnrCompensated = psnrCompEveVals;
     results.eve.ssimCompensated = ssimCompEveVals;
     results.eve.example = exampleEve;
-    results.eve.scrambleAssumption = string(p.eve.scrambleAssumption);
+    results.eve.scrambleAssumption = string(scrambleAssumptionEve);
+    results.eve.fhAssumption = string(fhAssumptionEve);
+    results.eve.chaosAssumption = string(chaosAssumptionEve);
+    results.eve.chaosApproxDelta = chaosApproxDeltaEve;
 end
 
 if wardenEnabled
@@ -816,7 +852,8 @@ function [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
     methods, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
     packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
-    eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+    bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
+    eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
     captureExample, EbN0dB, EbN0dBEve, useParallelMethods)
 
 nMethods = numel(methods);
@@ -853,7 +890,8 @@ if useParfor
                 methods(im), txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
                 packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
                 packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
-                eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+                bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
+                eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
                 captureExample, EbN0dB, EbN0dBEve, nPackets);
 
             nErrBob(im) = bobRes.nErr;
@@ -921,7 +959,8 @@ if ~useParfor
             methods(im), txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
             packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
-            eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+            bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
+            eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
             captureExample, EbN0dB, EbN0dBEve, nPackets);
 
         nErrBob(im) = bobRes.nErr;
@@ -973,7 +1012,8 @@ function [bobRes, eveRes] = local_decode_single_method_local( ...
     methodName, txPktIndex, txPayloadBits, bobNom, eveNom, p, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
     packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
-    eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosEncInfoEve, ...
+    bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
+    eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
     captureExample, EbN0dB, EbN0dBEve, nPackets)
 
 % -------- Bob --------
@@ -982,7 +1022,7 @@ payloadFrameBob = zeros(totalPayloadBitsTx, 1, "uint8");
 packetOkBob = false(1, nPackets);
 nErrBob = 0;
 nTotBob = 0;
-calStateBob = local_init_threshold_calibration_state_local(methodName, p.mitigation);
+calStateBob = local_init_threshold_calibration_state_local(methodName, bobMitigation);
 
         for pktIdx = 1:nPackets
             txPayload = txPayloadBits{pktIdx};
@@ -1001,14 +1041,14 @@ calStateBob = local_init_threshold_calibration_state_local(methodName, p.mitigat
             if fhEnabled
                 rData = fh_demodulate(rData, rxState.hopInfo);
             end
-            if p.rxSync.carrierPll.enable
-                rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+            if bobRxSync.carrierPll.enable
+                rData = carrier_pll_sync(rData, p.mod, bobRxSync.carrierPll);
             end
         end
 
         calStateBob = local_update_threshold_from_preamble_local( ...
             calStateBob, bobNom.preambleRx{pktIdx}, bobNom.preambleRef{pktIdx});
-        mitBob = local_apply_threshold_calibration_local(p.mitigation, calStateBob);
+        mitBob = local_apply_threshold_calibration_local(bobMitigation, calStateBob);
         [rMit, reliability] = mitigate_impulses(rData, methodName, mitBob);
         demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
         demodDeint = deinterleave_bits(demodSoft, rxState.intState, p.interleaver);
@@ -1057,7 +1097,7 @@ end
 rxLayoutBob = derive_packet_layout_local(totalPayloadBitsBob, p);
 
 if packetIndependentBitChaos && chaosEnabled
-    payloadBitsRxDec = decrypt_payload_packets_rx_local(payloadFrameBob, packetOkBob, p, totalPayloadBitsBob, "known");
+    payloadBitsRxDec = decrypt_payload_packets_rx_local(payloadFrameBob, packetOkBob, p, totalPayloadBitsBob, "known", 0);
     imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
 elseif chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
     if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
@@ -1100,6 +1140,7 @@ if captureExample
     bobRes.example.imgRxCompensated = imgRxComp;
     bobRes.example.imgRx = imgRxComp;
     bobRes.example.packetSuccessRate = bobRes.packetSuccessRate;
+    bobRes.example.headerOk = all(bobNom.headerOk);
     bobRes.example.thresholdCalibration = bobRes.thresholdCalibration;
 end
 
@@ -1114,7 +1155,7 @@ payloadFrameEve = zeros(totalPayloadBitsTx, 1, "uint8");
 packetOkEve = false(1, nPackets);
 nErrEve = 0;
 nTotEve = 0;
-calStateEve = local_init_threshold_calibration_state_local(methodName, p.mitigation);
+calStateEve = local_init_threshold_calibration_state_local(methodName, eveMitigation);
 
     for pktIdx = 1:nPackets
         txPayload = txPayloadBits{pktIdx};
@@ -1134,15 +1175,15 @@ calStateEve = local_init_threshold_calibration_state_local(methodName, p.mitigat
                 hopInfoEve = eve_hop_info_local(rxState, fhAssumptionEve);
                 rData = fh_demodulate(rData, hopInfoEve);
             end
-            if p.rxSync.carrierPll.enable
-                rData = carrier_pll_sync(rData, p.mod, p.rxSync.carrierPll);
+            if eveRxSync.carrierPll.enable
+                rData = carrier_pll_sync(rData, p.mod, eveRxSync.carrierPll);
             end
         end
         scrambleCfgEve = eve_scramble_cfg_local(rxState.scrambleCfg, scrambleAssumptionEve);
 
         calStateEve = local_update_threshold_from_preamble_local( ...
             calStateEve, eveNom.preambleRx{pktIdx}, eveNom.preambleRef{pktIdx});
-        mitEve = local_apply_threshold_calibration_local(p.mitigation, calStateEve);
+        mitEve = local_apply_threshold_calibration_local(eveMitigation, calStateEve);
         [rMitEve, reliabilityEve] = mitigate_impulses(rData, methodName, mitEve);
         demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
         demodDeintEve = deinterleave_bits(demodSoftEve, rxState.intState, p.interleaver);
@@ -1191,7 +1232,8 @@ end
 rxLayoutEve = derive_packet_layout_local(totalPayloadBitsEve, p);
 
 if packetIndependentBitChaos && chaosEnabled && chaosAssumptionEve ~= "none"
-    payloadBitsEveDec = decrypt_payload_packets_rx_local(payloadFrameEve, packetOkEve, p, totalPayloadBitsEve, chaosAssumptionEve);
+    payloadBitsEveDec = decrypt_payload_packets_rx_local( ...
+        payloadFrameEve, packetOkEve, p, totalPayloadBitsEve, chaosAssumptionEve, chaosApproxDeltaEve);
     imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
 elseif chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
     if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
@@ -1233,6 +1275,7 @@ if captureExample
     eveRes.example.imgRxComm = imgEveComm;
     eveRes.example.imgRxCompensated = imgEveComp;
     eveRes.example.imgRx = imgEveComp;
+    eveRes.example.headerOk = all(eveNom.headerOk);
     eveRes.example.thresholdCalibration = eveRes.thresholdCalibration;
 end
 end
@@ -1558,14 +1601,14 @@ catch
 end
 end
 
-function tf = local_multipath_eq_enabled_local(p)
+function tf = local_multipath_eq_enabled_local(channelCfg, rxSyncCfg)
 tf = false;
-if ~isfield(p, "rxSync") || ~isstruct(p.rxSync) || ~isfield(p.rxSync, "multipathEq") ...
-        || ~isstruct(p.rxSync.multipathEq) || ~isfield(p.rxSync.multipathEq, "enable") || ~p.rxSync.multipathEq.enable
+if ~isstruct(rxSyncCfg) || ~isfield(rxSyncCfg, "multipathEq") ...
+        || ~isstruct(rxSyncCfg.multipathEq) || ~isfield(rxSyncCfg.multipathEq, "enable") || ~rxSyncCfg.multipathEq.enable
     return;
 end
-if ~isfield(p, "channel") || ~isstruct(p.channel) || ~isfield(p.channel, "multipath") || ~isstruct(p.channel.multipath) ...
-        || ~isfield(p.channel.multipath, "enable") || ~p.channel.multipath.enable
+if ~isstruct(channelCfg) || ~isfield(channelCfg, "multipath") || ~isstruct(channelCfg.multipath) ...
+        || ~isfield(channelCfg.multipath, "enable") || ~channelCfg.multipath.enable
     return;
 end
 tf = true;
@@ -1628,7 +1671,7 @@ end
 yEq = z(d+1:d+N);
 end
 
-function yPrep = local_prepare_data_symbols_local(rData, rxState, hopInfoUsed, p, fhEnabled)
+function yPrep = local_prepare_data_symbols_local(rData, rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled)
 % Prepare per-packet data symbols (dehop -> carrier PLL).
 %
 % Multipath equalization has already been applied at the nominal Rx stage on
@@ -1640,9 +1683,9 @@ if fhEnabled
     r = fh_demodulate(r, hopInfoUsed);
 end
 
-if isfield(p, "rxSync") && isfield(p.rxSync, "carrierPll") && isfield(p.rxSync.carrierPll, "enable") ...
-        && p.rxSync.carrierPll.enable
-    r = carrier_pll_sync(r, p.mod, p.rxSync.carrierPll);
+if isfield(rxSyncCfg, "carrierPll") && isfield(rxSyncCfg.carrierPll, "enable") ...
+        && rxSyncCfg.carrierPll.enable
+    r = carrier_pll_sync(r, modCfg, rxSyncCfg.carrierPll);
 end
 
 yPrep = r;
@@ -1837,7 +1880,7 @@ for pktIdx = 1:nPacketsLocal
 end
 end
 
-function payloadBitsOut = decrypt_payload_packets_rx_local(payloadBitsIn, packetOk, p, totalPayloadBits, assumption)
+function payloadBitsOut = decrypt_payload_packets_rx_local(payloadBitsIn, packetOk, p, totalPayloadBits, assumption, approxDelta)
 payloadBitsOut = uint8(payloadBitsIn(:) ~= 0);
 layout = derive_packet_layout_local(totalPayloadBits, p);
 ok = normalize_packet_ok(packetOk, numel(layout));
@@ -1854,7 +1897,9 @@ for pktIdx = 1:numel(layout)
     seg = payloadBitsOut(layout(pktIdx).startBit:layout(pktIdx).endBit);
     infoUse = packet_chaos_info_local(p.chaosEncrypt, pktIdx, numel(seg));
     if assumption == "wrong_key"
-        infoUse = perturb_chaos_enc_info(infoUse, pktIdx);
+        infoUse = perturb_chaos_enc_info(infoUse, local_wrong_key_delta_local(pktIdx));
+    elseif assumption == "approximate"
+        infoUse = perturb_chaos_enc_info(infoUse, approxDelta);
     elseif assumption ~= "known"
         error("Unknown chaos assumption: %s", assumption);
     end
@@ -1873,6 +1918,10 @@ infoUse.chaosParams = encPkt.chaosParams;
 infoUse.diffusionRounds = encPkt.diffusionRounds;
 infoUse.nBytes = uint32(ceil(double(nValidBits) / 8));
 infoUse.nValidBits = uint32(nValidBits);
+end
+
+function delta = local_wrong_key_delta_local(pktIdx)
+delta = 7e-10 * (double(pktIdx) + 1);
 end
 
 function scrambleCfg = eve_scramble_cfg_local(scrambleBase, assumption)
@@ -2019,7 +2068,7 @@ if isLongPkt
     ctrl.shortSyncMisses = 0;
 else
     ctrl.shortSyncMisses = ctrl.shortSyncMisses + 1;
-    if ctrl.shortSyncMisses >= max_short_sync_misses_local(p.rxSync)
+    if ctrl.shortSyncMisses >= max_short_sync_misses_local(syncCfgUse)
         ctrl.forceLongSearch = true;
     end
 end
@@ -2172,4 +2221,106 @@ for i = 1:nPoints
     layer.xi(i) = point.xi;
     layer.pe(i) = point.pe;
 end
+end
+
+function tf = local_sync_enabled_local(rxSyncCfg)
+dllEnabled = isfield(rxSyncCfg, "timingDll") && isfield(rxSyncCfg.timingDll, "enable") ...
+    && rxSyncCfg.timingDll.enable;
+tf = rxSyncCfg.compensateCarrier || rxSyncCfg.fineSearchRadius > 0 || ...
+    rxSyncCfg.enableFractionalTiming || rxSyncCfg.carrierPll.enable || dllEnabled;
+end
+
+function eveCfg = local_validate_eve_config_local(eveCfg, methodsMain)
+local_require_struct_field_local(eveCfg, "ebN0dBOffset", "eve");
+local_require_struct_field_local(eveCfg, "scrambleAssumption", "eve");
+local_require_struct_field_local(eveCfg, "fhAssumption", "eve");
+local_require_struct_field_local(eveCfg, "chaosAssumption", "eve");
+local_require_struct_field_local(eveCfg, "chaosApproxDelta", "eve");
+local_require_struct_field_local(eveCfg, "rxSync", "eve");
+local_require_struct_field_local(eveCfg, "mitigation", "eve");
+
+if ~isscalar(double(eveCfg.ebN0dBOffset)) || ~isfinite(double(eveCfg.ebN0dBOffset))
+    error("eve.ebN0dBOffset 必须是有限标量。");
+end
+if ~isscalar(double(eveCfg.chaosApproxDelta)) || ~isfinite(double(eveCfg.chaosApproxDelta)) || double(eveCfg.chaosApproxDelta) < 0
+    error("eve.chaosApproxDelta 必须是非负有限标量。");
+end
+if lower(string(eveCfg.chaosAssumption)) == "approximate" && double(eveCfg.chaosApproxDelta) <= 0
+    error("当 eve.chaosAssumption=""approximate"" 时，eve.chaosApproxDelta 必须大于 0。");
+end
+if ~isstruct(eveCfg.rxSync) || ~isscalar(eveCfg.rxSync)
+    error("eve.rxSync 必须是标量struct。");
+end
+if ~isstruct(eveCfg.mitigation) || ~isscalar(eveCfg.mitigation)
+    error("eve.mitigation 必须是标量struct。");
+end
+
+local_require_struct_fields_local(eveCfg.rxSync, [ ...
+    "fineSearchRadius", "compensateCarrier", "equalizeAmplitude", ...
+    "enableFractionalTiming", "fractionalRange", "fractionalStep", ...
+    "estimateCfo", "minCorrPeakToMedian", "minCorrPeakToSecond", ...
+    "corrExclusionRadius", "maxShortSyncMisses", "carrierPll", ...
+    "multipathEq", "timingDll"], "eve.rxSync");
+local_require_struct_fields_local(eveCfg.rxSync.carrierPll, ...
+    ["enable", "alpha", "beta", "maxFreq"], "eve.rxSync.carrierPll");
+local_require_struct_fields_local(eveCfg.rxSync.multipathEq, ...
+    ["enable", "method", "nTaps", "lambdaFactor"], "eve.rxSync.multipathEq");
+local_require_struct_fields_local(eveCfg.rxSync.timingDll, ...
+    ["enable", "earlyLateSpacing", "alpha", "beta", "maxOffset", "decisionDirected"], "eve.rxSync.timingDll");
+
+local_require_struct_fields_local(eveCfg.mitigation, [ ...
+    "methods", "thresholdStrategy", "thresholdAlpha", "thresholdFixed", ...
+    "fftNotch", "adaptiveNotch", "thresholdCalibration", ...
+    "strictModelLoad", "requireTrainedModels", "ml", "mlCnn", "mlGru"], "eve.mitigation");
+local_require_struct_fields_local(eveCfg.mitigation.thresholdCalibration, [ ...
+    "enable", "methods", "targetCleanPfa", "thresholdMinScale", ...
+    "thresholdMaxScale", "minThresholdAbs", "maxThresholdAbs", ...
+    "bufferMaxSamples", "minBufferSamples", "minPreambleTrustedSamples", ...
+    "minPacketTrustedSamples", "preambleUpdateAlpha", "packetUpdateAlpha", ...
+    "preambleResidualAlpha", "packetResidualAlpha"], "eve.mitigation.thresholdCalibration");
+
+methodsEve = string(eveCfg.mitigation.methods(:).');
+if ~isequal(methodsEve, methodsMain)
+    error("eve.mitigation.methods 必须与 p.mitigation.methods 完全一致。");
+end
+end
+
+function local_require_struct_field_local(s, fieldName, ownerName)
+if ~isstruct(s) || ~isfield(s, fieldName)
+    error("%s 缺少字段 %s。", ownerName, fieldName);
+end
+end
+
+function local_require_struct_fields_local(s, fieldNames, ownerName)
+if ~isstruct(s) || ~isscalar(s)
+    error("%s 必须是标量struct。", ownerName);
+end
+for k = 1:numel(fieldNames)
+    if ~isfield(s, fieldNames(k))
+        error("%s 缺少字段 %s。", ownerName, fieldNames(k));
+    end
+end
+end
+
+function summary = local_pack_rx_sync_summary_local(rxSyncCfg)
+summary = struct( ...
+    "fineSearchRadius", double(rxSyncCfg.fineSearchRadius), ...
+    "compensateCarrier", logical(rxSyncCfg.compensateCarrier), ...
+    "equalizeAmplitude", logical(rxSyncCfg.equalizeAmplitude), ...
+    "enableFractionalTiming", logical(rxSyncCfg.enableFractionalTiming), ...
+    "estimateCfo", logical(rxSyncCfg.estimateCfo), ...
+    "maxShortSyncMisses", double(rxSyncCfg.maxShortSyncMisses), ...
+    "carrierPllEnable", logical(rxSyncCfg.carrierPll.enable), ...
+    "multipathEqEnable", logical(rxSyncCfg.multipathEq.enable), ...
+    "timingDllEnable", logical(rxSyncCfg.timingDll.enable));
+end
+
+function summary = local_pack_mitigation_summary_local(mitigationCfg)
+summary = struct( ...
+    "methods", string(mitigationCfg.methods(:).'), ...
+    "thresholdStrategy", string(mitigationCfg.thresholdStrategy), ...
+    "thresholdAlpha", double(mitigationCfg.thresholdAlpha), ...
+    "thresholdFixed", double(mitigationCfg.thresholdFixed), ...
+    "thresholdCalibrationEnable", logical(mitigationCfg.thresholdCalibration.enable), ...
+    "requireTrainedModels", logical(mitigationCfg.requireTrainedModels));
 end

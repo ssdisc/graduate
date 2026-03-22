@@ -301,17 +301,23 @@ p.eve.ebN0dBOffset = -6;
 %   "known"     : 知道扰码密钥（最佳截获情况）
 %   "none"      : 忽略扰码（不解扰）
 %   "wrong_key" : 使用错误的扰码密钥（显示乱码图像）
-p.eve.scrambleAssumption = "wrong_key";
+p.eve.scrambleAssumption = "known";
 % Eve对跳频序列的知识：
 %   "known"     : 知道跳频序列（能正确解跳）
 %   "none"      : 不知道跳频（不解跳，信号严重失真）
 %   "partial"   : 部分知道（使用错误的初始状态）
-p.eve.fhAssumption = "none";
+p.eve.fhAssumption = "partial";
 % Eve对混沌加密的知识：
 %   "known"     : 知道混沌密钥（能正确解密）
+%   "approximate": 只知道混沌初值的近似值（用于展示初值敏感性）
 %   "none"      : 不知道混沌加密（看到加密图像）
 %   "wrong_key" : 使用错误的混沌密钥（解密失败）
-p.eve.chaosAssumption = "none";
+p.eve.chaosAssumption = "known";
+% 当chaosAssumption="approximate"时，Eve对混沌初值施加的固定偏差量。
+p.eve.chaosApproxDelta = 1e-10;
+% Eve使用独立接收机配置；默认复制Bob主链路配置，后续可单独修改。
+p.eve.rxSync = p.rxSync;
+p.eve.mitigation = p.mitigation;
 % 隐蔽/低截获概率支持（监视者检测）
 p.covert = struct();
 p.covert.enable = true;

@@ -46,6 +46,9 @@ s.klSymAtMaxEbN0 = results.kl.symmetric(end);
 
 if isfield(results, "eve")
     s.eveEbN0dB = results.eve.ebN0dB;
+    if isfield(results.eve, "assumptions")
+        s.eveAssumptions = results.eve.assumptions;
+    end
     [commMetricsEve, compMetricsEve] = local_get_image_metrics(results.eve);
     s.eveBerAtMaxEbN0 = results.eve.ber(:, end);
     s.eveMseAtMaxEbN0 = commMetricsEve.mse(:, end);
