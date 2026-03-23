@@ -114,19 +114,7 @@ klNoiseVsSig = nan(1, numel(EbN0dBList)); % KL(P_noise || P_signal)
 klSym = nan(1, numel(EbN0dBList)); % 对称KL
 
 
-example = struct();
-if isfield(p.sim, "exampleEbN0dB") && ~isempty(p.sim.exampleEbN0dB)
-    exampleEbN0 = double(p.sim.exampleEbN0dB);
-    if isfinite(exampleEbN0)
-        [~, exampleIdx] = min(abs(EbN0dBList - exampleEbN0));
-    elseif exampleEbN0 > 0
-        exampleIdx = numel(EbN0dBList);
-    else
-        exampleIdx = 1;
-    end
-else
-    exampleIdx = numel(EbN0dBList);
-end %示例图默认取最高Eb/N0点；设为具体值时取最近点
+example = repmat(struct("EbN0dB", NaN, "methods", struct()), 1, numel(EbN0dBList));
 
 eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
 scrambleAssumptionEve = "";
@@ -154,7 +142,7 @@ if eveEnabled
     mseCompEveVals = nan(numel(methods), numel(EbN0dBList));
     psnrCompEveVals = nan(numel(methods), numel(EbN0dBList));
     ssimCompEveVals = nan(numel(methods), numel(EbN0dBList));
-    exampleEve = struct();
+    exampleEve = repmat(struct("EbN0dB", NaN, "methods", struct()), 1, numel(EbN0dBList));
 
     scrambleAssumptionEve = lower(string(eveCfg.scrambleAssumption));
     switch scrambleAssumptionEve
@@ -363,6 +351,7 @@ for ie = 1:numel(EbN0dBList)
     packetSuccessBobAcc = zeros(numel(methods), 1);
     metricAccComm = init_image_metric_acc_local(numel(methods));
     metricAccComp = init_image_metric_acc_local(numel(methods));
+    exampleCandidates = init_example_candidate_bank_local(numel(methods), p.sim.nFramesPerPoint);
 
 
     if eveEnabled
@@ -373,6 +362,7 @@ for ie = 1:numel(EbN0dBList)
         packetSuccessEveAcc = zeros(numel(methods), 1);
         metricAccCommEve = init_image_metric_acc_local(numel(methods));
         metricAccCompEve = init_image_metric_acc_local(numel(methods));
+        exampleCandidatesEve = init_example_candidate_bank_local(numel(methods), p.sim.nFramesPerPoint);
     end
 
     % --- 帧循环：每个Eb/N0点仿真多帧 ---
@@ -636,7 +626,7 @@ for ie = 1:numel(EbN0dBList)
         if eveEnabled
             EbN0dBEveLocal = EbN0dBEve;
         end
-        captureExample = (frameIdx == 1 && ie == exampleIdx);
+        captureExample = true;
         [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
             methods, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
@@ -644,6 +634,7 @@ for ie = 1:numel(EbN0dBList)
             bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
             eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
             captureExample, EbN0dB, EbN0dBEveLocal, useParallelMethods);
+        exampleCandidates = accumulate_example_candidate_bank_local(exampleCandidates, frameIdx, bobFrame, EbN0dB, "Bob");
 
         nErr = nErr + bobFrame.nErr;
         nTot = nTot + bobFrame.nTot;
@@ -653,12 +644,10 @@ for ie = 1:numel(EbN0dBList)
                 bobFrame.metricsComm.mse(im), bobFrame.metricsComm.psnr(im), bobFrame.metricsComm.ssim(im));
             metricAccComp = accumulate_image_metric_acc_local(metricAccComp, im, ...
                 bobFrame.metricsComp.mse(im), bobFrame.metricsComp.psnr(im), bobFrame.metricsComp.ssim(im));
-            if captureExample && ~isempty(bobFrame.example{im})
-                example.(methods(im)) = bobFrame.example{im};
-            end
         end
 
         if eveEnabled
+            exampleCandidatesEve = accumulate_example_candidate_bank_local(exampleCandidatesEve, frameIdx, eveFrame, EbN0dBEveLocal, "Eve");
             nErrEve = nErrEve + eveFrame.nErr;
             nTotEve = nTotEve + eveFrame.nTot;
             packetSuccessEveAcc = packetSuccessEveAcc + eveFrame.packetSuccessRate;
@@ -667,9 +656,6 @@ for ie = 1:numel(EbN0dBList)
                     eveFrame.metricsComm.mse(im), eveFrame.metricsComm.psnr(im), eveFrame.metricsComm.ssim(im));
                 metricAccCompEve = accumulate_image_metric_acc_local(metricAccCompEve, im, ...
                     eveFrame.metricsComp.mse(im), eveFrame.metricsComp.psnr(im), eveFrame.metricsComp.ssim(im));
-                if captureExample && ~isempty(eveFrame.example{im})
-                    exampleEve.(methods(im)) = eveFrame.example{im};
-                end
             end
         end
     end
@@ -688,6 +674,11 @@ for ie = 1:numel(EbN0dBList)
     mseCompVals(:, ie) = mseOutComp;
     psnrCompVals(:, ie) = psnrOutComp;
     ssimCompVals(:, ie) = ssimOutComp;
+    example(ie) = select_example_point_nearest_mean_local( ...
+        EbN0dB, methods, exampleCandidates, ...
+        struct("mse", mseOutComm, "psnr", psnrOutComm, "ssim", ssimOutComm), ...
+        struct("mse", mseOutComp, "psnr", psnrOutComp, "ssim", ssimOutComp), ...
+        packetConcealActive, "Bob");
 
 
     if eveEnabled
@@ -704,6 +695,11 @@ for ie = 1:numel(EbN0dBList)
         mseCompEveVals(:, ie) = mseOutCompEve;
         psnrCompEveVals(:, ie) = psnrOutCompEve;
         ssimCompEveVals(:, ie) = ssimOutCompEve;
+        exampleEve(ie) = select_example_point_nearest_mean_local( ...
+            EbN0dBEve, methods, exampleCandidatesEve, ...
+            struct("mse", mseOutCommEve, "psnr", psnrOutCommEve, "ssim", ssimOutCommEve), ...
+            struct("mse", mseOutCompEve, "psnr", psnrOutCompEve, "ssim", ssimOutCompEve), ...
+            packetConcealActive, "Eve");
     end
 
     fprintf('[SIM] <<< Eb/N0点 %.2f dB 完成, 用时 %.2fs\n', EbN0dB, toc(pointTic));
@@ -849,6 +845,190 @@ validSsim = acc.nSsim > 0;
 mseOut(validMse) = acc.mse(validMse) ./ acc.nMse(validMse);
 psnrOut(validPsnr) = acc.psnr(validPsnr) ./ acc.nPsnr(validPsnr);
 ssimOut(validSsim) = acc.ssim(validSsim) ./ acc.nSsim(validSsim);
+end
+
+function bank = init_example_candidate_bank_local(nMethods, nFrames)
+bank = struct();
+bank.examples = cell(nMethods, nFrames);
+bank.comm = struct( ...
+    "mse", nan(nMethods, nFrames), ...
+    "psnr", nan(nMethods, nFrames), ...
+    "ssim", nan(nMethods, nFrames));
+bank.comp = struct( ...
+    "mse", nan(nMethods, nFrames), ...
+    "psnr", nan(nMethods, nFrames), ...
+    "ssim", nan(nMethods, nFrames));
+end
+
+function bank = accumulate_example_candidate_bank_local(bank, frameIdx, frameResult, ebN0Val, roleName)
+nMethods = size(bank.examples, 1);
+if numel(frameResult.example) ~= nMethods
+    error("simulate:ExampleCandidateCountMismatch", ...
+        "%s frame example count mismatch at frame %d: expected %d methods, got %d.", ...
+        char(string(roleName)), frameIdx, nMethods, numel(frameResult.example));
+end
+
+bank.comm.mse(:, frameIdx) = frameResult.metricsComm.mse;
+bank.comm.psnr(:, frameIdx) = frameResult.metricsComm.psnr;
+bank.comm.ssim(:, frameIdx) = frameResult.metricsComm.ssim;
+bank.comp.mse(:, frameIdx) = frameResult.metricsComp.mse;
+bank.comp.psnr(:, frameIdx) = frameResult.metricsComp.psnr;
+bank.comp.ssim(:, frameIdx) = frameResult.metricsComp.ssim;
+
+for methodIdx = 1:nMethods
+    exampleEntry = frameResult.example{methodIdx};
+    if isempty(exampleEntry) || ~isstruct(exampleEntry)
+        error("simulate:MissingExampleCandidate", ...
+            "%s example candidate missing at frame %d for method index %d.", ...
+            char(string(roleName)), frameIdx, methodIdx);
+    end
+    exampleEntry.frameIdx = frameIdx;
+    exampleEntry.EbN0dB = ebN0Val;
+    bank.examples{methodIdx, frameIdx} = exampleEntry;
+end
+end
+
+function examplePoint = select_example_point_nearest_mean_local( ...
+    ebN0Val, methods, bank, avgComm, avgComp, packetConcealActive, roleName)
+examplePoint = struct("EbN0dB", ebN0Val, "methods", struct());
+for methodIdx = 1:numel(methods)
+    methodName = char(methods(methodIdx));
+    [exampleEntry, bestFrameIdx, bestDistance] = local_select_nearest_example_candidate_local( ...
+        methodName, bank, avgComm, avgComp, methodIdx, packetConcealActive, roleName);
+    exampleEntry.selectedFrameIdx = bestFrameIdx;
+    exampleEntry.selectionDistanceToMean = bestDistance;
+    exampleEntry.selectionRule = "nearest_mean_metrics";
+    examplePoint.methods.(methodName) = exampleEntry;
+end
+end
+
+function [exampleEntry, bestFrameIdx, bestDistance] = local_select_nearest_example_candidate_local( ...
+    methodName, bank, avgComm, avgComp, methodIdx, packetConcealActive, roleName)
+metricMatrix = [ ...
+    bank.comm.mse(methodIdx, :).', ...
+    bank.comm.psnr(methodIdx, :).', ...
+    bank.comm.ssim(methodIdx, :).'];
+targetVector = [avgComm.mse(methodIdx), avgComm.psnr(methodIdx), avgComm.ssim(methodIdx)];
+if packetConcealActive
+    metricMatrix = [metricMatrix, ...
+        bank.comp.mse(methodIdx, :).', ...
+        bank.comp.psnr(methodIdx, :).', ...
+        bank.comp.ssim(methodIdx, :).'];
+    targetVector = [targetVector, avgComp.mse(methodIdx), avgComp.psnr(methodIdx), avgComp.ssim(methodIdx)];
+end
+
+metricMatrix = local_transform_metric_matrix_local(metricMatrix, methodName, roleName);
+targetVector = local_transform_metric_vector_local(targetVector, methodName, roleName);
+
+hasExample = ~cellfun(@isempty, bank.examples(methodIdx, :));
+if ~any(hasExample)
+    error("simulate:NoExampleCandidates", ...
+        "No %s example candidates collected for method %s at Eb/N0=%.6f dB.", ...
+        char(string(roleName)), methodName, double(ebN0Val_from_bank_local(bank, methodIdx)));
+end
+
+validDims = isfinite(targetVector) & any(isfinite(metricMatrix(hasExample, :)), 1);
+if ~any(validDims)
+    error("simulate:NoComparableMetrics", ...
+        "No comparable metrics available to select the nearest-mean %s example for method %s at Eb/N0=%.6f dB.", ...
+        char(string(roleName)), methodName, double(ebN0Val_from_bank_local(bank, methodIdx)));
+end
+
+targetVector = targetVector(validDims);
+metricMatrix = metricMatrix(:, validDims);
+scales = local_metric_scales_local(metricMatrix(hasExample, :));
+
+distances = inf(1, size(metricMatrix, 1));
+for frameIdx = 1:size(metricMatrix, 1)
+    if ~hasExample(frameIdx)
+        continue;
+    end
+    candidateVector = metricMatrix(frameIdx, :);
+    validNow = isfinite(candidateVector) & isfinite(targetVector);
+    if ~any(validNow)
+        continue;
+    end
+    delta = (candidateVector(validNow) - targetVector(validNow)) ./ scales(validNow);
+    distances(frameIdx) = mean(delta .^ 2);
+end
+
+if ~any(isfinite(distances))
+    error("simulate:ExampleSelectionFailed", ...
+        "Failed to select nearest-mean %s example for method %s at Eb/N0=%.6f dB.", ...
+        char(string(roleName)), methodName, double(ebN0Val_from_bank_local(bank, methodIdx)));
+end
+
+[bestDistance, bestFrameIdx] = min(distances);
+exampleEntry = bank.examples{methodIdx, bestFrameIdx};
+if ~isstruct(exampleEntry)
+    error("simulate:InvalidSelectedExample", ...
+        "Selected %s example for method %s at frame %d is invalid.", ...
+        char(string(roleName)), methodName, bestFrameIdx);
+end
+end
+
+function ebN0Val = ebN0Val_from_bank_local(bank, methodIdx)
+ebN0Val = NaN;
+for frameIdx = 1:size(bank.examples, 2)
+    exampleEntry = bank.examples{methodIdx, frameIdx};
+    if isempty(exampleEntry)
+        continue;
+    end
+    if ~isfield(exampleEntry, "EbN0dB")
+        error("simulate:InvalidExampleCandidate", ...
+            "Example candidate at frame %d is missing EbN0dB.", frameIdx);
+    end
+    ebN0Val = double(exampleEntry.EbN0dB);
+    return;
+end
+end
+
+function values = local_transform_metric_matrix_local(values, methodName, roleName)
+for colIdx = [1, 4]
+    if colIdx > size(values, 2)
+        continue;
+    end
+    for rowIdx = 1:size(values, 1)
+        values(rowIdx, colIdx) = local_transform_mse_metric_local(values(rowIdx, colIdx), methodName, roleName);
+    end
+end
+end
+
+function values = local_transform_metric_vector_local(values, methodName, roleName)
+for colIdx = [1, 4]
+    if colIdx > numel(values)
+        continue;
+    end
+    values(colIdx) = local_transform_mse_metric_local(values(colIdx), methodName, roleName);
+end
+end
+
+function value = local_transform_mse_metric_local(value, methodName, roleName)
+if ~isfinite(value)
+    return;
+end
+if value < 0
+    error("simulate:InvalidMseMetric", ...
+        "%s MSE metric for method %s must be nonnegative, got %.6g.", ...
+        char(string(roleName)), methodName, value);
+end
+value = log10(max(value, eps));
+end
+
+function scales = local_metric_scales_local(values)
+scales = ones(1, size(values, 2));
+for colIdx = 1:size(values, 2)
+    finiteVals = values(isfinite(values(:, colIdx)), colIdx);
+    if numel(finiteVals) >= 2
+        scaleNow = std(finiteVals);
+    else
+        scaleNow = 1;
+    end
+    if ~isfinite(scaleNow) || scaleNow < eps
+        scaleNow = 1;
+    end
+    scales(colIdx) = scaleNow;
+end
 end
 
 function h = empty_phy_header_local()

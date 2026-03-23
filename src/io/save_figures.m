@@ -9,10 +9,10 @@ function save_figures(outDir, imgTx, results)
 %             .imageMetrics.communication/.compensated（或兼容字段.mse/.psnr/.ssim）
 %             .kl（含signalVsNoise/noiseVsSignal/symmetric）
 %             .spectrum（freqHz, psd, bw99Hz, etaBpsHz）
-%             .example（按方法名的动态字段保存示例接收图）
-%                 .<method>.EbN0dB - 示例图对应的Eb/N0（dB）
-%                 .<method>.imgRxComm/.imgRxCompensated - 两种示例接收图像
-%             .eve（可选，含 .example.<method>.EbN0dB/.headerOk/.imgRx）
+%             .example（按Eb/N0点保存示例接收图）
+%                 .example(i).EbN0dB - 第i个Eb/N0点
+%                 .example(i).methods.<method>.imgRxComm/.imgRxCompensated - 该点该方法示例图
+%             .eve（可选，含 .example(i).methods.<method>.headerOk/.imgRx）
 %             .covert.warden（可选）
 %
 % 输出:
@@ -136,14 +136,12 @@ local_apply_line_labels(ax3, ...
 local_export_figure(fig3, fullfile(outDir, "psd.png"), "");
 close(fig3);
 
-% ========== 分开保存每种方法的结果图片 ==========
-% 创建images子目录
+% ========== 按Eb/N0点保存整合图 ==========
 imagesDir = fullfile(outDir, "images");
 if ~exist(imagesDir, 'dir')
     mkdir(imagesDir);
 end
 
-% 1. 保存原始发送图像
 figTx = figure("Name", "TX Image", "Visible", "off");
 imshow(imgTx);
 title("TX (原图)", "FontSize", 14);
@@ -151,265 +149,124 @@ local_export_figure(figTx, fullfile(imagesDir, "00_tx_original.png"), "", 'Resol
 close(figTx);
 
 exampleVariants = local_example_variants(packetConcealActive);
-
-% 2. 为每种方法分别保存通信前/补偿后接收图像
-for k = 1:numel(methods)
-    if isfield(results.example, methods(k))
-        exampleEntry = results.example.(methods(k));
-        [exampleIdx, ebN0Mid] = local_get_example_index(exampleEntry, results.ebN0dB);
-
-        for iv = 1:numel(exampleVariants)
-            variant = exampleVariants(iv);
-            imgVariant = local_get_example_image_variant(exampleEntry, variant.key);
-            if isempty(imgVariant)
-                continue;
-            end
-
-            figRx = figure("Name", sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), "Visible", "off");
-            imshow(imgVariant);
-            title( ...
-                local_example_title_lines( ...
-                    sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), ...
-                    ebN0Mid, ...
-                    local_example_metric_line(variant.key, commMetrics, compMetrics, k, exampleIdx, true)), ...
-                "FontSize", 12);
-
-            filename = sprintf("%02d_rx_%s_%s.png", k, variant.fileTag, lower(strrep(methods(k), " ", "_")));
-            local_export_figure(figRx, fullfile(imagesDir, filename), "", 'Resolution', 200);
-            close(figRx);
-        end
-    end
-end
-
-% 3. 保存TX与各方法RX的对比图（每种方法一张，补偿前后分栏）
-for k = 1:numel(methods)
-    if isfield(results.example, methods(k))
-        figCmp = figure("Name", sprintf("Compare - %s", methods(k)), "Visible", "off");
-        exampleEntry = results.example.(methods(k));
-        [exampleIdx, ebN0Sel] = local_get_example_index(exampleEntry, results.ebN0dB);
-        nTiles = 1 + numel(exampleVariants);
-        figCmp.Position = [100 100 380*nTiles 420];
-
-        tiledlayout(1, nTiles, 'TileSpacing', 'compact', 'Padding', 'compact');
-
-        nexttile;
-        imshow(imgTx);
-        title("TX (原图)", "FontSize", 12);
-
-        for iv = 1:numel(exampleVariants)
-            variant = exampleVariants(iv);
-            nexttile;
-            imgVariant = local_get_example_image_variant(exampleEntry, variant.key);
-            if isempty(imgVariant)
-                text(0.1, 0.5, "No example", "Units", "normalized");
-                axis off;
-                title(sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), "FontSize", 12);
-            else
-                imshow(imgVariant);
-                title( ...
-                    local_example_title_lines( ...
-                        sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), ...
-                        ebN0Sel, ...
-                        local_example_metric_line(variant.key, commMetrics, compMetrics, k, exampleIdx, true)), ...
-                    "FontSize", 12);
-            end
-        end
-
-        filename = sprintf("compare_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
-        local_export_figure(figCmp, fullfile(imagesDir, filename), "", 'Resolution', 200);
-        close(figCmp);
-    end
-end
-
-% 4. 保存所有方法的汇总对比图（通信前/补偿后分别导出）
 nMethods = numel(methods);
-nTotal = nMethods + 1;  % +1 for TX image
-for iv = 1:numel(exampleVariants)
-    variant = exampleVariants(iv);
-    fig4 = figure("Name", sprintf("Images - %s", variant.shortLabel), "Visible", "off");
-    nCols = ceil(nTotal / 2);
-    nRows = 2;
-    if nTotal <= 4
-        nRows = 1;
-        nCols = nTotal;
-    end
-    fig4.Position = [100 100 300*nCols 300*nRows];
-    tiledlayout(nRows, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
-    nexttile;
-    imshow(imgTx);
-    title("TX");
-    for k = 1:numel(methods)
-        nexttile;
-        if isfield(results.example, methods(k))
-            imgVariant = local_get_example_image_variant(results.example.(methods(k)), variant.key);
-            if ~isempty(imgVariant)
-                imshow(imgVariant);
-            else
-                text(0.1, 0.5, "No example", "Units", "normalized");
-                axis off;
+
+for ie = 1:numel(EbN0dB)
+    examplePoint = local_get_example_point(results.example, ie, EbN0dB(ie));
+    fig4 = figure("Name", sprintf("Images @ %.1f dB", EbN0dB(ie)), "Visible", "off");
+    fig4.Position = [100 100 320 * (nMethods + 1) 300 * numel(exampleVariants)];
+    tl4 = tiledlayout(fig4, numel(exampleVariants), nMethods + 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tl4, sprintf("Bob Integrated Images @ Eb/N0=%.1f dB", EbN0dB(ie)));
+
+    for iv = 1:numel(exampleVariants)
+        variant = exampleVariants(iv);
+
+        nexttile(tl4);
+        imshow(imgTx);
+        title(local_example_title_lines( ...
+            sprintf("TX (%s)", variant.shortLabel), ...
+            EbN0dB(ie), ...
+            "Reference image"), "FontSize", 11);
+
+        for k = 1:nMethods
+            exampleEntry = local_get_method_example(examplePoint, methods(k));
+            imgVariant = local_get_example_image_variant(exampleEntry, variant.key);
+            if isempty(imgVariant)
+                error("save_figures:MissingExampleImage", ...
+                    "Missing %s image for method %s at Eb/N0=%.3f dB.", ...
+                    char(variant.key), char(methods(k)), EbN0dB(ie));
             end
-            title(sprintf("RX (%s) - %s", variant.shortLabel, methods(k)));
-        else
-            text(0.1, 0.5, "No example", "Units", "normalized");
-            axis off;
-            title(sprintf("RX (%s) - %s", variant.shortLabel, methods(k)));
+
+            nexttile(tl4);
+            imshow(imgVariant);
+            title(local_example_title_lines( ...
+                sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), ...
+                EbN0dB(ie), ...
+                local_example_metric_line(variant.key, commMetrics, compMetrics, k, ie, true)), ...
+                "FontSize", 10);
         end
     end
-    local_export_figure(fig4, fullfile(outDir, sprintf("images_%s.png", variant.summaryTag)), "", 'Resolution', 150);
-    if variant.key == "communication"
-        local_copy_export_alias(fullfile(outDir, sprintf("images_%s.png", variant.summaryTag)), fullfile(outDir, "images.png"));
-    end
+
+    fileTag = local_snr_file_tag(EbN0dB(ie));
+    local_export_figure(fig4, fullfile(imagesDir, sprintf("snr_%02d_%sdB.png", ie, fileTag)), "", 'Resolution', 170);
     close(fig4);
 end
 
-
 if isfield(results, "eve") && isfield(results.eve, "example")
-    % 创建eve子目录
     eveDir = fullfile(outDir, "images_eve");
     if ~exist(eveDir, 'dir')
         mkdir(eveDir);
     end
-    
-    % 为每种方法单独保存Bob vs Eve对比图
-    for k = 1:numel(methods)
-        if isfield(results.example, methods(k)) && isfield(results.eve.example, methods(k))
-            [exampleIdx, ebN0Bob] = local_get_example_index(results.example.(methods(k)), results.ebN0dB);
-            [~, ebN0Eve] = local_get_example_index(results.eve.example.(methods(k)), results.eve.ebN0dB);
 
-            figEve = figure("Name", sprintf("Bob vs Eve - %s", methods(k)), "Visible", "off");
-            nTiles = 1 + 2 * numel(exampleVariants);
-            figEve.Position = [100 100 330*nTiles 420];
-            tiledlayout(1, nTiles, 'TileSpacing', 'compact', 'Padding', 'compact');
+    for ie = 1:numel(EbN0dB)
+        bobPoint = local_get_example_point(results.example, ie, EbN0dB(ie));
+        evePoint = local_get_example_point(results.eve.example, ie, results.eve.ebN0dB(ie));
 
-            nexttile;
+        fig5 = figure("Name", sprintf("Intercept @ %.1f dB", EbN0dB(ie)), "Visible", "off");
+        nRows = 2 * numel(exampleVariants);
+        fig5.Position = [100 100 320 * (nMethods + 1) 270 * nRows];
+        tl5 = tiledlayout(fig5, nRows, nMethods + 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+        title(tl5, sprintf("Bob vs Eve @ Bob Eb/N0=%.1f dB, Eve Eb/N0=%.1f dB", ...
+            EbN0dB(ie), results.eve.ebN0dB(ie)));
+
+        for iv = 1:numel(exampleVariants)
+            variant = exampleVariants(iv);
+
+            nexttile(tl5);
             imshow(imgTx);
-            title("TX (原图)", "FontSize", 12);
+            title(local_example_title_lines( ...
+                sprintf("TX / Bob (%s)", variant.shortLabel), ...
+                EbN0dB(ie), ...
+                "Reference image"), "FontSize", 11);
 
-            for iv = 1:numel(exampleVariants)
-                variant = exampleVariants(iv);
-                nexttile;
-                imgBobVariant = local_get_example_image_variant(results.example.(methods(k)), variant.key);
+            for k = 1:nMethods
+                bobEntry = local_get_method_example(bobPoint, methods(k));
+                imgBobVariant = local_get_example_image_variant(bobEntry, variant.key);
                 if isempty(imgBobVariant)
-                    text(0.1, 0.5, "No example", "Units", "normalized");
-                    axis off;
-                    title(sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)), "FontSize", 12);
-                else
-                    imshow(imgBobVariant);
-                    title( ...
-                        local_example_title_lines( ...
-                            sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)), ...
-                            ebN0Bob, ...
-                            local_example_metric_line(variant.key, commMetrics, compMetrics, k, exampleIdx, false)), ...
-                        "FontSize", 12);
+                    error("save_figures:MissingExampleImage", ...
+                        "Missing Bob %s image for method %s at Eb/N0=%.3f dB.", ...
+                        char(variant.key), char(methods(k)), EbN0dB(ie));
                 end
+
+                nexttile(tl5);
+                imshow(imgBobVariant);
+                title(local_example_title_lines( ...
+                    sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)), ...
+                    EbN0dB(ie), ...
+                    local_example_metric_line(variant.key, commMetrics, compMetrics, k, ie, false)), ...
+                    "FontSize", 10);
             end
 
-            hdrTxt = "";
-            if isfield(results.eve.example.(methods(k)), "headerOk")
-                if results.eve.example.(methods(k)).headerOk
-                    hdrTxt = " (hdr ok)";
-                else
-                    hdrTxt = " (hdr fail)";
-                end
-            end
+            nexttile(tl5);
+            eveInfoLines = { ...
+                char(sprintf("Eve (%s)", variant.shortLabel)); ...
+                char(sprintf("Eb/N0=%.1f dB", results.eve.ebN0dB(ie))); ...
+                "Intercept view"};
+            text(0.05, 0.5, eveInfoLines, "Units", "normalized", "Interpreter", "none", "FontSize", 11);
+            axis off;
+            title("Eve");
 
-            for iv = 1:numel(exampleVariants)
-                variant = exampleVariants(iv);
-                nexttile;
-                imgEveVariant = local_get_example_image_variant(results.eve.example.(methods(k)), variant.key);
+            for k = 1:nMethods
+                eveEntry = local_get_method_example(evePoint, methods(k));
+                imgEveVariant = local_get_example_image_variant(eveEntry, variant.key);
                 if isempty(imgEveVariant)
-                    text(0.1, 0.5, "No example", "Units", "normalized");
-                    axis off;
-                    title(sprintf("Eve (%s) - %s%s", variant.shortLabel, methods(k), hdrTxt), "FontSize", 12);
-                else
-                    imshow(imgEveVariant);
-                    title( ...
-                        local_example_title_lines( ...
-                            sprintf("Eve (%s) - %s%s", variant.shortLabel, methods(k), hdrTxt), ...
-                            ebN0Eve, ...
-                            local_example_metric_line(variant.key, commMetricsEve, compMetricsEve, k, exampleIdx, false)), ...
-                        "FontSize", 12);
+                    error("save_figures:MissingExampleImage", ...
+                        "Missing Eve %s image for method %s at Eb/N0=%.3f dB.", ...
+                        char(variant.key), char(methods(k)), results.eve.ebN0dB(ie));
                 end
-            end
 
-            filename = sprintf("bob_vs_eve_%02d_%s.png", k, lower(strrep(methods(k), " ", "_")));
-            local_export_figure(figEve, fullfile(eveDir, filename), "", 'Resolution', 200);
-            close(figEve);
-        end
-    end
-    
-    % 保存汇总对比图（通信前/补偿后分别导出）
-    for iv = 1:numel(exampleVariants)
-        variant = exampleVariants(iv);
-        fig5 = figure("Name", sprintf("Intercept - %s", variant.shortLabel), "Visible", "off");
-        nCols = numel(methods) + 1;
-        fig5.Position = [100 100 200*nCols 400];
-        tiledlayout(2, nCols, 'TileSpacing', 'compact', 'Padding', 'compact');
-
-        nexttile;
-        imshow(imgTx);
-        title("TX");
-        for k = 1:numel(methods)
-            nexttile;
-            if isfield(results.example, methods(k))
-                imgVariant = local_get_example_image_variant(results.example.(methods(k)), variant.key);
-                if ~isempty(imgVariant)
-                    imshow(imgVariant);
-                else
-                    text(0.1, 0.5, "No example", "Units", "normalized");
-                    axis off;
-                end
-                title(sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)));
-            else
-                text(0.1, 0.5, "No example", "Units", "normalized");
-                axis off;
-                title(sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)));
+                nexttile(tl5);
+                imshow(imgEveVariant);
+                title(local_example_title_lines( ...
+                    sprintf("Eve (%s) - %s%s", variant.shortLabel, methods(k), local_example_header_status(eveEntry)), ...
+                    results.eve.ebN0dB(ie), ...
+                    local_example_metric_line(variant.key, commMetricsEve, compMetricsEve, k, ie, false)), ...
+                    "FontSize", 10);
             end
         end
 
-        nexttile;
-        if isfield(results.eve.example, methods(1)) && isfield(results.eve.example.(methods(1)), "EbN0dB")
-            txt = {'Eve (intercept)', sprintf("Eb/N0=%.1f dB", results.eve.example.(methods(1)).EbN0dB)};
-        else
-            txt = {'Eve (intercept)'};
-        end
-        text(0.05, 0.5, txt, "Units", "normalized", "Interpreter", "none");
-        axis off;
-        title("Eve");
-
-        for k = 1:numel(methods)
-            nexttile;
-            if isfield(results.eve.example, methods(k))
-                imgVariant = local_get_example_image_variant(results.eve.example.(methods(k)), variant.key);
-                if ~isempty(imgVariant)
-                    imshow(imgVariant);
-                else
-                    text(0.1, 0.5, "No example", "Units", "normalized");
-                    axis off;
-                end
-                hdrTxt = "";
-                if isfield(results.eve.example.(methods(k)), "headerOk")
-                    if results.eve.example.(methods(k)).headerOk
-                        hdrTxt = "hdr ok";
-                    else
-                        hdrTxt = "hdr fail";
-                    end
-                end
-                if strlength(hdrTxt) > 0
-                    title(sprintf("Eve (%s) - %s (%s)", variant.shortLabel, methods(k), hdrTxt));
-                else
-                    title(sprintf("Eve (%s) - %s", variant.shortLabel, methods(k)));
-                end
-            else
-                text(0.1, 0.5, "No example", "Units", "normalized");
-                axis off;
-                title(sprintf("Eve (%s) - %s", variant.shortLabel, methods(k)));
-            end
-        end
-        local_export_figure(fig5, fullfile(outDir, sprintf("intercept_%s.png", variant.summaryTag)), "", 'Resolution', 150);
-        if variant.key == "communication"
-            local_copy_export_alias(fullfile(outDir, sprintf("intercept_%s.png", variant.summaryTag)), fullfile(outDir, "intercept.png"));
-        end
+        fileTag = local_snr_file_tag(EbN0dB(ie));
+        local_export_figure(fig5, fullfile(eveDir, sprintf("snr_%02d_%sdB.png", ie, fileTag)), "", 'Resolution', 170);
         close(fig5);
     end
 end
@@ -722,26 +579,68 @@ end
 function variants = local_example_variants(packetConcealActive)
 variants = struct( ...
     "key", "communication", ...
-    "shortLabel", "Comm", ...
-    "fileTag", "comm", ...
-    "summaryTag", "comm");
+    "shortLabel", "Comm");
 if packetConcealActive
     variants(2) = struct( ...
         "key", "compensated", ...
-        "shortLabel", "Comp", ...
-        "fileTag", "comp", ...
-        "summaryTag", "compensated");
+        "shortLabel", "Comp");
 end
 end
 
-function [exampleIdx, ebN0Sel] = local_get_example_index(exampleEntry, ebN0List)
-if isfield(exampleEntry, "EbN0dB")
-    ebN0Sel = double(exampleEntry.EbN0dB);
-    [~, exampleIdx] = min(abs(ebN0List - ebN0Sel));
-else
-    exampleIdx = numel(ebN0List);
-    ebN0Sel = ebN0List(exampleIdx);
+function examplePoint = local_get_example_point(examplePoints, pointIdx, expectedEbN0)
+if ~isstruct(examplePoints) || numel(examplePoints) < pointIdx
+    error("save_figures:InvalidExamplePoints", ...
+        "results.example must be a struct array with one entry per Eb/N0 point.");
 end
+
+examplePoint = examplePoints(pointIdx);
+if ~isfield(examplePoint, "methods") || ~isstruct(examplePoint.methods)
+    error("save_figures:InvalidExamplePoint", ...
+        "results.example(%d) must contain a struct field named methods.", pointIdx);
+end
+
+if ~isfield(examplePoint, "EbN0dB") || ~isfinite(double(examplePoint.EbN0dB))
+    error("save_figures:InvalidExamplePoint", ...
+        "results.example(%d).EbN0dB must be a finite scalar.", pointIdx);
+end
+
+if abs(double(examplePoint.EbN0dB) - double(expectedEbN0)) > 1e-9
+    error("save_figures:ExampleEbN0Mismatch", ...
+        "results.example(%d).EbN0dB=%.6f does not match expected Eb/N0 %.6f.", ...
+        pointIdx, double(examplePoint.EbN0dB), double(expectedEbN0));
+end
+end
+
+function exampleEntry = local_get_method_example(examplePoint, methodName)
+methodName = char(string(methodName));
+if ~isfield(examplePoint.methods, methodName)
+    error("save_figures:MissingMethodExample", ...
+        "Missing example entry for method %s at Eb/N0=%.6f dB.", ...
+        methodName, double(examplePoint.EbN0dB));
+end
+exampleEntry = examplePoint.methods.(methodName);
+if ~isstruct(exampleEntry)
+    error("save_figures:InvalidMethodExample", ...
+        "Example entry for method %s at Eb/N0=%.6f dB must be a struct.", ...
+        methodName, double(examplePoint.EbN0dB));
+end
+end
+
+function statusTxt = local_example_header_status(exampleEntry)
+statusTxt = "";
+if isfield(exampleEntry, "headerOk")
+    if logical(exampleEntry.headerOk)
+        statusTxt = " (hdr ok)";
+    else
+        statusTxt = " (hdr fail)";
+    end
+end
+end
+
+function tag = local_snr_file_tag(ebN0Val)
+tag = char(string(sprintf("%.1f", double(ebN0Val))));
+tag = strrep(tag, "-", "neg");
+tag = strrep(tag, ".", "p");
 end
 
 function img = local_get_example_image_variant(exampleEntry, variantKey)
@@ -780,7 +679,7 @@ switch variantKey
 end
 end
 
-function txt = local_example_metric_line(variantKey, commMetrics, compMetrics, methodIdx, exampleIdx, includeSsim)
+function txt = local_example_metric_line(variantKey, commMetrics, compMetrics, methodIdx, snrIdx, includeSsim)
 if nargin < 6
     includeSsim = true;
 end
@@ -789,16 +688,16 @@ switch lower(string(variantKey))
     case "communication"
         txt = local_metric_line( ...
             "Comm", ...
-            commMetrics.mse(methodIdx, exampleIdx), ...
-            commMetrics.psnr(methodIdx, exampleIdx), ...
-            commMetrics.ssim(methodIdx, exampleIdx), ...
+            commMetrics.mse(methodIdx, snrIdx), ...
+            commMetrics.psnr(methodIdx, snrIdx), ...
+            commMetrics.ssim(methodIdx, snrIdx), ...
             includeSsim);
     case "compensated"
         txt = local_metric_line( ...
             "Comp", ...
-            compMetrics.mse(methodIdx, exampleIdx), ...
-            compMetrics.psnr(methodIdx, exampleIdx), ...
-            compMetrics.ssim(methodIdx, exampleIdx), ...
+            compMetrics.mse(methodIdx, snrIdx), ...
+            compMetrics.psnr(methodIdx, snrIdx), ...
+            compMetrics.ssim(methodIdx, snrIdx), ...
             includeSsim);
     otherwise
         error("save_figures:InvalidExampleVariant", ...
@@ -809,7 +708,7 @@ end
 function titleLines = local_example_title_lines(nameLine, ebN0Val, metricLine)
 titleLines = { ...
     char(string(nameLine)); ...
-    sprintf("Eb/N0=%.0fdB", ebN0Val); ...
+    sprintf("Eb/N0=%.1f dB", ebN0Val); ...
     char(string(metricLine))};
 end
 

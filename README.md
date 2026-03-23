@@ -597,8 +597,9 @@ p.frame.sessionStrongRepeat = 8;
 - `psnr.png`
 - `kl.png`
 - `psd.png`
-- `images.png`
-- `intercept.png`
+- `images/00_tx_original.png`
+- `images/snr_01_*.png`
+- `images_eve/snr_01_*.png`（启用 Eve 时）
 - `ber_eve.png`
 - `mse_eve.png`
 - `psnr_eve.png`

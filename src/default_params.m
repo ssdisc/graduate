@@ -18,7 +18,6 @@ p.sim.ebN0dBList = -2:2:16;
 p.sim.nFramesPerPoint = 5;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
-p.sim.exampleEbN0dB = inf; % 示例图默认取最高Eb/N0；设为具体值时取最近点
 % 并行加速（主链路）：需要 Parallel Computing Toolbox
 p.sim.useParallel = true;
 p.sim.nWorkers = 16;
