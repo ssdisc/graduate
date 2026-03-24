@@ -281,10 +281,20 @@ if isfield(results, "covert") && isfield(results.covert, "warden")
     if isfield(w, "layers") && isfield(w.layers, "energyNp")
         np = w.layers.energyNp;
         wardenValues = [np.pd(:).'; np.pfa(:).'; np.pe(:).'; np.xi(:).'];
+        wardenStyles = [ ...
+            local_get_warden_series_style("pd"), ...
+            local_get_warden_series_style("pfa"), ...
+            local_get_warden_series_style("pe"), ...
+            local_get_warden_series_style("xi")];
     else
         wardenValues = [w.pdEst(:).'; w.pfaEst(:).'; w.peEst(:).'];
+        wardenStyles = [ ...
+            local_get_warden_series_style("pd"), ...
+            local_get_warden_series_style("pfa"), ...
+            local_get_warden_series_style("pe")];
     end
-    local_plot_series_matrix(ax6a, x, wardenValues, "linear");
+    h6a = local_plot_series_matrix(ax6a, x, wardenValues, "linear");
+    local_apply_series_styles(h6a, wardenStyles, true);
     local_apply_line_labels(ax6a, ...
         xlab, ...
         "Probability", ...
@@ -298,21 +308,30 @@ if isfield(results, "covert") && isfield(results.covert, "warden")
     ax6b = nexttile(tl6);
     covertValues = [];
     covertLabels = strings(1, 0);
+    covertStyles = struct("Color", {}, "LineStyle", {}, "Marker", {});
     if isfield(w, "layers") && isfield(w.layers, "energyOpt")
         covertValues = [covertValues; w.layers.energyOpt.xi(:).'; w.layers.energyOpt.pe(:).'];
         covertLabels = [covertLabels, "\xi^* (opt)", "P_e^* (opt)"];
+        covertStyles(end + 1) = local_get_warden_series_style("xiIdeal");
+        covertStyles(end + 1) = local_get_warden_series_style("peIdeal");
     end
     if isfield(w, "layers") && isfield(w.layers, "energyOptUncertain")
         covertValues = [covertValues; ...
             w.layers.energyOptUncertain.xi(:).'; ...
             w.layers.energyOptUncertain.pe(:).'];
         covertLabels = [covertLabels, "\xi^* (opt+uncert.)", "P_e^* (opt+uncert.)"];
+        covertStyles(end + 1) = local_get_warden_series_style("xi");
+        covertStyles(end + 1) = local_get_warden_series_style("pe");
     end
     if isempty(covertValues)
         covertValues = [w.xiEst(:).'; w.peEst(:).'];
         covertLabels = ["\xi", "P_e"];
+        covertStyles = [ ...
+            local_get_warden_series_style("xi"), ...
+            local_get_warden_series_style("pe")];
     end
-    local_plot_series_matrix(ax6b, x, covertValues, "linear");
+    h6b = local_plot_series_matrix(ax6b, x, covertValues, "linear");
+    local_apply_series_styles(h6b, covertStyles, true);
     local_apply_line_labels(ax6b, ...
         xlab, ...
         "Covert metric", ...
@@ -346,7 +365,7 @@ if ~ok
 end
 end
 
-function local_plot_series_matrix(ax, x, values, scaleMode, useDiscreteXAxis, showMarkers)
+function hLines = local_plot_series_matrix(ax, x, values, scaleMode, useDiscreteXAxis, showMarkers)
 if nargin < 5
     useDiscreteXAxis = true;
 end
@@ -359,6 +378,7 @@ isLogY = string(scaleMode) == "logy";
 if isLogY
     ax.YScale = "log";
 end
+hLines = gobjects(1, size(values, 1));
 hold(ax, "on");
 for idx = 1:size(values, 1)
     style = local_pick_series_style(idx);
@@ -367,6 +387,7 @@ for idx = 1:size(values, 1)
         y(y <= 0) = NaN;
     end
     h = plot(ax, x, y);
+    hLines(idx) = h;
     local_apply_series_style(h, style, showMarkers);
 end
 hold(ax, "off");
@@ -526,6 +547,17 @@ else
 end
 end
 
+function local_apply_series_styles(handles, styles, showMarkers)
+if numel(handles) ~= numel(styles)
+    error("save_figures:SeriesStyleCountMismatch", ...
+        "Expected %d styles, but received %d handles.", numel(styles), numel(handles));
+end
+
+for idx = 1:numel(handles)
+    local_apply_series_style(handles(idx), styles(idx), showMarkers);
+end
+end
+
 function style = local_pick_series_style(index)
 styles = local_series_styles();
 if index > numel(styles)
@@ -543,6 +575,27 @@ styles = struct( ...
               [86 180 233] / 255, [240 228 66] / 255}, ...
     "LineStyle", {"-", ":", "-.", "--", ":", "--", "-.", "-"}, ...
     "Marker", {"s", "o", "v", "^", "d", "p", "x", "h"});
+end
+
+function style = local_get_warden_series_style(seriesName)
+seriesName = lower(string(seriesName));
+switch seriesName
+    case "pd"
+        style = struct("Color", [213 94 0] / 255, "LineStyle", "-", "Marker", "s");
+    case "pfa"
+        style = struct("Color", [153 153 153] / 255, "LineStyle", "-", "Marker", "o");
+    case "pe"
+        style = struct("Color", [230 159 0] / 255, "LineStyle", "-", "Marker", "v");
+    case "peideal"
+        style = struct("Color", [230 159 0] / 255, "LineStyle", "--", "Marker", "v");
+    case "xi"
+        style = struct("Color", [0 158 115] / 255, "LineStyle", "-", "Marker", "^");
+    case "xiideal"
+        style = struct("Color", [0 158 115] / 255, "LineStyle", "--", "Marker", "^");
+    otherwise
+        error("save_figures:UnsupportedWardenSeriesStyle", ...
+            "Unsupported Warden series style name: %s", char(seriesName));
+end
 end
 
 function [commMetrics, compMetrics] = local_get_image_metrics(results)
