@@ -128,6 +128,15 @@ run_demo
 - 如缺失则自动训练并保存
 - 然后运行完整主链路仿真
 
+如果你要做中期答辩现场演示，建议直接跑：
+
+```matlab
+addpath(genpath('src'));
+run_demo("midterm")
+```
+
+`"midterm"` 预设会关闭 Eve / Warden、关闭并行池、缩成单个 `Eb/N0` 点和单帧演示，并只保留 `none + blanking + ml_blanking` 三种方法；同时只导出 `results.mat`、一张 BER 快图和一张图像对比图，优先保证现场启动和出结果速度。
+
 ### 2. 直接调用 `simulate`
 
 ```matlab
