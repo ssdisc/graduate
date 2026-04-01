@@ -6,7 +6,7 @@ function s = make_summary(results)
 %             .methods, .ebN0dB, .ber
 %             .imageMetrics.communication/.compensated（或兼容字段.mse/.psnr/.ssim）
 %             .kl（含signalVsNoise/noiseVsSignal/symmetric）
-%             .spectrum（含bw99Hz, etaBpsHz）
+%             .spectrum（含bw99Hz, etaBpsHz）, .tx（可选）, .linkBudget（可选）
 %             .eve（可选）, .covert.warden（可选）
 %
 % 输出:
@@ -43,6 +43,20 @@ if isfield(results, "packetDiagnostics") && isfield(results.packetDiagnostics, "
     end
 end
 s.klSymAtMaxEbN0 = results.kl.symmetric(end);
+if isfield(results, "tx")
+    s.txConstraintEnabled = logical(results.tx.enabled);
+    s.txBurstDurationSec = results.tx.burstDurationSec;
+    s.txAveragePowerLin = results.tx.averagePowerLin;
+    s.txMaxBurstDurationSec = results.tx.maxBurstDurationSec;
+    s.txMaxAveragePowerLin = results.tx.maxAveragePowerLin;
+end
+if isfield(results, "linkBudget")
+    s.linkBudgetTxPowerLin = results.linkBudget.txPowerLin;
+    s.linkBudgetTxPowerDb = results.linkBudget.txPowerDb;
+    if isfield(results.linkBudget, "bob") && isfield(results.linkBudget.bob, "linkGainDb")
+        s.linkBudgetBobLinkGainDb = results.linkBudget.bob.linkGainDb;
+    end
+end
 
 if isfield(results, "eve")
     s.eveEbN0dB = results.eve.ebN0dB;

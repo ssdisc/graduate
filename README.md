@@ -27,10 +27,12 @@
 | 调制 | `QPSK` |
 | 跳频 | 启用，默认 `chaos` 序列，`8` 个频点，每跳 `64` 符号 |
 | 波形成型 | 启用 `RRC`，`sps=4`，`rolloff=0.25` |
+| 链路预算 | 纯仿真链路预算：`txPowerLin=1`，`linkGainDbList=-2:2:16`，`noisePsdLin=1` |
+| 发射约束 | 默认启用：`burst <= 21 s`，`avg power <= 1.05`（按 `1 sps` 等效功率口径） |
 | 同步 | 默认每个分包成帧时都使用长 `PN` 前导重同步 |
 | PHY头 | 默认 `compact_fec` |
 | Session 元数据 | 默认 `session_frame_repeat`，即先发送 3 次 dedicated session frame，再发送数据帧 |
-| Eve | 默认启用，`Eb/N0` 比 Bob 低 `6 dB`，默认场景是 `scramble=known`、`fh=partial`、`chaos=known` |
+| Eve | 默认启用，链路增益比 Bob 低 `6 dB`，默认场景是 `scramble=known`、`fh=partial`、`chaos=known` |
 | Warden | 默认启用，主判据为 `energyOptUncertain` |
 
 ## 术语约定
@@ -135,7 +137,9 @@ addpath(genpath('src'));
 run_demo("midterm")
 ```
 
-`"midterm"` 预设会关闭 Eve / Warden、关闭并行池、缩成单个 `Eb/N0` 点和单帧演示，并只保留 `none + blanking + ml_blanking` 三种方法；同时只导出 `results.mat`、一张 BER 快图和一张图像对比图，优先保证现场启动和出结果速度。
+`"midterm"` 预设会关闭 Eve / Warden、关闭并行池、缩成单个链路预算点和单帧演示，并只保留 `none + blanking + ml_blanking` 三种方法；同时只导出 `results.mat`、一张 BER 快图和一张图像对比图，优先保证现场启动和出结果速度。
+
+无论是完整结果保存还是 `midterm` 轻量导出，当前都会额外导出一组论文友好的 CSV 表格，便于后续画图和整理表格。
 
 ### 2. 直接调用 `simulate`
 
@@ -495,7 +499,7 @@ embedded_each_frame:                           [sessionHeader | payload]
 `src/default_params.m` 当前默认是：
 
 ```matlab
-p.eve.ebN0dBOffset = -6;
+p.eve.linkGainOffsetDb = -6;
 p.eve.scrambleAssumption = "known";
 p.eve.fhAssumption = "partial";
 p.eve.chaosAssumption = "known";
@@ -574,8 +578,8 @@ p.frame.sessionStrongRepeat = 8;
 
 | 参数 | 作用 |
 |------|------|
-| `p.sim.ebN0dBList` | Bob 的 Eb/N0 扫描范围 |
-| `p.sim.nFramesPerPoint` | 每个 Eb/N0 点的帧数 |
+| `p.linkBudget.*` | 纯仿真链路预算：发射功率、链路增益扫描、噪声 PSD |
+| `p.sim.nFramesPerPoint` | 每个链路预算点的帧数 |
 | `p.sim.useParallel` | 主链路是否并行 |
 | `p.source.*` | 图像路径、缩放、灰度化 |
 | `p.payload.*` | `raw` / `dct` 载荷格式 |
@@ -588,6 +592,7 @@ p.frame.sessionStrongRepeat = 8;
 | `p.mod.*` | `BPSK` / `QPSK` / `MSK` |
 | `p.fh.*` | 跳频序列类型、频点数、每跳长度 |
 | `p.waveform.*` | `RRC` 成型与采样率 |
+| `p.txConstraint.*` | 发射时间 / 发射功率约束，超限直接报错 |
 | `p.channel.*` | 脉冲干扰、多径、同步失配、窄带/扫频干扰 |
 | `p.rxSync.*` | 细同步、CFO、PLL、多径均衡、DLL |
 | `p.mitigation.*` | 脉冲抑制与 ML 阈值校准 |
@@ -601,6 +606,11 @@ p.frame.sessionStrongRepeat = 8;
 常见输出文件包括：
 
 - `results.mat`
+- `run_summary.csv`
+- `points_overview.csv`
+- `metrics_bob.csv`
+- `metrics_eve.csv`（启用 Eve 时）
+- `warden_layers.csv`（启用 Warden 时）
 - `ber.png`
 - `mse.png`
 - `psnr.png`
@@ -631,8 +641,33 @@ save(fullfile(outDir, "results.mat"), "-struct", "results");
 - `ber`
 - `imageMetrics`
 - `packetDiagnostics`
+- `tx`
+- `linkBudget`
 - `eve`
 - `covert`
+
+### 论文表格导出
+
+当前保存结果时会自动调用：
+
+```matlab
+export_thesis_tables(outDir, results);
+```
+
+如果你已经有一个旧的 `results.mat`，也可以单独手动导出：
+
+```matlab
+s = load('results/matlab_20260331_112528/results.mat');
+export_thesis_tables('results/matlab_20260331_112528', s);
+```
+
+CSV 含义如下：
+
+- `run_summary.csv`：单次运行的总配置与总指标
+- `points_overview.csv`：每个链路预算点的 Bob/Eve/Warden 工作点与 KL 指标
+- `metrics_bob.csv`：Bob 侧按“方法-工作点”展开的 BER、包成功率、MSE/PSNR/SSIM
+- `metrics_eve.csv`：Eve 侧按“方法-工作点”展开的同类指标
+- `warden_layers.csv`：Warden 各检测层在每个工作点的 `Pd/Pfa/Pmd/Pe/Xi`
 - `spectrum`
 - `kl`
 
@@ -679,6 +714,7 @@ graduate/
 
 - 当前代码对关键配置缺失是直接报错，不做回退兼容。
 - `default_params()` 默认要求训练好的 ML 模型存在；最省心的入口仍然是 `run_demo`。
+- 默认启用发射端约束；若整段 burst 发射时间超过 `21 s` 或等效平均功率超过 `1.05`，仿真会直接报错。
 - 默认 `sessionHeaderMode = "session_frame_repeat"`，表示会话元信息先以 dedicated session frame 连续突发 3 次再发送数据帧；如果你只想评估主链路而不想让会话层占用空口，可以改成 `preshared`。
 - 默认 `resyncIntervalPackets = 1`，因此当前主线其实是“每个分包独立成帧且使用长前导”方案，短同步字还不是默认主路径。
 - Eve 如果自定义接收机配置，`p.eve.rxSync` 和 `p.eve.mitigation` 需要是完整结构体，并且 `p.eve.mitigation.methods` 必须与主链路完全一致。

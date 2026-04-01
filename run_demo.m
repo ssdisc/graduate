@@ -27,7 +27,9 @@ fprintf('========================================\n');
 fprintf('Demo preset: %s\n', upper(char(mode)));
 fprintf('========================================\n');
 fprintf('Methods: %s\n', strjoin(cellstr(p.mitigation.methods), ', '));
-fprintf('Eb/N0 points: %s\n', mat2str(double(p.sim.ebN0dBList)));
+fprintf('Link gain points: %s dB\n', mat2str(double(p.linkBudget.linkGainDbList)));
+fprintf('Tx power: %.2f dB, Noise PSD: %.4g\n', ...
+    10 * log10(double(p.linkBudget.txPowerLin)), double(p.linkBudget.noisePsdLin));
 fprintf('Frames per point: %d\n', p.sim.nFramesPerPoint);
 fprintf('Parallel: %s\n', local_on_off_text(p.sim.useParallel));
 fprintf('Eve: %s, Warden: %s\n\n', ...
@@ -170,7 +172,7 @@ switch lower(string(mode))
     case "full"
         return;
     case "midterm"
-        p.sim.ebN0dBList = 6;
+        p.linkBudget.linkGainDbList = 6;
         p.sim.nFramesPerPoint = 1;
         p.sim.saveFigures = false;
         p.sim.useParallel = false;
@@ -213,6 +215,7 @@ fprintf('[RUN_DEMO] Saving lightweight midterm outputs...\n');
 
 outDir = make_results_dir(p.sim.resultsDir);
 save(fullfile(outDir, "results.mat"), "-struct", "results");
+export_thesis_tables(outDir, results);
 
 imgTx = load_source_image(p.source);
 imagesDir = fullfile(outDir, "images");

@@ -15,7 +15,6 @@ p.rngSeed = 1;
 
 %% 仿真控制
 p.sim = struct();
-p.sim.ebN0dBList = -2:2:16;
 p.sim.nFramesPerPoint = 5;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
@@ -23,6 +22,15 @@ p.sim.resultsDir = fullfile(pwd, "results");
 p.sim.useParallel = true;
 p.sim.nWorkers = 16;
 p.sim.parallelMode = "methods"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
+
+% 链路预算（纯仿真口径）
+p.linkBudget = struct();
+% 发射平均功率口径与txConstraint一致：按等效1 sps复基带均方功率统计。
+p.linkBudget.txPowerLin = 1.0;
+% 净链路增益（dB）= 发射端到接收端的总增益 - 总损耗；纯仿真下允许正值。
+p.linkBudget.linkGainDbList = -2:2:16;
+% 接收端背景噪声功率谱密度（线性值，纯仿真归一化口径）。
+p.linkBudget.noisePsdLin = 1.0;
 
 %% 发送端（TX）
 % 1) 图像源
@@ -147,6 +155,13 @@ p.waveform.sps = 4;              % 每符号采样数
 p.waveform.rolloff = 0.25;       % RRC滚降系数
 p.waveform.spanSymbols = 10;     % RRC滤波器长度（单位：符号）
 p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
+
+% 9.6) 发射端资源约束（赛道一）
+p.txConstraint = struct();
+p.txConstraint.enable = true;
+p.txConstraint.maxBurstDurationSec = 21.0; % 当前默认整段burst约20.09 s；超限直接报错
+% 发射功率按“等效1 sps复基带均方功率”统计，避免RRC过采样把功率数值稀释。
+p.txConstraint.maxAveragePowerLin = 1.05;
 
 %% 信道
 % 对外配置口径：
@@ -317,8 +332,8 @@ p.rxSync.timingDll.decisionDirected = true;
 % 窃听者/截获者（Eve）
 p.eve = struct();
 p.eve.enable = true;
-% Eve Eb/N0 = Bob Eb/N0 + 偏移(dB)。负值表示Eve信道更差。
-p.eve.ebN0dBOffset = -6;
+% Eve链路增益 = Bob链路增益 + 偏移(dB)。负值表示Eve接收更差。
+p.eve.linkGainOffsetDb = -6;
 % Eve接收机知识模型：
 %   "known"     : 知道扰码密钥（最佳截获情况）
 %   "none"      : 忽略扰码（不解扰）
@@ -356,7 +371,7 @@ p.covert.warden.nTrials = 2000; % 蒙特卡洛试验次数
 p.covert.warden.useParallel = true; % 是否使用并行池加速Warden蒙特卡洛
 p.covert.warden.nWorkers = 16;      % 并行worker数（useParallel=true时）
 p.covert.warden.referenceLink = "independent"; % "bob" | "eve" | "independent"
-p.covert.warden.ebN0dBOffset = -10; % referenceLink="independent"时，Warden相对Bob的Eb/N0偏移(dB)
+p.covert.warden.linkGainOffsetDb = -10; % referenceLink="independent"时，Warden相对Bob的链路增益偏移(dB)
 p.covert.warden.primaryLayer = "energyOptUncertain"; % 摘要/主判据默认采用的Warden层
 p.covert.warden.noiseUncertaintyDb = 1.0; % 第三层：Warden噪声不确定性半宽（±dB）
 p.covert.warden.extraDelaySamples = 4096; % 第三层：额外起始时刻不确定性窗口（采样点）

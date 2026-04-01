@@ -3,7 +3,7 @@ function results = simulate(p)
 %
 % 输入:
 %   p - 仿真参数结构体（建议由default_params()生成）
-%       .rngSeed, .sim, .source, .chaosEncrypt, .payload, .waveform
+%       .rngSeed, .sim, .source, .chaosEncrypt, .payload, .waveform, .txConstraint, .linkBudget
 %       .frame, .scramble, .fec, .interleaver, .mod, .fh
 %       .channel, .mitigation, .softMetric, .rxSync
 %       .eve（可选）, .covert（可选）
@@ -93,10 +93,26 @@ packetConcealActive = packetConcealEnable && nPackets > 1;
 % 用于信道/频谱/监视者评估的整段突发
 txSymForChannel = txPlan.txBurstForChannel;
 modInfo = txPlan.modInfo;
+txConstraintMeasureCfg = p.txConstraint;
+txConstraintMeasureCfg.enable = false;
+txBaseReport = check_tx_constraints(txSymForChannel, waveform, txConstraintMeasureCfg);
+linkBudget = resolve_link_budget(p.linkBudget, modInfo, txBaseReport.averagePowerLin);
+txBurstForChannelBudgeted = linkBudget.txAmplitudeScale * txSymForChannel;
+txConstraintReport = check_tx_constraints(txBurstForChannelBudgeted, waveform, p.txConstraint);
+txConstraintReport.baseAveragePowerLin = txBaseReport.averagePowerLin;
+txConstraintReport.txAmplitudeScale = linkBudget.txAmplitudeScale;
+if txConstraintReport.enabled
+    fprintf('[SIM] Tx约束通过: burst %.3fs / %.3fs, avg power %.4f / %.4f (1 sps等效)\n', ...
+        txConstraintReport.burstDurationSec, txConstraintReport.maxBurstDurationSec, ...
+        txConstraintReport.averagePowerLin, txConstraintReport.maxAveragePowerLin);
+else
+    fprintf('[SIM] Tx约束关闭: burst %.3fs, avg power %.4f (1 sps等效)\n', ...
+        txConstraintReport.burstDurationSec, txConstraintReport.averagePowerLin);
+end
 
 %% 仿真参数初始化与配置
 
-EbN0dBList = p.sim.ebN0dBList(:).';%仿真不同Eb/N0点，列向量
+EbN0dBList = linkBudget.bob.ebN0dB(:).'; % 由链路预算推导的Bob接收端Eb/N0
 methods = string(bobMitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
 ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
@@ -125,13 +141,15 @@ chaosEncInfoEve = struct('enabled', false, 'mode', "none");
 eveEbN0dBList = [];
 eveRxSync = struct();
 eveMitigation = struct();
+eveBudget = struct();
 if eveEnabled
     eveCfg = local_validate_eve_config_local(p.eve, methods);
     eveRxSync = eveCfg.rxSync;
     eveMitigation = eveCfg.mitigation;
     chaosApproxDeltaEve = double(eveCfg.chaosApproxDelta);
 
-    eveEbN0dBList = EbN0dBList + double(eveCfg.ebN0dBOffset);
+    eveBudget = local_offset_budget_from_base_local(linkBudget.bob, double(eveCfg.linkGainOffsetDb));
+    eveEbN0dBList = eveBudget.ebN0dB;
     berEve = nan(numel(methods), numel(EbN0dBList));
     packetFrontEndEveVals = nan(1, numel(EbN0dBList));
     packetHeaderEveVals = nan(1, numel(EbN0dBList));
@@ -237,8 +255,9 @@ if poolWorkers > 0
 end
 if wardenEnabled
     wardenPointDetections = cell(1, numel(EbN0dBList));
-    [wardenEbN0dBList, wardenReferenceLink] = local_resolve_warden_ebn0_list( ...
-        EbN0dBList, eveEnabled, eveEbN0dBList, p.covert.warden);
+    [wardenBudget, wardenReferenceLink] = local_resolve_warden_budget_local( ...
+        linkBudget.bob, eveBudget, eveEnabled, p.covert.warden);
+    wardenEbN0dBList = wardenBudget.ebN0dB;
 end
 
 % 将“对外按符号/Hz配置”的信道参数映射到“对内按采样执行”。
@@ -253,8 +272,10 @@ simTic = tic;
 
 fprintf('\n========================================\n');
 fprintf('[SIM] 链路仿真开始\n');
-fprintf('[SIM] Eb/N0点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
+fprintf('[SIM] 链路预算点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
     totalEbN0Points, p.sim.nFramesPerPoint, totalFrames);
+fprintf('[SIM] Tx功率=%.2f dB, LinkGain点=%s dB\n', ...
+    linkBudget.txPowerDb, mat2str(double(linkBudget.bob.linkGainDb)));
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
 if numel(methods) > 1
     hasImpulse = isfield(p, "channel") && isfield(p.channel, "impulseProb") && double(p.channel.impulseProb) > 0;
@@ -306,23 +327,23 @@ fprintf('========================================\n\n');
 for ie = 1:numel(EbN0dBList)
     pointTic = tic;
     EbN0dB = EbN0dBList(ie);
-    EbN0 = 10.^(EbN0dB/10);
-    N0 = ebn0_to_n0(EbN0, modInfo.codeRate, modInfo.bitsPerSymbol, 1.0);
-    [klSigVsNoise(ie), klNoiseVsSig(ie), klSym(ie)] = signal_noise_kl(txSymForChannel, N0, 128);
+    N0 = linkBudget.bob.noisePsdLin(ie);
+    txBurstBobForPoint = linkBudget.bob.rxAmplitudeScale(ie) * txSymForChannel;
+    [klSigVsNoise(ie), klNoiseVsSig(ie), klSym(ie)] = signal_noise_kl(txBurstBobForPoint, N0, 128);
 
-    fprintf('[SIM] >>> Eb/N0点 %d/%d: %.2f dB\n', ie, totalEbN0Points, EbN0dB);
+    fprintf('[SIM] >>> 链路预算点 %d/%d: linkGain %.2f dB, Bob Eb/N0 %.2f dB\n', ...
+        ie, totalEbN0Points, linkBudget.bob.linkGainDb(ie), EbN0dB);
 
     if eveEnabled
-        EbN0dBEve = EbN0dB + double(p.eve.ebN0dBOffset);
-        EbN0Eve = 10.^(EbN0dBEve/10);
-        N0Eve = ebn0_to_n0(EbN0Eve, modInfo.codeRate, modInfo.bitsPerSymbol, 1.0);
-        fprintf('[SIM]     Eve等效Eb/N0: %.2f dB\n', EbN0dBEve);
+        EbN0dBEve = eveBudget.ebN0dB(ie);
+        N0Eve = eveBudget.noisePsdLin(ie);
+        fprintf('[SIM]     Eve等效Eb/N0: %.2f dB (linkGain偏移 %.2f dB)\n', ...
+            EbN0dBEve, double(p.eve.linkGainOffsetDb));
     end
 
     if wardenEnabled
         EbN0dBWarden = wardenEbN0dBList(ie);
-        EbN0Warden = 10.^(EbN0dBWarden / 10);
-        N0Warden = ebn0_to_n0(EbN0Warden, modInfo.codeRate, modInfo.bitsPerSymbol, 1.0);
+        N0Warden = wardenBudget.noisePsdLin(ie);
         fprintf('[SIM]     Warden等效Eb/N0: %.2f dB (%s)\n', EbN0dBWarden, wardenReferenceLink);
         wardenCfg = p.covert.warden;
         wardenCfg.referenceLink = wardenReferenceLink;
@@ -338,7 +359,8 @@ for ie = 1:numel(EbN0dBList)
 
         % 避免Warden评估消耗全局RNG，导致Bob/Eve结果随“是否开启Warden”而变化。
         wardenRngScope = rng_scope(double(p.rngSeed) + 100000 + ie); %#ok<NASGU>
-        det = warden_energy_detector(txSymForChannel, N0Warden, channelSample, maxDelaySamples, wardenCfg);
+        det = warden_energy_detector( ...
+            wardenBudget.rxAmplitudeScale(ie) * txSymForChannel, N0Warden, channelSample, maxDelaySamples, wardenCfg);
         clear wardenRngScope
         wardenPointDetections{ie} = det;
     end
@@ -365,7 +387,7 @@ for ie = 1:numel(EbN0dBList)
         exampleCandidatesEve = init_example_candidate_bank_local(numel(methods), p.sim.nFramesPerPoint);
     end
 
-    % --- 帧循环：每个Eb/N0点仿真多帧 ---
+    % --- 帧循环：每个链路预算点仿真多帧 ---
     totalPayloadBits = numel(payloadBits);
     for frameIdx = 1:p.sim.nFramesPerPoint
         globalFrameIdx = globalFrameIdx + 1;
@@ -448,10 +470,12 @@ for ie = 1:numel(EbN0dBList)
 
         if hasDedicatedSessionFrames
             bobNom.session = local_capture_session_frames_nominal_local( ...
-                sessionFrames, N0, channelSampleBob, frameDelay, syncCfgUseBob, bobRxSync, p, waveform, firstSyncSym, shortSyncSym);
+                sessionFrames, linkBudget.bob.rxAmplitudeScale(ie), N0, channelSampleBob, frameDelay, ...
+                syncCfgUseBob, bobRxSync, p, waveform, firstSyncSym, shortSyncSym);
             if eveEnabled
                 eveNom.session = local_capture_session_frames_nominal_local( ...
-                    sessionFrames, N0Eve, channelSampleEve, frameDelay, syncCfgUseEve, eveRxSync, p, waveform, firstSyncSym, shortSyncSym);
+                    sessionFrames, eveBudget.rxAmplitudeScale(ie), N0Eve, channelSampleEve, frameDelay, ...
+                    syncCfgUseEve, eveRxSync, p, waveform, firstSyncSym, shortSyncSym);
             end
         end
 
@@ -459,13 +483,14 @@ for ie = 1:numel(EbN0dBList)
             pkt = txPackets(pktIdx);
 
             % 同一帧内固定传播时延，避免每个分包都经历一次新的起始时刻跳变。
-            tx = [zeros(frameDelay, 1); pkt.txSymForChannel];
+            tx = [zeros(frameDelay, 1); linkBudget.bob.rxAmplitudeScale(ie) * pkt.txSymForChannel];
 
             rx = channel_bg_impulsive(tx, N0, channelSampleBob);
             rx = pulse_rx_to_symbol_rate(rx, waveform);
 
             if eveEnabled
-                rxEve = channel_bg_impulsive(tx, N0Eve, channelSampleEve);
+                txEve = [zeros(frameDelay, 1); eveBudget.rxAmplitudeScale(ie) * pkt.txSymForChannel];
+                rxEve = channel_bg_impulsive(txEve, N0Eve, channelSampleEve);
                 rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
             end
 
@@ -660,7 +685,7 @@ for ie = 1:numel(EbN0dBList)
         end
     end
 
-    % --- 当前Eb/N0点的性能统计 ---
+    % --- 当前链路预算点的性能统计 ---
     ber(:, ie) = nErr ./ max(nTot, 1);
     packetFrontEndBobVals(ie) = packetFrontEndBobAcc / p.sim.nFramesPerPoint;
     packetHeaderBobVals(ie) = packetHeaderBobAcc / p.sim.nFramesPerPoint;
@@ -702,7 +727,7 @@ for ie = 1:numel(EbN0dBList)
             packetConcealActive, "Eve");
     end
 
-    fprintf('[SIM] <<< Eb/N0点 %.2f dB 完成, 用时 %.2fs\n', EbN0dB, toc(pointTic));
+    fprintf('[SIM] <<< 链路预算点完成: Bob Eb/N0 %.2f dB, 用时 %.2fs\n', EbN0dB, toc(pointTic));
     fprintf('[SIM]     Bob BER: %s\n', format_metric_pairs(methods, ber(:, ie)));
     if eveEnabled
         fprintf('[SIM]     Eve BER: %s\n', format_metric_pairs(methods, berEve(:, ie)));
@@ -715,12 +740,14 @@ fprintf('[SIM] 开始频谱估计与结果汇总...\n');
 
 % 波形/频谱（单次突发，无信道，基于真实发射采样波形）
 [psd, freqHz, bw99Hz, etaBpsHz, spectrumInfo] = estimate_spectrum( ...
-    txSymForChannel, modInfo, waveform, struct("payloadBits", numel(payloadBits)));
+    txBurstForChannelBudgeted, modInfo, waveform, struct("payloadBits", numel(payloadBits)));
 
 results = struct();
 results.params = p;
 results.ebN0dB = EbN0dBList;
 results.methods = methods;
+results.tx = txConstraintReport;
+results.linkBudget = linkBudget;
 results.ber = ber;
 results.packetDiagnostics = struct();
 results.packetDiagnostics.bob = struct( ...
@@ -755,6 +782,7 @@ results.kl = struct("ebN0dB", EbN0dBList, ...
 
 
 if eveEnabled
+    results.linkBudget.eve = eveBudget;
     results.eve = struct();
     results.eve.methods = methods;
     results.eve.ebN0dB = eveEbN0dBList;
@@ -788,6 +816,7 @@ if eveEnabled
 end
 
 if wardenEnabled
+    results.linkBudget.warden = wardenBudget;
     results.covert = struct();
     results.covert.warden = local_pack_warden_results( ...
         wardenPointDetections, EbN0dBList, wardenEbN0dBList, wardenReferenceLink);
@@ -803,6 +832,7 @@ if p.sim.saveFigures
     outDir = make_results_dir(p.sim.resultsDir);
     save(fullfile(outDir, "results.mat"), "-struct", "results");
     save_figures(outDir, imgTx, results);
+    export_thesis_tables(outDir, results);
     fprintf('[SIM] 已保存至: %s\n', outDir);
 end
 
@@ -1902,7 +1932,7 @@ nom.preambleRx = cell(nFrames, 1);
 nom.preambleRef = cell(nFrames, 1);
 end
 
-function nom = local_capture_session_frames_nominal_local(sessionFrames, N0, channelSample, frameDelay, syncCfgUse, rxSyncCfg, p, waveform, firstSyncSym, shortSyncSym)
+function nom = local_capture_session_frames_nominal_local(sessionFrames, rxAmplitudeScale, N0, channelSample, frameDelay, syncCfgUse, rxSyncCfg, p, waveform, firstSyncSym, shortSyncSym)
 nom = local_init_session_nominal_local(numel(sessionFrames));
 if isempty(sessionFrames)
     return;
@@ -1911,7 +1941,7 @@ end
 syncCtrl = init_packet_sync_ctrl_local();
 for frameIdx = 1:numel(sessionFrames)
     sessionFrame = sessionFrames(frameIdx);
-    tx = [zeros(frameDelay, 1); sessionFrame.txSymForChannel];
+    tx = [zeros(frameDelay, 1); rxAmplitudeScale * sessionFrame.txSymForChannel];
     rx = channel_bg_impulsive(tx, N0, channelSample);
     rx = pulse_rx_to_symbol_rate(rx, waveform);
 
@@ -2485,7 +2515,24 @@ switch upper(string(mod.type))
 end
 end
 
-function [wardenEbN0dBList, referenceLink] = local_resolve_warden_ebn0_list(bobEbN0dBList, eveEnabled, eveEbN0dBList, wardenCfg)
+function budgetOut = local_offset_budget_from_base_local(baseBudget, offsetDb)
+offsetDb = double(offsetDb);
+if ~isscalar(offsetDb) || ~isfinite(offsetDb)
+    error("链路增益偏移必须是有限标量。");
+end
+
+gainScaleLin = 10 .^ (offsetDb / 10);
+budgetOut = struct( ...
+    "linkGainDb", baseBudget.linkGainDb + offsetDb, ...
+    "linkGainLin", baseBudget.linkGainLin .* gainScaleLin, ...
+    "rxAmplitudeScale", baseBudget.rxAmplitudeScale .* sqrt(gainScaleLin), ...
+    "rxPowerLin", baseBudget.rxPowerLin .* gainScaleLin, ...
+    "noisePsdLin", baseBudget.noisePsdLin, ...
+    "ebN0Lin", baseBudget.ebN0Lin .* gainScaleLin, ...
+    "ebN0dB", baseBudget.ebN0dB + offsetDb);
+end
+
+function [wardenBudget, referenceLink] = local_resolve_warden_budget_local(bobBudget, eveBudget, eveEnabled, wardenCfg)
 referenceLink = "bob";
 if isfield(wardenCfg, "referenceLink")
     referenceLink = lower(string(wardenCfg.referenceLink));
@@ -2493,20 +2540,17 @@ end
 
 switch referenceLink
     case "bob"
-        wardenEbN0dBList = bobEbN0dBList;
+        wardenBudget = bobBudget;
     case "eve"
-        if eveEnabled && ~isempty(eveEbN0dBList)
-            wardenEbN0dBList = eveEbN0dBList;
+        if eveEnabled && ~isempty(fieldnames(eveBudget))
+            wardenBudget = eveBudget;
         else
             referenceLink = "bob";
-            wardenEbN0dBList = bobEbN0dBList;
+            wardenBudget = bobBudget;
         end
     case "independent"
-        offsetDb = -10;
-        if isfield(wardenCfg, "ebN0dBOffset")
-            offsetDb = double(wardenCfg.ebN0dBOffset);
-        end
-        wardenEbN0dBList = bobEbN0dBList + offsetDb;
+        local_require_struct_field_local(wardenCfg, "linkGainOffsetDb", "covert.warden");
+        wardenBudget = local_offset_budget_from_base_local(bobBudget, double(wardenCfg.linkGainOffsetDb));
     otherwise
         error("Unknown covert.warden.referenceLink: %s", string(wardenCfg.referenceLink));
 end
@@ -2609,7 +2653,7 @@ tf = rxSyncCfg.compensateCarrier || rxSyncCfg.fineSearchRadius > 0 || ...
 end
 
 function eveCfg = local_validate_eve_config_local(eveCfg, methodsMain)
-local_require_struct_field_local(eveCfg, "ebN0dBOffset", "eve");
+local_require_struct_field_local(eveCfg, "linkGainOffsetDb", "eve");
 local_require_struct_field_local(eveCfg, "scrambleAssumption", "eve");
 local_require_struct_field_local(eveCfg, "fhAssumption", "eve");
 local_require_struct_field_local(eveCfg, "chaosAssumption", "eve");
@@ -2617,8 +2661,8 @@ local_require_struct_field_local(eveCfg, "chaosApproxDelta", "eve");
 local_require_struct_field_local(eveCfg, "rxSync", "eve");
 local_require_struct_field_local(eveCfg, "mitigation", "eve");
 
-if ~isscalar(double(eveCfg.ebN0dBOffset)) || ~isfinite(double(eveCfg.ebN0dBOffset))
-    error("eve.ebN0dBOffset 必须是有限标量。");
+if ~isscalar(double(eveCfg.linkGainOffsetDb)) || ~isfinite(double(eveCfg.linkGainOffsetDb))
+    error("eve.linkGainOffsetDb 必须是有限标量。");
 end
 if ~isscalar(double(eveCfg.chaosApproxDelta)) || ~isfinite(double(eveCfg.chaosApproxDelta)) || double(eveCfg.chaosApproxDelta) < 0
     error("eve.chaosApproxDelta 必须是非负有限标量。");
