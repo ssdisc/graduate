@@ -20,7 +20,7 @@ p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
 % 并行加速（主链路）：需要 Parallel Computing Toolbox
 p.sim.useParallel = true;
-p.sim.nWorkers = 16;
+p.sim.nWorkers = 8;
 p.sim.parallelMode = "frames"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
 
 % 链路预算（纯仿真口径）
@@ -369,7 +369,7 @@ p.covert.warden.pfaTarget = 0.01;
 p.covert.warden.nObs = 4096;   % 观测窗口（采样点）
 p.covert.warden.nTrials = 2000; % 蒙特卡洛试验次数
 p.covert.warden.useParallel = true; % 是否使用并行池加速Warden蒙特卡洛
-p.covert.warden.nWorkers = 16;      % 并行worker数（useParallel=true时）
+p.covert.warden.nWorkers = 8;      % 并行worker数（useParallel=true时）
 p.covert.warden.referenceLink = "independent"; % "bob" | "eve" | "independent"
 p.covert.warden.linkGainOffsetDb = -10; % referenceLink="independent"时，Warden相对Bob的链路增益偏移(dB)
 p.covert.warden.primaryLayer = "energyOptUncertain"; % 摘要/主判据默认采用的Warden层
