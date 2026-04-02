@@ -33,6 +33,7 @@ if ~isfield(p.rxSync.carrierPll, "maxFreq"); p.rxSync.carrierPll.maxFreq = 0.1; 
 bobRxSync = p.rxSync;
 bobMitigation = p.mitigation;
 waveform = resolve_waveform_cfg(p);
+local_require_presync_mitigation_cfg_local(bobMitigation, "p.mitigation");
 
 %% 发送端（TRANSMITTER）
 
@@ -118,6 +119,8 @@ methods = string(bobMitigation.methods(:).');%仿真不同脉冲噪声抑制方�
 ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
 packetFrontEndBobVals = nan(1, numel(EbN0dBList));
 packetHeaderBobVals = nan(1, numel(EbN0dBList));
+packetFrontEndBobMethodVals = nan(numel(methods), numel(EbN0dBList));
+packetHeaderBobMethodVals = nan(numel(methods), numel(EbN0dBList));
 packetSuccessBobVals = nan(numel(methods), numel(EbN0dBList));
 mseCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的MSE
 psnrCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的PSNR
@@ -147,12 +150,15 @@ if eveEnabled
     eveRxSync = eveCfg.rxSync;
     eveMitigation = eveCfg.mitigation;
     chaosApproxDeltaEve = double(eveCfg.chaosApproxDelta);
+    local_require_presync_mitigation_cfg_local(eveMitigation, "eve.mitigation");
 
     eveBudget = local_offset_budget_from_base_local(linkBudget.bob, double(eveCfg.linkGainOffsetDb));
     eveEbN0dBList = eveBudget.ebN0dB;
     berEve = nan(numel(methods), numel(EbN0dBList));
     packetFrontEndEveVals = nan(1, numel(EbN0dBList));
     packetHeaderEveVals = nan(1, numel(EbN0dBList));
+    packetFrontEndEveMethodVals = nan(numel(methods), numel(EbN0dBList));
+    packetHeaderEveMethodVals = nan(numel(methods), numel(EbN0dBList));
     packetSuccessEveVals = nan(numel(methods), numel(EbN0dBList));
     mseCommEveVals = nan(numel(methods), numel(EbN0dBList));
     psnrCommEveVals = nan(numel(methods), numel(EbN0dBList));
@@ -372,8 +378,8 @@ for ie = 1:numel(EbN0dBList)
 
     nErr = zeros(numel(methods), 1);
     nTot = zeros(numel(methods), 1);
-    packetFrontEndBobAcc = 0;
-    packetHeaderBobAcc = 0;
+    packetFrontEndBobAcc = zeros(numel(methods), 1);
+    packetHeaderBobAcc = zeros(numel(methods), 1);
     packetSuccessBobAcc = zeros(numel(methods), 1);
     metricAccComm = init_image_metric_acc_local(numel(methods));
     metricAccComp = init_image_metric_acc_local(numel(methods));
@@ -383,8 +389,8 @@ for ie = 1:numel(EbN0dBList)
     if eveEnabled
         nErrEve = zeros(numel(methods), 1);
         nTotEve = zeros(numel(methods), 1);
-        packetFrontEndEveAcc = 0;
-        packetHeaderEveAcc = 0;
+        packetFrontEndEveAcc = zeros(numel(methods), 1);
+        packetHeaderEveAcc = zeros(numel(methods), 1);
         packetSuccessEveAcc = zeros(numel(methods), 1);
         metricAccCommEve = init_image_metric_acc_local(numel(methods));
         metricAccCompEve = init_image_metric_acc_local(numel(methods));
@@ -514,8 +520,10 @@ for ie = 1:numel(EbN0dBList)
 
     % --- 当前链路预算点的性能统计 ---
     ber(:, ie) = nErr ./ max(nTot, 1);
-    packetFrontEndBobVals(ie) = packetFrontEndBobAcc / p.sim.nFramesPerPoint;
-    packetHeaderBobVals(ie) = packetHeaderBobAcc / p.sim.nFramesPerPoint;
+    packetFrontEndBobMethodVals(:, ie) = packetFrontEndBobAcc / p.sim.nFramesPerPoint;
+    packetHeaderBobMethodVals(:, ie) = packetHeaderBobAcc / p.sim.nFramesPerPoint;
+    packetFrontEndBobVals(ie) = mean(packetFrontEndBobMethodVals(:, ie));
+    packetHeaderBobVals(ie) = mean(packetHeaderBobMethodVals(:, ie));
     packetSuccessBobVals(:, ie) = packetSuccessBobAcc / p.sim.nFramesPerPoint;
 
     [mseOutComm, psnrOutComm, ssimOutComm] = finalize_image_metric_acc_local(metricAccComm);
@@ -535,8 +543,10 @@ for ie = 1:numel(EbN0dBList)
 
     if eveEnabled
         berEve(:, ie) = nErrEve ./ max(nTotEve, 1);
-        packetFrontEndEveVals(ie) = packetFrontEndEveAcc / p.sim.nFramesPerPoint;
-        packetHeaderEveVals(ie) = packetHeaderEveAcc / p.sim.nFramesPerPoint;
+        packetFrontEndEveMethodVals(:, ie) = packetFrontEndEveAcc / p.sim.nFramesPerPoint;
+        packetHeaderEveMethodVals(:, ie) = packetHeaderEveAcc / p.sim.nFramesPerPoint;
+        packetFrontEndEveVals(ie) = mean(packetFrontEndEveMethodVals(:, ie));
+        packetHeaderEveVals(ie) = mean(packetHeaderEveMethodVals(:, ie));
         packetSuccessEveVals(:, ie) = packetSuccessEveAcc / p.sim.nFramesPerPoint;
 
         [mseOutCommEve, psnrOutCommEve, ssimOutCommEve] = finalize_image_metric_acc_local(metricAccCommEve);
@@ -580,6 +590,8 @@ results.packetDiagnostics = struct();
 results.packetDiagnostics.bob = struct( ...
     "frontEndSuccessRate", packetFrontEndBobVals, ...
     "headerSuccessRate", packetHeaderBobVals, ...
+    "frontEndSuccessRateByMethod", packetFrontEndBobMethodVals, ...
+    "headerSuccessRateByMethod", packetHeaderBobMethodVals, ...
     "payloadSuccessRate", packetSuccessBobVals);
 results.packetConceal = struct("configured", packetConcealEnable, "active", packetConcealActive, "mode", packetConcealMode);
 results.imageMetrics = struct();
@@ -617,6 +629,8 @@ if eveEnabled
     results.eve.packetDiagnostics = struct( ...
         "frontEndSuccessRate", packetFrontEndEveVals, ...
         "headerSuccessRate", packetHeaderEveVals, ...
+        "frontEndSuccessRateByMethod", packetFrontEndEveMethodVals, ...
+        "headerSuccessRateByMethod", packetHeaderEveMethodVals, ...
         "payloadSuccessRate", packetSuccessEveVals);
     results.eve.assumptions = struct( ...
         "scramble", string(scrambleAssumptionEve), ...
@@ -957,36 +971,10 @@ waveform = frameCtx.waveform;
 eveEnabled = logical(frameCtx.eveEnabled);
 txPackets = frameCtx.txPackets;
 nPackets = numel(txPackets);
-phyHeaderTemplate = empty_phy_header_local();
-
-bobNom = struct();
-bobNom.ok = false(nPackets, 1);
-bobNom.headerOk = false(nPackets, 1);
-bobNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
-bobNom.rxState = cell(nPackets, 1);
-bobNom.rData = cell(nPackets, 1);
-bobNom.rDataPrepared = cell(nPackets, 1);
-bobNom.preambleRx = cell(nPackets, 1);
-bobNom.preambleRef = cell(nPackets, 1);
-bobNom.session = local_init_session_nominal_local(numel(frameCtx.sessionFrames));
-
-eveNom = struct();
+bobRaw = local_init_raw_capture_local(nPackets, numel(frameCtx.sessionFrames));
+eveRaw = struct();
 if eveEnabled
-    eveNom.ok = false(nPackets, 1);
-    eveNom.headerOk = false(nPackets, 1);
-    eveNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
-    eveNom.rxState = cell(nPackets, 1);
-    eveNom.rData = cell(nPackets, 1);
-    eveNom.rDataPrepared = cell(nPackets, 1);
-    eveNom.preambleRx = cell(nPackets, 1);
-    eveNom.preambleRef = cell(nPackets, 1);
-    eveNom.session = local_init_session_nominal_local(numel(frameCtx.sessionFrames));
-end
-
-phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
-bobSyncCtrl = init_packet_sync_ctrl_local();
-if eveEnabled
-    eveSyncCtrl = init_packet_sync_ctrl_local();
+    eveRaw = local_init_raw_capture_local(nPackets, numel(frameCtx.sessionFrames));
 end
 
 frameDelaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
@@ -997,13 +985,13 @@ if eveEnabled
 end
 
 if ~isempty(frameCtx.sessionFrames)
-    bobNom.session = local_capture_session_frames_nominal_local( ...
+    bobRaw.sessionRx = local_capture_session_frames_raw_local( ...
         frameCtx.sessionFrames, frameCtx.linkBudgetBobRxAmplitudeScale, frameCtx.N0, channelSampleBob, frameDelay, ...
-        frameCtx.syncCfgUseBob, frameCtx.bobRxSync, p, waveform, frameCtx.firstSyncSym, frameCtx.shortSyncSym);
+        waveform);
     if eveEnabled
-        eveNom.session = local_capture_session_frames_nominal_local( ...
+        eveRaw.sessionRx = local_capture_session_frames_raw_local( ...
             frameCtx.sessionFrames, frameCtx.eveRxAmplitudeScale, frameCtx.N0Eve, channelSampleEve, frameDelay, ...
-            frameCtx.syncCfgUseEve, frameCtx.eveRxSync, p, waveform, frameCtx.firstSyncSym, frameCtx.shortSyncSym);
+            waveform);
     end
 end
 
@@ -1013,186 +1001,43 @@ for pktIdx = 1:nPackets
     tx = [zeros(frameDelay, 1); frameCtx.linkBudgetBobRxAmplitudeScale * pkt.txSymForChannel];
     rx = channel_bg_impulsive(tx, frameCtx.N0, channelSampleBob);
     rx = pulse_rx_to_symbol_rate(rx, waveform);
+    bobRaw.rxPackets{pktIdx} = rx;
 
     if eveEnabled
         txEve = [zeros(frameDelay, 1); frameCtx.eveRxAmplitudeScale * pkt.txSymForChannel];
         rxEve = channel_bg_impulsive(txEve, frameCtx.N0Eve, channelSampleEve);
         rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
-    end
-
-    bobPhy = phyHeaderTemplate;
-    rxStateBobNominal = [];
-    rDataBobNominal = complex(zeros(0, 1));
-    rPreBobNominal = complex(zeros(0, 1));
-    bobHeaderOk = false;
-    [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local( ...
-        rx, frameCtx.syncCfgUseBob, p, pktIdx, frameCtx.firstSyncSym, frameCtx.shortSyncSym, bobSyncCtrl);
-    if bobOk
-        preLen = numel(syncSymBob);
-        [rPreBob, preOk] = extract_fractional_block(rxBobSync, startIdx, preLen, frameCtx.syncCfgUseBob, struct("type", "BPSK"));
-        if preOk
-            rPreBobNominal = rPreBob;
-        end
-        phyStart = startIdx + preLen;
-        [rPhyBobRaw, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, frameCtx.syncCfgUseBob, struct("type", "BPSK"));
-
-        eqBob = struct();
-        eqBobOk = false;
-        rPhyBob = rPhyBobRaw;
-        if bobOk && preOk && local_multipath_eq_enabled_local(p.channel, frameCtx.bobRxSync)
-            chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
-            eqCfg = frameCtx.bobRxSync.multipathEq;
-            [eqBob, eqBobOk] = multipath_equalizer_from_preamble(syncSymBob(:), rPreBob, eqCfg, frameCtx.N0, chLenSymbols);
-            if eqBobOk
-                yPrePhy = [rPreBob; rPhyBobRaw];
-                yEq = local_apply_equalizer_block_local(yPrePhy, eqBob);
-                rPreBobNominal = yEq(1:preLen);
-                rPhyBob = yEq(preLen+1:end);
-            end
-        end
-
-        if bobOk
-            bobPhyBits = decode_phy_header_symbols(rPhyBob, p.frame, p.fec, p.softMetric);
-            [bobPhyParsed, bobOk] = parse_phy_header_bits(bobPhyBits, p.frame);
-            if bobOk
-                bobPhy = bobPhyParsed;
-                bobHeaderOk = true;
-            end
-        end
-        if bobOk
-            rxStateBobNominal = derive_rx_packet_state_local( ...
-                p, double(bobPhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(bobPhy.packetIndex), bobPhy));
-            dataStart = phyStart + phyHeaderSymLen;
-            [rDataBobRaw, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, frameCtx.syncCfgUseBob, p.mod);
-            if bobOk && eqBobOk
-                yAll = [rPreBob; rPhyBobRaw; rDataBobRaw];
-                yEqAll = local_apply_equalizer_block_local(yAll, eqBob);
-                rDataBobNominal = yEqAll(preLen + phyHeaderSymLen + 1:end);
-            else
-                rDataBobNominal = rDataBobRaw;
-            end
-        end
-    end
-    bobNom.ok(pktIdx) = bobOk;
-    bobNom.headerOk(pktIdx) = bobHeaderOk;
-    if bobOk
-        bobNom.phy(pktIdx) = bobPhy;
-        bobNom.rxState{pktIdx} = rxStateBobNominal;
-        bobNom.rData{pktIdx} = [];
-        if ~isempty(rPreBobNominal)
-            bobNom.preambleRx{pktIdx} = fit_complex_length_local(rPreBobNominal, numel(syncSymBob));
-            bobNom.preambleRef{pktIdx} = syncSymBob(:);
-        end
-        hopInfoBob = struct("enable", false);
-        if frameCtx.fhEnabled && isfield(rxStateBobNominal, "hopInfo")
-            hopInfoBob = rxStateBobNominal.hopInfo;
-        end
-        bobNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
-            rDataBobNominal, rxStateBobNominal, hopInfoBob, p.mod, frameCtx.bobRxSync, frameCtx.fhEnabled);
-    end
-
-    if eveEnabled
-        eveOk = false;
-        evePhy = phyHeaderTemplate;
-        rxStateEveNominal = [];
-        rDataEveNominal = complex(zeros(0, 1));
-        rPreEveNominal = complex(zeros(0, 1));
-        eveHeaderOk = false;
-        [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local( ...
-            rxEve, frameCtx.syncCfgUseEve, p, pktIdx, frameCtx.firstSyncSym, frameCtx.shortSyncSym, eveSyncCtrl);
-        if eveOk
-            preLenEve = numel(syncSymEve);
-            [rPreEve, preOkEve] = extract_fractional_block(rxEveSync, startIdxEve, preLenEve, frameCtx.syncCfgUseEve, struct("type", "BPSK"));
-            if preOkEve
-                rPreEveNominal = rPreEve;
-            end
-            phyStartEve = startIdxEve + preLenEve;
-            [rPhyEveRaw, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, frameCtx.syncCfgUseEve, struct("type", "BPSK"));
-
-            eqEve = struct();
-            eqEveOk = false;
-            rPhyEve = rPhyEveRaw;
-            if eveOk && preOkEve && local_multipath_eq_enabled_local(p.channel, frameCtx.eveRxSync)
-                chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
-                eqCfg = frameCtx.eveRxSync.multipathEq;
-                [eqEve, eqEveOk] = multipath_equalizer_from_preamble(syncSymEve(:), rPreEve, eqCfg, frameCtx.N0Eve, chLenSymbols);
-                if eqEveOk
-                    yPrePhy = [rPreEve; rPhyEveRaw];
-                    yEq = local_apply_equalizer_block_local(yPrePhy, eqEve);
-                    rPreEveNominal = yEq(1:preLenEve);
-                    rPhyEve = yEq(preLenEve+1:end);
-                end
-            end
-
-            if eveOk
-                evePhyBits = decode_phy_header_symbols(rPhyEve, p.frame, p.fec, p.softMetric);
-                [evePhyParsed, eveOk] = parse_phy_header_bits(evePhyBits, p.frame);
-                if eveOk
-                    evePhy = evePhyParsed;
-                    eveHeaderOk = true;
-                end
-            end
-            if eveOk
-                rxStateEveNominal = derive_rx_packet_state_local( ...
-                    p, double(evePhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(evePhy.packetIndex), evePhy));
-                dataStartEve = phyStartEve + phyHeaderSymLen;
-                [rDataEveRaw, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, frameCtx.syncCfgUseEve, p.mod);
-                if eveOk && eqEveOk
-                    yAll = [rPreEve; rPhyEveRaw; rDataEveRaw];
-                    yEqAll = local_apply_equalizer_block_local(yAll, eqEve);
-                    rDataEveNominal = yEqAll(preLenEve + phyHeaderSymLen + 1:end);
-                else
-                    rDataEveNominal = rDataEveRaw;
-                end
-            end
-        end
-        eveNom.ok(pktIdx) = eveOk;
-        eveNom.headerOk(pktIdx) = eveHeaderOk;
-        if eveOk
-            eveNom.phy(pktIdx) = evePhy;
-            eveNom.rxState{pktIdx} = rxStateEveNominal;
-            eveNom.rData{pktIdx} = [];
-            if ~isempty(rPreEveNominal)
-                eveNom.preambleRx{pktIdx} = fit_complex_length_local(rPreEveNominal, numel(syncSymEve));
-                eveNom.preambleRef{pktIdx} = syncSymEve(:);
-            end
-            hopInfoEvePrep = struct("enable", false);
-            if frameCtx.fhEnabled
-                hopInfoEvePrep = eve_hop_info_local(rxStateEveNominal, frameCtx.fhAssumptionEve);
-            end
-            eveNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
-                rDataEveNominal, rxStateEveNominal, hopInfoEvePrep, p.mod, frameCtx.eveRxSync, frameCtx.fhEnabled);
-        end
+        eveRaw.rxPackets{pktIdx} = rxEve;
     end
 end
 
 [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
-    frameCtx.methods, frameCtx.txPktIndex, frameCtx.txPayloadBits, frameCtx.sessionFrames, bobNom, eveNom, p, frameCtx.fhEnabled, ...
+    frameCtx.methods, txPackets, frameCtx.txPktIndex, frameCtx.txPayloadBits, frameCtx.sessionFrames, bobRaw, eveRaw, p, waveform, frameCtx.N0, frameCtx.N0Eve, frameCtx.fhEnabled, ...
     frameCtx.packetIndependentBitChaos, frameCtx.chaosEnabled, frameCtx.chaosEncInfo, ...
     frameCtx.packetConcealActive, frameCtx.packetConcealMode, frameCtx.imgTx, frameCtx.meta, frameCtx.totalPayloadBits, ...
-    frameCtx.bobRxSync, frameCtx.bobMitigation, frameCtx.eveRxSync, frameCtx.eveMitigation, ...
+    frameCtx.syncCfgUseBob, frameCtx.syncCfgUseEve, frameCtx.bobRxSync, frameCtx.bobMitigation, frameCtx.eveRxSync, frameCtx.eveMitigation, ...
     eveEnabled, frameCtx.scrambleAssumptionEve, frameCtx.fhAssumptionEve, frameCtx.chaosAssumptionEve, frameCtx.chaosApproxDeltaEve, frameCtx.chaosEncInfoEve, ...
     true, frameCtx.EbN0dB, frameCtx.EbN0dBEve, frameCtx.useParallelMethods);
 
 frameOut = struct();
-frameOut.bobFrontEndSuccessRate = mean(double(bobNom.ok));
-frameOut.bobHeaderSuccessRate = mean(double(bobNom.headerOk));
+frameOut.bobFrontEndSuccessRate = bobFrame.frontEndSuccessRate;
+frameOut.bobHeaderSuccessRate = bobFrame.headerSuccessRate;
 frameOut.bobFrame = bobFrame;
-frameOut.eveFrontEndSuccessRate = 0;
-frameOut.eveHeaderSuccessRate = 0;
+frameOut.eveFrontEndSuccessRate = zeros(numel(frameCtx.methods), 1);
+frameOut.eveHeaderSuccessRate = zeros(numel(frameCtx.methods), 1);
 frameOut.eveFrame = struct();
 if eveEnabled
-    frameOut.eveFrontEndSuccessRate = mean(double(eveNom.ok));
-    frameOut.eveHeaderSuccessRate = mean(double(eveNom.headerOk));
+    frameOut.eveFrontEndSuccessRate = eveFrame.frontEndSuccessRate;
+    frameOut.eveHeaderSuccessRate = eveFrame.headerSuccessRate;
     frameOut.eveFrame = eveFrame;
 end
 end
 
 function [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
-    methods, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
+    methods, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobRaw, eveRaw, p, waveform, N0Bob, N0Eve, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
     packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
-    bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
+    syncCfgUseBob, syncCfgUseEve, bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
     eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
     captureExample, EbN0dB, EbN0dBEve, useParallelMethods)
 
@@ -1201,6 +1046,8 @@ nPackets = numel(txPktIndex);
 
 nErrBob = zeros(nMethods, 1);
 nTotBob = zeros(nMethods, 1);
+frontEndBob = zeros(nMethods, 1);
+headerBob = zeros(nMethods, 1);
 mseCommBob = nan(nMethods, 1);
 psnrCommBob = nan(nMethods, 1);
 ssimCommBob = nan(nMethods, 1);
@@ -1213,6 +1060,8 @@ exampleBob = cell(nMethods, 1);
 % Always preallocate Eve arrays so PARFOR variable classification is stable.
 nErrEve = zeros(nMethods, 1);
 nTotEve = zeros(nMethods, 1);
+frontEndEve = zeros(nMethods, 1);
+headerEve = zeros(nMethods, 1);
 mseCommEve = nan(nMethods, 1);
 psnrCommEve = nan(nMethods, 1);
 ssimCommEve = nan(nMethods, 1);
@@ -1226,6 +1075,16 @@ useParfor = logical(useParallelMethods) && local_has_parallel_pool_local();
 if useParfor
     try
         parfor im = 1:nMethods
+            bobNom = local_build_packet_nominal_local( ...
+                bobRaw, txPackets, sessionFrames, methods(im), bobMitigation, ...
+                syncCfgUseBob, bobRxSync, p, waveform, N0Bob, fhEnabled, "known");
+            eveNom = struct();
+            if eveEnabled
+                eveNom = local_build_packet_nominal_local( ...
+                    eveRaw, txPackets, sessionFrames, methods(im), eveMitigation, ...
+                    syncCfgUseEve, eveRxSync, p, waveform, N0Eve, fhEnabled, fhAssumptionEve);
+            end
+
             [bobRes, eveRes] = local_decode_single_method_local( ...
                 methods(im), txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
                 packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
@@ -1236,6 +1095,8 @@ if useParfor
 
             nErrBob(im) = bobRes.nErr;
             nTotBob(im) = bobRes.nTot;
+            frontEndBob(im) = mean(double(bobNom.frontEndOk));
+            headerBob(im) = mean(double(bobNom.headerOk));
             mseCommBob(im) = bobRes.mseComm;
             psnrCommBob(im) = bobRes.psnrComm;
             ssimCommBob(im) = bobRes.ssimComm;
@@ -1248,6 +1109,8 @@ if useParfor
             if eveEnabled
                 nErrEve(im) = eveRes.nErr;
                 nTotEve(im) = eveRes.nTot;
+                frontEndEve(im) = mean(double(eveNom.frontEndOk));
+                headerEve(im) = mean(double(eveNom.headerOk));
                 mseCommEve(im) = eveRes.mseComm;
                 psnrCommEve(im) = eveRes.psnrComm;
                 ssimCommEve(im) = eveRes.ssimComm;
@@ -1271,6 +1134,8 @@ if useParfor
         % Reset outputs; recompute below using serial loop.
         nErrBob = zeros(nMethods, 1);
         nTotBob = zeros(nMethods, 1);
+        frontEndBob = zeros(nMethods, 1);
+        headerBob = zeros(nMethods, 1);
         mseCommBob = nan(nMethods, 1);
         psnrCommBob = nan(nMethods, 1);
         ssimCommBob = nan(nMethods, 1);
@@ -1282,6 +1147,8 @@ if useParfor
 
         nErrEve = zeros(nMethods, 1);
         nTotEve = zeros(nMethods, 1);
+        frontEndEve = zeros(nMethods, 1);
+        headerEve = zeros(nMethods, 1);
         mseCommEve = nan(nMethods, 1);
         psnrCommEve = nan(nMethods, 1);
         ssimCommEve = nan(nMethods, 1);
@@ -1295,6 +1162,16 @@ end
 
 if ~useParfor
     for im = 1:nMethods
+        bobNom = local_build_packet_nominal_local( ...
+            bobRaw, txPackets, sessionFrames, methods(im), bobMitigation, ...
+            syncCfgUseBob, bobRxSync, p, waveform, N0Bob, fhEnabled, "known");
+        eveNom = struct();
+        if eveEnabled
+            eveNom = local_build_packet_nominal_local( ...
+                eveRaw, txPackets, sessionFrames, methods(im), eveMitigation, ...
+                syncCfgUseEve, eveRxSync, p, waveform, N0Eve, fhEnabled, fhAssumptionEve);
+        end
+
         [bobRes, eveRes] = local_decode_single_method_local( ...
             methods(im), txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
@@ -1305,6 +1182,8 @@ if ~useParfor
 
         nErrBob(im) = bobRes.nErr;
         nTotBob(im) = bobRes.nTot;
+        frontEndBob(im) = mean(double(bobNom.frontEndOk));
+        headerBob(im) = mean(double(bobNom.headerOk));
         mseCommBob(im) = bobRes.mseComm;
         psnrCommBob(im) = bobRes.psnrComm;
         ssimCommBob(im) = bobRes.ssimComm;
@@ -1317,6 +1196,8 @@ if ~useParfor
         if eveEnabled
             nErrEve(im) = eveRes.nErr;
             nTotEve(im) = eveRes.nTot;
+            frontEndEve(im) = mean(double(eveNom.frontEndOk));
+            headerEve(im) = mean(double(eveNom.headerOk));
             mseCommEve(im) = eveRes.mseComm;
             psnrCommEve(im) = eveRes.psnrComm;
             ssimCommEve(im) = eveRes.ssimComm;
@@ -1332,6 +1213,8 @@ end
 bobFrame = struct();
 bobFrame.nErr = nErrBob;
 bobFrame.nTot = nTotBob;
+bobFrame.frontEndSuccessRate = frontEndBob;
+bobFrame.headerSuccessRate = headerBob;
 bobFrame.packetSuccessRate = packetSuccessBob;
 bobFrame.metricsComm = struct("mse", mseCommBob, "psnr", psnrCommBob, "ssim", ssimCommBob);
 bobFrame.metricsComp = struct("mse", mseCompBob, "psnr", psnrCompBob, "ssim", ssimCompBob);
@@ -1341,6 +1224,8 @@ eveFrame = struct();
 if eveEnabled
     eveFrame.nErr = nErrEve;
     eveFrame.nTot = nTotEve;
+    eveFrame.frontEndSuccessRate = frontEndEve;
+    eveFrame.headerSuccessRate = headerEve;
     eveFrame.packetSuccessRate = packetSuccessEve;
     eveFrame.metricsComm = struct("mse", mseCommEve, "psnr", psnrCommEve, "ssim", ssimCommEve);
     eveFrame.metricsComp = struct("mse", mseCompEve, "psnr", psnrCompEve, "ssim", ssimCompEve);
@@ -1366,33 +1251,23 @@ calStateBob = local_init_threshold_calibration_state_local(methodName, bobMitiga
 [sessionBob, calStateBob] = local_recover_session_from_nominal_local( ...
     sessionBob, bobNom.session, sessionFrames, methodName, bobMitigation, p, calStateBob);
 
-        for pktIdx = 1:nPackets
-            txPayload = txPayloadBits{pktIdx};
-            if bobNom.ok(pktIdx)
-                phy = bobNom.phy(pktIdx);
-                rxState = bobNom.rxState{pktIdx};
-                if isempty(rxState)
-                    rxState = derive_rx_packet_state_local( ...
-                        p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
-                end
-        rData = [];
-        if isfield(bobNom, "rDataPrepared") && numel(bobNom.rDataPrepared) >= pktIdx && ~isempty(bobNom.rDataPrepared{pktIdx})
-            rData = fit_complex_length_local(bobNom.rDataPrepared{pktIdx}, rxState.nDataSym);
-        else
-            rData = fit_complex_length_local(bobNom.rData{pktIdx}, rxState.nDataSym);
-            if fhEnabled
-                rData = fh_demodulate(rData, rxState.hopInfo);
-            end
-            if bobRxSync.carrierPll.enable
-                rData = carrier_pll_sync(rData, p.mod, bobRxSync.carrierPll);
-            end
+for pktIdx = 1:nPackets
+    txPayload = txPayloadBits{pktIdx};
+    if bobNom.ok(pktIdx)
+        phy = bobNom.phy(pktIdx);
+        rxState = bobNom.rxState{pktIdx};
+        if isempty(rxState)
+            rxState = derive_rx_packet_state_local( ...
+                p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
+        end
+        rData = fit_complex_length_local(bobNom.rDataPrepared{pktIdx}, rxState.nDataSym);
+        reliability = [];
+        if isfield(bobNom, "rDataReliability") && numel(bobNom.rDataReliability) >= pktIdx ...
+                && ~isempty(bobNom.rDataReliability{pktIdx})
+            reliability = local_fit_reliability_length_local(bobNom.rDataReliability{pktIdx}, rxState.nDataSym);
         end
 
-        calStateBob = local_update_threshold_from_preamble_local( ...
-            calStateBob, bobNom.preambleRx{pktIdx}, bobNom.preambleRef{pktIdx});
-        mitBob = local_apply_threshold_calibration_local(bobMitigation, calStateBob);
-        [rMit, reliability] = mitigate_impulses(rData, methodName, mitBob);
-        demodSoft = demodulate_to_softbits(rMit, p.mod, p.fec, p.softMetric, reliability);
+        demodSoft = demodulate_to_softbits(rData, p.mod, p.fec, p.softMetric, reliability);
         demodDeint = deinterleave_bits(demodSoft, rxState.intState, p.interleaver);
         dataBitsRxScr = fec_decode(demodDeint, p.fec);
         packetDataBitsRx = descramble_bits(dataBitsRxScr, rxState.scrambleCfg);
@@ -1418,8 +1293,6 @@ calStateBob = local_init_threshold_calibration_state_local(methodName, bobMitiga
 
             payloadFrameBob(packetInfo.range.startBit:packetInfo.range.endBit) = fit_bits_length(payloadPktRx, packetInfo.range.nBits);
             packetOkBob(packetInfo.packetIndex) = true;
-            calStateBob = local_update_threshold_from_packet_local( ...
-                calStateBob, rData, packetDataBitsRx, rxState.scrambleCfg, rxState, p);
         else
             nErrBob = nErrBob + numel(txPayload);
             nTotBob = nTotBob + numel(txPayload);
@@ -1476,7 +1349,7 @@ bobRes.example = [];
 if captureExample
     bobRes.example = struct();
     bobRes.example.EbN0dB = EbN0dB;
-    bobRes.example.frontEndSuccessRate = mean(double(bobNom.ok));
+    bobRes.example.frontEndSuccessRate = mean(double(bobNom.frontEndOk));
     bobRes.example.headerSuccessRate = mean(double(bobNom.headerOk));
     bobRes.example.sessionKnown = logical(sessionBob.known);
     bobRes.example.sessionFrameFrontEndSuccessRate = local_nominal_success_rate_local(bobNom.session);
@@ -1503,35 +1376,24 @@ calStateEve = local_init_threshold_calibration_state_local(methodName, eveMitiga
 [sessionEve, calStateEve] = local_recover_session_from_nominal_local( ...
     sessionEve, eveNom.session, sessionFrames, methodName, eveMitigation, p, calStateEve);
 
-    for pktIdx = 1:nPackets
-        txPayload = txPayloadBits{pktIdx};
-        if eveNom.ok(pktIdx)
-            phy = eveNom.phy(pktIdx);
-            rxState = eveNom.rxState{pktIdx};
-            if isempty(rxState)
-                rxState = derive_rx_packet_state_local( ...
-                    p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
-            end
-        rData = [];
-        if isfield(eveNom, "rDataPrepared") && numel(eveNom.rDataPrepared) >= pktIdx && ~isempty(eveNom.rDataPrepared{pktIdx})
-            rData = fit_complex_length_local(eveNom.rDataPrepared{pktIdx}, rxState.nDataSym);
-        else
-            rData = fit_complex_length_local(eveNom.rData{pktIdx}, rxState.nDataSym);
-            if fhEnabled
-                hopInfoEve = eve_hop_info_local(rxState, fhAssumptionEve);
-                rData = fh_demodulate(rData, hopInfoEve);
-            end
-            if eveRxSync.carrierPll.enable
-                rData = carrier_pll_sync(rData, p.mod, eveRxSync.carrierPll);
-            end
+for pktIdx = 1:nPackets
+    txPayload = txPayloadBits{pktIdx};
+    if eveNom.ok(pktIdx)
+        phy = eveNom.phy(pktIdx);
+        rxState = eveNom.rxState{pktIdx};
+        if isempty(rxState)
+            rxState = derive_rx_packet_state_local( ...
+                p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
+        end
+        rData = fit_complex_length_local(eveNom.rDataPrepared{pktIdx}, rxState.nDataSym);
+        reliabilityEve = [];
+        if isfield(eveNom, "rDataReliability") && numel(eveNom.rDataReliability) >= pktIdx ...
+                && ~isempty(eveNom.rDataReliability{pktIdx})
+            reliabilityEve = local_fit_reliability_length_local(eveNom.rDataReliability{pktIdx}, rxState.nDataSym);
         end
         scrambleCfgEve = eve_scramble_cfg_local(rxState.scrambleCfg, scrambleAssumptionEve);
 
-        calStateEve = local_update_threshold_from_preamble_local( ...
-            calStateEve, eveNom.preambleRx{pktIdx}, eveNom.preambleRef{pktIdx});
-        mitEve = local_apply_threshold_calibration_local(eveMitigation, calStateEve);
-        [rMitEve, reliabilityEve] = mitigate_impulses(rData, methodName, mitEve);
-        demodSoftEve = demodulate_to_softbits(rMitEve, p.mod, p.fec, p.softMetric, reliabilityEve);
+        demodSoftEve = demodulate_to_softbits(rData, p.mod, p.fec, p.softMetric, reliabilityEve);
         demodDeintEve = deinterleave_bits(demodSoftEve, rxState.intState, p.interleaver);
         dataBitsEveScr = fec_decode(demodDeintEve, p.fec);
         packetDataBitsEve = descramble_bits(dataBitsEveScr, scrambleCfgEve);
@@ -1557,8 +1419,6 @@ calStateEve = local_init_threshold_calibration_state_local(methodName, eveMitiga
 
             payloadFrameEve(packetInfo.range.startBit:packetInfo.range.endBit) = fit_bits_length(payloadPktEve, packetInfo.range.nBits);
             packetOkEve(packetInfo.packetIndex) = true;
-            calStateEve = local_update_threshold_from_packet_local( ...
-                calStateEve, rData, packetDataBitsEve, scrambleCfgEve, rxState, p);
         else
             nErrEve = nErrEve + numel(txPayload);
             nTotEve = nTotEve + numel(txPayload);
@@ -1615,7 +1475,7 @@ eveRes.example = [];
 if captureExample
     eveRes.example = struct();
     eveRes.example.EbN0dB = EbN0dBEve;
-    eveRes.example.frontEndSuccessRate = mean(double(eveNom.ok));
+    eveRes.example.frontEndSuccessRate = mean(double(eveNom.frontEndOk));
     eveRes.example.headerSuccessRate = mean(double(eveNom.headerOk));
     eveRes.example.sessionKnown = logical(sessionEve.known);
     eveRes.example.sessionFrameFrontEndSuccessRate = local_nominal_success_rate_local(eveNom.session);
@@ -2039,61 +1899,186 @@ end
 yPrep = r;
 end
 
+function relPrep = local_fit_reliability_length_local(reliability, targetLen)
+reliability = double(reliability(:));
+reliability(~isfinite(reliability)) = 0;
+reliability = max(min(reliability, 1), 0);
+targetLen = max(0, round(double(targetLen)));
+if numel(reliability) >= targetLen
+    relPrep = reliability(1:targetLen);
+else
+    relPrep = [reliability; ones(targetLen - numel(reliability), 1)];
+end
+end
+
+function relBlk = local_extract_reliability_block_local(reliability, startPos, nSamp)
+reliability = double(reliability(:));
+if nSamp <= 0 || isempty(reliability)
+    relBlk = zeros(0, 1);
+    return;
+end
+idx = (1:numel(reliability)).';
+t = startPos + (0:nSamp-1).';
+relBlk = interp1(idx, reliability, t, "linear", 0);
+relBlk(~isfinite(relBlk)) = 0;
+relBlk = max(min(relBlk, 1), 0);
+end
+
+function raw = local_init_raw_capture_local(nPackets, nSessionFrames)
+raw = struct();
+raw.rxPackets = cell(nPackets, 1);
+raw.sessionRx = cell(nSessionFrames, 1);
+end
+
+function nom = local_init_packet_nominal_local(nPackets, nSessionFrames)
+nom = struct();
+nom.frontEndOk = false(nPackets, 1);
+nom.ok = false(nPackets, 1);
+nom.headerOk = false(nPackets, 1);
+nom.phy = repmat(empty_phy_header_local(), nPackets, 1);
+nom.rxState = cell(nPackets, 1);
+nom.preambleRx = cell(nPackets, 1);
+nom.preambleRef = cell(nPackets, 1);
+nom.rDataPrepared = cell(nPackets, 1);
+nom.rDataReliability = cell(nPackets, 1);
+nom.session = local_init_session_nominal_local(nSessionFrames);
+end
+
 function nom = local_init_session_nominal_local(nFrames)
 nom = struct();
 nom.ok = false(nFrames, 1);
 nom.rDataPrepared = cell(nFrames, 1);
+nom.rDataReliability = cell(nFrames, 1);
 nom.preambleRx = cell(nFrames, 1);
 nom.preambleRef = cell(nFrames, 1);
 end
 
-function nom = local_capture_session_frames_nominal_local(sessionFrames, rxAmplitudeScale, N0, channelSample, frameDelay, syncCfgUse, rxSyncCfg, p, waveform, firstSyncSym, shortSyncSym)
-nom = local_init_session_nominal_local(numel(sessionFrames));
+function sessionRx = local_capture_session_frames_raw_local(sessionFrames, rxAmplitudeScale, N0, channelSample, frameDelay, waveform)
+sessionRx = cell(numel(sessionFrames), 1);
 if isempty(sessionFrames)
     return;
 end
 
-syncCtrl = init_packet_sync_ctrl_local();
 for frameIdx = 1:numel(sessionFrames)
     sessionFrame = sessionFrames(frameIdx);
     tx = [zeros(frameDelay, 1); rxAmplitudeScale * sessionFrame.txSymForChannel];
     rx = channel_bg_impulsive(tx, N0, channelSample);
     rx = pulse_rx_to_symbol_rate(rx, waveform);
+    sessionRx{frameIdx} = rx;
+end
+end
 
-    [startIdx, rxSync, syncSymUse, syncCtrl, ok] = acquire_packet_sync_local( ...
-        rx, syncCfgUse, p, 1, firstSyncSym, shortSyncSym, syncCtrl);
-    if ~ok
+function nom = local_build_packet_nominal_local(rawCapture, txPackets, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, fhEnabled, fhAssumption)
+nPackets = numel(txPackets);
+nom = local_init_packet_nominal_local(nPackets, numel(sessionFrames));
+nom.session = local_build_session_nominal_local( ...
+    rawCapture.sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0);
+
+for pktIdx = 1:nPackets
+    if numel(rawCapture.rxPackets) < pktIdx || isempty(rawCapture.rxPackets{pktIdx})
+        continue;
+    end
+    rxRaw = rawCapture.rxPackets{pktIdx};
+    [rxMit, reliability] = mitigate_impulses(rxRaw, methodName, mitigation);
+
+    syncSymRef = txPackets(pktIdx).syncSym(:);
+    [startIdx, rxSync] = frame_sync(rxMit, syncSymRef, syncCfgUse);
+    if isempty(startIdx)
         continue;
     end
 
-    preLen = numel(syncSymUse);
-    [rPre, preOk] = extract_fractional_block(rxSync, startIdx, preLen, syncCfgUse, struct("type", "BPSK"));
-    if preOk
-        nom.preambleRx{frameIdx} = fit_complex_length_local(rPre, numel(syncSymUse));
-        nom.preambleRef{frameIdx} = syncSymUse(:);
-    end
-
-    dataStart = startIdx + preLen;
-    [rDataRaw, ok] = extract_fractional_block(rxSync, dataStart, sessionFrame.nDataSym, syncCfgUse, sessionFrame.modCfg);
-    if ~ok
+    preLen = numel(syncSymRef);
+    hdrLen = numel(txPackets(pktIdx).phyHeaderSym);
+    dataLen = numel(txPackets(pktIdx).dataSymTx);
+    totalLen = preLen + hdrLen + dataLen;
+    [rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, syncCfgUse, p.mod);
+    if ~okFull
         continue;
     end
+    reliabilityFull = local_extract_reliability_block_local(reliability, startIdx, totalLen);
 
-    rDataUse = rDataRaw;
-    if preOk && local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
+    if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
         eqCfg = rxSyncCfg.multipathEq;
-        [eq, eqOk] = multipath_equalizer_from_preamble(syncSymUse(:), rPre, eqCfg, N0, chLenSymbols);
+        [eq, eqOk] = multipath_equalizer_from_preamble(syncSymRef, rFull(1:preLen), eqCfg, N0, chLenSymbols);
         if eqOk
-            yEq = local_apply_equalizer_block_local([rPre; rDataRaw], eq);
-            nom.preambleRx{frameIdx} = fit_complex_length_local(yEq(1:preLen), numel(syncSymUse));
-            rDataUse = yEq(preLen+1:end);
+            rFull = local_apply_equalizer_block_local(rFull, eq);
+        end
+    end
+
+    nom.frontEndOk(pktIdx) = true;
+    nom.preambleRx{pktIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
+    nom.preambleRef{pktIdx} = syncSymRef;
+
+    hdrSym = rFull(preLen+1:preLen+hdrLen);
+    hdrBits = decode_phy_header_symbols(hdrSym, p.frame, p.fec, p.softMetric);
+    [phy, headerOk] = parse_phy_header_bits(hdrBits, p.frame);
+    nom.headerOk(pktIdx) = headerOk;
+    if ~headerOk
+        continue;
+    end
+
+    rxState = derive_rx_packet_state_local( ...
+        p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
+    if fhEnabled
+        hopInfoUsed = local_nominal_hop_info_local(rxState, fhAssumption);
+    else
+        hopInfoUsed = struct("enable", false);
+    end
+
+    rData = rFull(preLen+hdrLen+1:end);
+    rDataRel = reliabilityFull(preLen+hdrLen+1:end);
+    nom.phy(pktIdx) = phy;
+    nom.rxState{pktIdx} = rxState;
+    nom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
+        rData, rxState, hopInfoUsed, p.mod, rxSyncCfg, fhEnabled);
+    nom.rDataReliability{pktIdx} = local_fit_reliability_length_local(rDataRel, rxState.nDataSym);
+    nom.ok(pktIdx) = true;
+end
+end
+
+function nom = local_build_session_nominal_local(sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0)
+nom = local_init_session_nominal_local(numel(sessionFrames));
+if isempty(sessionFrames)
+    return;
+end
+
+for frameIdx = 1:numel(sessionFrames)
+    if numel(sessionRx) < frameIdx || isempty(sessionRx{frameIdx})
+        continue;
+    end
+
+    sessionFrame = sessionFrames(frameIdx);
+    [rxMit, reliability] = mitigate_impulses(sessionRx{frameIdx}, methodName, mitigation);
+    [startIdx, rxSync] = frame_sync(rxMit, sessionFrame.syncSym(:), syncCfgUse);
+    if isempty(startIdx)
+        continue;
+    end
+
+    preLen = numel(sessionFrame.syncSym);
+    totalLen = preLen + sessionFrame.nDataSym;
+    [rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, syncCfgUse, sessionFrame.modCfg);
+    if ~okFull
+        continue;
+    end
+    reliabilityFull = local_extract_reliability_block_local(reliability, startIdx, totalLen);
+
+    if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
+        chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
+        eqCfg = rxSyncCfg.multipathEq;
+        [eq, eqOk] = multipath_equalizer_from_preamble(sessionFrame.syncSym(:), rFull(1:preLen), eqCfg, N0, chLenSymbols);
+        if eqOk
+            rFull = local_apply_equalizer_block_local(rFull, eq);
         end
     end
 
     rxStateSession = struct("nDataSym", sessionFrame.nDataSym);
+    nom.preambleRx{frameIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
+    nom.preambleRef{frameIdx} = sessionFrame.syncSym(:);
     nom.rDataPrepared{frameIdx} = local_prepare_data_symbols_local( ...
-        rDataUse, rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false);
+        rFull(preLen+1:end), rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false);
+    nom.rDataReliability{frameIdx} = local_fit_reliability_length_local( ...
+        reliabilityFull(preLen+1:end), sessionFrame.nDataSym);
     nom.ok(frameIdx) = true;
 end
 end
@@ -2116,18 +2101,19 @@ for frameIdx = 1:min(numel(sessionFrames), numel(sessionNom.ok))
         continue;
     end
 
-    calState = local_update_threshold_from_preamble_local( ...
-        calState, sessionNom.preambleRx{frameIdx}, sessionNom.preambleRef{frameIdx});
-    mitUse = local_apply_threshold_calibration_local(mitigation, calState);
     rData = fit_complex_length_local(sessionNom.rDataPrepared{frameIdx}, sessionFrames(frameIdx).nDataSym);
-    [rMit, reliability] = mitigate_impulses(rData, methodName, mitUse);
-    [metaSession, okFrame] = local_try_decode_session_frame_local(rMit, reliability, sessionFrames(frameIdx), p);
+    reliability = [];
+    if isfield(sessionNom, "rDataReliability") && numel(sessionNom.rDataReliability) >= frameIdx ...
+            && ~isempty(sessionNom.rDataReliability{frameIdx})
+        reliability = local_fit_reliability_length_local(sessionNom.rDataReliability{frameIdx}, sessionFrames(frameIdx).nDataSym);
+    end
+    [metaSession, okFrame] = local_try_decode_session_frame_local(rData, reliability, sessionFrames(frameIdx), p);
     if okFrame
         sessionOut = learn_rx_session_local(metaSession);
         return;
     end
 
-    rMitList{end+1, 1} = fit_complex_length_local(rMit, sessionFrames(frameIdx).nDataSym); %#ok<AGROW>
+    rMitList{end+1, 1} = fit_complex_length_local(rData, sessionFrames(frameIdx).nDataSym); %#ok<AGROW>
 end
 
 if numel(rMitList) >= 2
@@ -2496,6 +2482,18 @@ switch lower(string(assumption))
 end
 end
 
+function hopInfo = local_nominal_hop_info_local(rxState, fhAssumption)
+fhAssumption = lower(string(fhAssumption));
+switch fhAssumption
+    case "known"
+        hopInfo = rxState.hopInfo;
+    case {"none", "partial"}
+        hopInfo = eve_hop_info_local(rxState, fhAssumption);
+    otherwise
+        error("Unknown nominal fh assumption: %s", string(fhAssumption));
+end
+end
+
 function y = fit_complex_length_local(x, targetLen)
 x = x(:);
 targetLen = max(0, round(double(targetLen)));
@@ -2819,6 +2817,15 @@ local_require_struct_fields_local(eveCfg.mitigation.thresholdCalibration, [ ...
 methodsEve = string(eveCfg.mitigation.methods(:).');
 if ~isequal(methodsEve, methodsMain)
     error("eve.mitigation.methods 必须与 p.mitigation.methods 完全一致。");
+end
+end
+
+function local_require_presync_mitigation_cfg_local(mitigationCfg, ownerName)
+if ~isfield(mitigationCfg, "thresholdCalibration") || ~isstruct(mitigationCfg.thresholdCalibration)
+    error("%s.thresholdCalibration 缺失。", ownerName);
+end
+if isfield(mitigationCfg.thresholdCalibration, "enable") && mitigationCfg.thresholdCalibration.enable
+    error("%s.thresholdCalibration.enable 必须为 false。抑制模块前移到同步前后，不支持在线阈值校准。", ownerName);
 end
 end
 
