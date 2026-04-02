@@ -15,13 +15,13 @@ p.rngSeed = 1;
 
 %% 仿真控制
 p.sim = struct();
-p.sim.nFramesPerPoint = 5;
+p.sim.nFramesPerPoint = 30;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
 % 并行加速（主链路）：需要 Parallel Computing Toolbox
 p.sim.useParallel = true;
 p.sim.nWorkers = 16;
-p.sim.parallelMode = "methods"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
+p.sim.parallelMode = "frames"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
 
 % 链路预算（纯仿真口径）
 p.linkBudget = struct();
@@ -203,10 +203,10 @@ p.channel.syncImpairment.timingOffsetSymbols = 0.0; % 分数符号偏移（单�
 p.channel.syncImpairment.phaseOffsetRad = 0.0;    % 初始相位偏移（rad）
 % 可选：多径抽头信道（整数抽头时延，复基带等效）
 p.channel.multipath = struct();
-p.channel.multipath.enable = false;
+p.channel.multipath.enable = true;
 p.channel.multipath.pathDelaysSymbols = [0 1 2];   % 各径时延（单位：symbol）
 p.channel.multipath.pathGainsDb = [0 -12 -18]; % 各径平均增益(dB)
-p.channel.multipath.rayleigh = false;        % 启用瑞利衰落（各径独立复高斯系数，每帧随机）
+p.channel.multipath.rayleigh = true;        % 启用瑞利衰落（各径独立复高斯系数，每帧随机）
 
 %% 接收端（RX）
 % 10) 脉冲抑制

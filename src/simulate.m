@@ -227,6 +227,10 @@ simParallelMode = "methods";
 if isfield(p, "sim") && isfield(p.sim, "parallelMode") && strlength(string(p.sim.parallelMode)) > 0
     simParallelMode = lower(string(p.sim.parallelMode));
 end
+if ~any(simParallelMode == ["methods", "frames"])
+    error("simulate:UnsupportedParallelMode", ...
+        "sim.parallelMode must be ""methods"" or ""frames"", got %s.", string(simParallelMode));
+end
 simNWorkers = 0;
 if isfield(p, "sim") && isfield(p.sim, "nWorkers") && ~isempty(p.sim.nWorkers)
     simNWorkers = max(0, round(double(p.sim.nWorkers)));
@@ -389,278 +393,98 @@ for ie = 1:numel(EbN0dBList)
 
     % --- 帧循环：每个链路预算点仿真多帧 ---
     totalPayloadBits = numel(payloadBits);
+    useParallelFrames = simUseParallel && simParallelMode == "frames";
+    useParallelMethods = simUseParallel && simParallelMode == "methods";
+    if useParallelFrames && ~local_has_parallel_pool_local()
+        error("simulate:FrameParallelPoolUnavailable", ...
+            "sim.parallelMode=""frames"" requires an active parallel pool.");
+    end
+
+    EbN0dBEveLocal = NaN;
+    N0EveLocal = NaN;
+    eveRxAmplitudeScaleLocal = NaN;
+    if eveEnabled
+        EbN0dBEveLocal = EbN0dBEve;
+        N0EveLocal = N0Eve;
+        eveRxAmplitudeScaleLocal = eveBudget.rxAmplitudeScale(ie);
+    end
+
+    syncCfgUseBob = local_prepare_frame_sync_cfg_local(bobRxSync, p.channel, NaN);
+    syncCfgUseEve = struct();
+    if eveEnabled
+        syncCfgUseEve = local_prepare_frame_sync_cfg_local(eveRxSync, p.channel, syncCfgUseBob.maxSearchIndex);
+    end
+
+    frameCtx = struct();
+    frameCtx.p = p;
+    frameCtx.methods = methods;
+    frameCtx.txPackets = txPackets;
+    frameCtx.txPktIndex = txPktIndex;
+    frameCtx.txPayloadBits = txPayloadBits;
+    frameCtx.sessionFrames = sessionFrames;
+    frameCtx.waveform = waveform;
+    frameCtx.channelSample = channelSample;
+    frameCtx.firstSyncSym = firstSyncSym;
+    frameCtx.shortSyncSym = shortSyncSym;
+    frameCtx.linkBudgetBobRxAmplitudeScale = linkBudget.bob.rxAmplitudeScale(ie);
+    frameCtx.eveRxAmplitudeScale = eveRxAmplitudeScaleLocal;
+    frameCtx.N0 = N0;
+    frameCtx.N0Eve = N0EveLocal;
+    frameCtx.EbN0dB = EbN0dB;
+    frameCtx.EbN0dBEve = EbN0dBEveLocal;
+    frameCtx.fhEnabled = fhEnabled;
+    frameCtx.packetIndependentBitChaos = packetIndependentBitChaos;
+    frameCtx.chaosEnabled = chaosEnabled;
+    frameCtx.chaosEncInfo = chaosEncInfo;
+    frameCtx.packetConcealActive = packetConcealActive;
+    frameCtx.packetConcealMode = packetConcealMode;
+    frameCtx.imgTx = imgTx;
+    frameCtx.meta = meta;
+    frameCtx.totalPayloadBits = totalPayloadBits;
+    frameCtx.bobRxSync = bobRxSync;
+    frameCtx.bobMitigation = bobMitigation;
+    frameCtx.eveRxSync = eveRxSync;
+    frameCtx.eveMitigation = eveMitigation;
+    frameCtx.eveEnabled = eveEnabled;
+    frameCtx.scrambleAssumptionEve = scrambleAssumptionEve;
+    frameCtx.fhAssumptionEve = fhAssumptionEve;
+    frameCtx.chaosAssumptionEve = chaosAssumptionEve;
+    frameCtx.chaosApproxDeltaEve = chaosApproxDeltaEve;
+    frameCtx.chaosEncInfoEve = chaosEncInfoEve;
+    frameCtx.useParallelMethods = useParallelMethods;
+    frameCtx.syncCfgUseBob = syncCfgUseBob;
+    frameCtx.syncCfgUseEve = syncCfgUseEve;
+    frameCtx.frameSeedBase = NaN;
+    if useParallelFrames
+        frameCtx.frameSeedBase = local_point_frame_seed_base_local(p.rngSeed, ie);
+    end
+
+    frameOutputs = cell(p.sim.nFramesPerPoint, 1);
+    if useParallelFrames
+        fprintf('[SIM]     帧并行模式: dispatch %d 帧到 worker。\n', p.sim.nFramesPerPoint);
+        parfor frameIdx = 1:p.sim.nFramesPerPoint
+            frameOutputs{frameIdx} = local_run_single_frame_local(frameIdx, frameCtx);
+        end
+        globalFrameIdx = globalFrameIdx + p.sim.nFramesPerPoint;
+    else
+        for frameIdx = 1:p.sim.nFramesPerPoint
+            globalFrameIdx = globalFrameIdx + 1;
+            if p.sim.nFramesPerPoint <= 20 || frameIdx == 1 || frameIdx == p.sim.nFramesPerPoint || mod(frameIdx, frameLogStep) == 0
+                fprintf('[SIM]     帧 %d/%d (总进度 %d/%d, %.1f%%)\n', ...
+                    frameIdx, p.sim.nFramesPerPoint, globalFrameIdx, totalFrames, ...
+                    100 * globalFrameIdx / max(totalFrames, 1));
+            end
+            frameOutputs{frameIdx} = local_run_single_frame_local(frameIdx, frameCtx);
+        end
+    end
+
     for frameIdx = 1:p.sim.nFramesPerPoint
-        globalFrameIdx = globalFrameIdx + 1;
-        syncCfgUseBob = bobRxSync;
-        if ~isfield(syncCfgUseBob, "minSearchIndex"); syncCfgUseBob.minSearchIndex = 1; end
-        if ~isfield(syncCfgUseBob, "maxSearchIndex") || ~isfinite(double(syncCfgUseBob.maxSearchIndex))
-            mpExtra = 0;
-            if isfield(p, "channel") && isfield(p.channel, "multipath") ...
-                    && isfield(p.channel.multipath, "enable") && p.channel.multipath.enable ...
-                    && ( ...
-                        (isfield(p.channel.multipath, "pathDelaysSymbols") && ~isempty(p.channel.multipath.pathDelaysSymbols)) || ...
-                        (isfield(p.channel.multipath, "pathDelays") && ~isempty(p.channel.multipath.pathDelays)) )
-                if isfield(p.channel.multipath, "pathDelaysSymbols") && ~isempty(p.channel.multipath.pathDelaysSymbols)
-                    mpExtra = max(double(p.channel.multipath.pathDelaysSymbols(:)));
-                else
-                    mpExtra = max(double(p.channel.multipath.pathDelays(:)));
-                end
-            end
-            if isfield(p, "channel") && isfield(p.channel, "maxDelaySymbols")
-                syncCfgUseBob.maxSearchIndex = double(p.channel.maxDelaySymbols) + mpExtra + 6;
-            else
-                syncCfgUseBob.maxSearchIndex = inf;
-            end
-        end
-        syncCfgUseEve = struct();
-        if eveEnabled
-            syncCfgUseEve = eveRxSync;
-            if ~isfield(syncCfgUseEve, "minSearchIndex"); syncCfgUseEve.minSearchIndex = 1; end
-            if ~isfield(syncCfgUseEve, "maxSearchIndex") || ~isfinite(double(syncCfgUseEve.maxSearchIndex))
-                syncCfgUseEve.maxSearchIndex = syncCfgUseBob.maxSearchIndex;
-            end
-        end
+        frameOut = frameOutputs{frameIdx};
+        packetFrontEndBobAcc = packetFrontEndBobAcc + frameOut.bobFrontEndSuccessRate;
+        packetHeaderBobAcc = packetHeaderBobAcc + frameOut.bobHeaderSuccessRate;
 
-        if p.sim.nFramesPerPoint <= 20 || frameIdx == 1 || frameIdx == p.sim.nFramesPerPoint || mod(frameIdx, frameLogStep) == 0
-            fprintf('[SIM]     帧 %d/%d (总进度 %d/%d, %.1f%%)\n', ...
-                frameIdx, p.sim.nFramesPerPoint, globalFrameIdx, totalFrames, ...
-                100 * globalFrameIdx / max(totalFrames, 1));
-        end
-
-        % 当前帧：先做一次“同步+PHY提取”（所有方法共享），再按方法解调/译码（可并行）。
-        phyHeaderTemplate = empty_phy_header_local();
-        bobNom = struct();
-        bobNom.ok = false(nPackets, 1);
-        bobNom.headerOk = false(nPackets, 1);
-        bobNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
-        bobNom.rxState = cell(nPackets, 1);
-        bobNom.rData = cell(nPackets, 1);
-        bobNom.rDataPrepared = cell(nPackets, 1);
-        bobNom.preambleRx = cell(nPackets, 1);
-        bobNom.preambleRef = cell(nPackets, 1);
-
-        eveNom = struct();
-        if eveEnabled
-            eveNom.ok = false(nPackets, 1);
-            eveNom.headerOk = false(nPackets, 1);
-            eveNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
-            eveNom.rxState = cell(nPackets, 1);
-            eveNom.rData = cell(nPackets, 1);
-            eveNom.rDataPrepared = cell(nPackets, 1);
-            eveNom.preambleRx = cell(nPackets, 1);
-            eveNom.preambleRef = cell(nPackets, 1);
-        end
-        bobNom.session = local_init_session_nominal_local(numel(sessionFrames));
-        if eveEnabled
-            eveNom.session = local_init_session_nominal_local(numel(sessionFrames));
-        end
-
-        % ============ 分包发收（同步+PHY提取） ============
-        phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
-        bobSyncCtrl = init_packet_sync_ctrl_local();
-        if eveEnabled
-            eveSyncCtrl = init_packet_sync_ctrl_local();
-        end
-        frameDelaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
-        frameDelay = round(double(frameDelaySym) * waveform.sps);
-        channelSampleBob = local_freeze_channel_realization_local(channelSample);
-        if eveEnabled
-            channelSampleEve = local_freeze_channel_realization_local(channelSample);
-        end
-
-        if hasDedicatedSessionFrames
-            bobNom.session = local_capture_session_frames_nominal_local( ...
-                sessionFrames, linkBudget.bob.rxAmplitudeScale(ie), N0, channelSampleBob, frameDelay, ...
-                syncCfgUseBob, bobRxSync, p, waveform, firstSyncSym, shortSyncSym);
-            if eveEnabled
-                eveNom.session = local_capture_session_frames_nominal_local( ...
-                    sessionFrames, eveBudget.rxAmplitudeScale(ie), N0Eve, channelSampleEve, frameDelay, ...
-                    syncCfgUseEve, eveRxSync, p, waveform, firstSyncSym, shortSyncSym);
-            end
-        end
-
-        for pktIdx = 1:nPackets
-            pkt = txPackets(pktIdx);
-
-            % 同一帧内固定传播时延，避免每个分包都经历一次新的起始时刻跳变。
-            tx = [zeros(frameDelay, 1); linkBudget.bob.rxAmplitudeScale(ie) * pkt.txSymForChannel];
-
-            rx = channel_bg_impulsive(tx, N0, channelSampleBob);
-            rx = pulse_rx_to_symbol_rate(rx, waveform);
-
-            if eveEnabled
-                txEve = [zeros(frameDelay, 1); eveBudget.rxAmplitudeScale(ie) * pkt.txSymForChannel];
-                rxEve = channel_bg_impulsive(txEve, N0Eve, channelSampleEve);
-                rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
-            end
-
-            bobPhy = phyHeaderTemplate;
-            rxStateBobNominal = [];
-            rDataBobNominal = complex(zeros(0, 1));
-            rPreBobNominal = complex(zeros(0, 1));
-            bobHeaderOk = false;
-            [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local(rx, syncCfgUseBob, p, pktIdx, firstSyncSym, shortSyncSym, bobSyncCtrl);
-            if bobOk
-                preLen = numel(syncSymBob);
-                [rPreBob, preOk] = extract_fractional_block(rxBobSync, startIdx, preLen, syncCfgUseBob, struct('type', 'BPSK'));
-                if preOk
-                    rPreBobNominal = rPreBob;
-                end
-                phyStart = startIdx + preLen;
-                [rPhyBobRaw, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, syncCfgUseBob, struct('type', 'BPSK'));
-
-                % 多径信道估计 + 线性均衡（先救PHY头，避免“整包判失败”导致BER饱和）
-                eqBob = struct();
-                eqBobOk = false;
-                rPhyBob = rPhyBobRaw;
-                if bobOk && preOk && local_multipath_eq_enabled_local(p.channel, bobRxSync)
-                    chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
-                    eqCfg = bobRxSync.multipathEq;
-                    [eqBob, eqBobOk] = multipath_equalizer_from_preamble(syncSymBob(:), rPreBob, eqCfg, N0, chLenSymbols);
-                    if eqBobOk
-                        yPrePhy = [rPreBob; rPhyBobRaw];
-                        yEq = local_apply_equalizer_block_local(yPrePhy, eqBob);
-                        rPreBobNominal = yEq(1:preLen);
-                        rPhyBob = yEq(preLen+1:end);
-                    end
-                end
-
-                if bobOk
-                    bobPhyBits = decode_phy_header_symbols(rPhyBob, p.frame, p.fec, p.softMetric);
-                    [bobPhyParsed, bobOk] = parse_phy_header_bits(bobPhyBits, p.frame);
-                    if bobOk
-                        bobPhy = bobPhyParsed;
-                        bobHeaderOk = true;
-                    end
-                end
-                if bobOk
-                    rxStateBobNominal = derive_rx_packet_state_local( ...
-                        p, double(bobPhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(bobPhy.packetIndex), bobPhy));
-                    dataStart = phyStart + phyHeaderSymLen;
-                    [rDataBobRaw, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, syncCfgUseBob, p.mod);
-                    if bobOk && eqBobOk
-                        yAll = [rPreBob; rPhyBobRaw; rDataBobRaw];
-                        yEqAll = local_apply_equalizer_block_local(yAll, eqBob);
-                        rDataBobNominal = yEqAll(preLen + phyHeaderSymLen + 1:end);
-                    else
-                        rDataBobNominal = rDataBobRaw;
-                    end
-                end
-            end
-            bobNom.ok(pktIdx) = bobOk;
-            bobNom.headerOk(pktIdx) = bobHeaderOk;
-            if bobOk
-                bobNom.phy(pktIdx) = bobPhy;
-                bobNom.rxState{pktIdx} = rxStateBobNominal;
-                bobNom.rData{pktIdx} = [];
-                if ~isempty(rPreBobNominal)
-                    bobNom.preambleRx{pktIdx} = fit_complex_length_local(rPreBobNominal, numel(syncSymBob));
-                    bobNom.preambleRef{pktIdx} = syncSymBob(:);
-                end
-                hopInfoBob = struct('enable', false);
-                if fhEnabled && isfield(rxStateBobNominal, "hopInfo")
-                    hopInfoBob = rxStateBobNominal.hopInfo;
-                end
-                bobNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
-                    rDataBobNominal, rxStateBobNominal, hopInfoBob, p.mod, bobRxSync, fhEnabled);
-            end
-
-            if eveEnabled
-                eveOk = false;
-                evePhy = phyHeaderTemplate;
-                rxStateEveNominal = [];
-                rDataEveNominal = complex(zeros(0, 1));
-                rPreEveNominal = complex(zeros(0, 1));
-                eveHeaderOk = false;
-                [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local(rxEve, syncCfgUseEve, p, pktIdx, firstSyncSym, shortSyncSym, eveSyncCtrl);
-                if eveOk
-                    preLenEve = numel(syncSymEve);
-                    [rPreEve, preOkEve] = extract_fractional_block(rxEveSync, startIdxEve, preLenEve, syncCfgUseEve, struct('type', 'BPSK'));
-                    if preOkEve
-                        rPreEveNominal = rPreEve;
-                    end
-                    phyStartEve = startIdxEve + preLenEve;
-                    [rPhyEveRaw, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, syncCfgUseEve, struct('type', 'BPSK'));
-
-                    eqEve = struct();
-                    eqEveOk = false;
-                    rPhyEve = rPhyEveRaw;
-                    if eveOk && preOkEve && local_multipath_eq_enabled_local(p.channel, eveRxSync)
-                        chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
-                        eqCfg = eveRxSync.multipathEq;
-                        [eqEve, eqEveOk] = multipath_equalizer_from_preamble(syncSymEve(:), rPreEve, eqCfg, N0Eve, chLenSymbols);
-                        if eqEveOk
-                            yPrePhy = [rPreEve; rPhyEveRaw];
-                            yEq = local_apply_equalizer_block_local(yPrePhy, eqEve);
-                            rPreEveNominal = yEq(1:preLenEve);
-                            rPhyEve = yEq(preLenEve+1:end);
-                        end
-                    end
-
-                    if eveOk
-                        evePhyBits = decode_phy_header_symbols(rPhyEve, p.frame, p.fec, p.softMetric);
-                        [evePhyParsed, eveOk] = parse_phy_header_bits(evePhyBits, p.frame);
-                        if eveOk
-                            evePhy = evePhyParsed;
-                            eveHeaderOk = true;
-                        end
-                    end
-                    if eveOk
-                        rxStateEveNominal = derive_rx_packet_state_local( ...
-                            p, double(evePhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(evePhy.packetIndex), evePhy));
-                        dataStartEve = phyStartEve + phyHeaderSymLen;
-                        [rDataEveRaw, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, syncCfgUseEve, p.mod);
-                        if eveOk && eqEveOk
-                            yAll = [rPreEve; rPhyEveRaw; rDataEveRaw];
-                            yEqAll = local_apply_equalizer_block_local(yAll, eqEve);
-                            rDataEveNominal = yEqAll(preLenEve + phyHeaderSymLen + 1:end);
-                        else
-                            rDataEveNominal = rDataEveRaw;
-                        end
-                    end
-                end
-                eveNom.ok(pktIdx) = eveOk;
-                eveNom.headerOk(pktIdx) = eveHeaderOk;
-                if eveOk
-                    eveNom.phy(pktIdx) = evePhy;
-                    eveNom.rxState{pktIdx} = rxStateEveNominal;
-                    eveNom.rData{pktIdx} = [];
-                    if ~isempty(rPreEveNominal)
-                        eveNom.preambleRx{pktIdx} = fit_complex_length_local(rPreEveNominal, numel(syncSymEve));
-                        eveNom.preambleRef{pktIdx} = syncSymEve(:);
-                    end
-                    hopInfoEvePrep = struct('enable', false);
-                    if fhEnabled
-                        hopInfoEvePrep = eve_hop_info_local(rxStateEveNominal, fhAssumptionEve);
-                    end
-                    eveNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
-                        rDataEveNominal, rxStateEveNominal, hopInfoEvePrep, p.mod, eveRxSync, fhEnabled);
-                end
-            end
-        end
-        packetFrontEndBobAcc = packetFrontEndBobAcc + mean(double(bobNom.ok));
-        packetHeaderBobAcc = packetHeaderBobAcc + mean(double(bobNom.headerOk));
-        if eveEnabled
-            packetFrontEndEveAcc = packetFrontEndEveAcc + mean(double(eveNom.ok));
-            packetHeaderEveAcc = packetHeaderEveAcc + mean(double(eveNom.headerOk));
-        end
-
-        % ============ 按方法解调/译码与统计（可并行） ============
-        useParallelMethods = simUseParallel && simParallelMode == "methods";
-        EbN0dBEveLocal = NaN;
-        if eveEnabled
-            EbN0dBEveLocal = EbN0dBEve;
-        end
-        captureExample = true;
-        [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
-            methods, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
-            packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
-            packetConcealActive, packetConcealMode, imgTx, meta, totalPayloadBits, ...
-            bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
-            eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
-            captureExample, EbN0dB, EbN0dBEveLocal, useParallelMethods);
+        bobFrame = frameOut.bobFrame;
         exampleCandidates = accumulate_example_candidate_bank_local(exampleCandidates, frameIdx, bobFrame, EbN0dB, "Bob");
-
         nErr = nErr + bobFrame.nErr;
         nTot = nTot + bobFrame.nTot;
         packetSuccessBobAcc = packetSuccessBobAcc + bobFrame.packetSuccessRate;
@@ -672,6 +496,9 @@ for ie = 1:numel(EbN0dBList)
         end
 
         if eveEnabled
+            packetFrontEndEveAcc = packetFrontEndEveAcc + frameOut.eveFrontEndSuccessRate;
+            packetHeaderEveAcc = packetHeaderEveAcc + frameOut.eveHeaderSuccessRate;
+            eveFrame = frameOut.eveFrame;
             exampleCandidatesEve = accumulate_example_candidate_bank_local(exampleCandidatesEve, frameIdx, eveFrame, EbN0dBEveLocal, "Eve");
             nErrEve = nErrEve + eveFrame.nErr;
             nTotEve = nTotEve + eveFrame.nTot;
@@ -1071,6 +898,294 @@ h.packetIndex = uint16(0);
 h.packetDataBytes = uint16(0);
 h.packetDataCrc16 = uint16(0);
 h.headerCrc16 = uint16(0);
+end
+
+function rxSyncUse = local_prepare_frame_sync_cfg_local(rxSyncBase, channelCfg, fallbackMaxSearchIndex)
+rxSyncUse = rxSyncBase;
+if ~isfield(rxSyncUse, "minSearchIndex")
+    rxSyncUse.minSearchIndex = 1;
+end
+if isfield(rxSyncUse, "maxSearchIndex") && isfinite(double(rxSyncUse.maxSearchIndex))
+    return;
+end
+
+if nargin >= 3 && isfinite(double(fallbackMaxSearchIndex))
+    rxSyncUse.maxSearchIndex = double(fallbackMaxSearchIndex);
+    return;
+end
+
+mpExtra = 0;
+if isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
+        && isfield(channelCfg.multipath, "enable") && channelCfg.multipath.enable ...
+        && ( ...
+            (isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols)) || ...
+            (isfield(channelCfg.multipath, "pathDelays") && ~isempty(channelCfg.multipath.pathDelays)) )
+    if isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols)
+        mpExtra = max(double(channelCfg.multipath.pathDelaysSymbols(:)));
+    else
+        mpExtra = max(double(channelCfg.multipath.pathDelays(:)));
+    end
+end
+
+if isfield(channelCfg, "maxDelaySymbols")
+    rxSyncUse.maxSearchIndex = double(channelCfg.maxDelaySymbols) + mpExtra + 6;
+else
+    rxSyncUse.maxSearchIndex = inf;
+end
+end
+
+function baseSeed = local_point_frame_seed_base_local(globalSeed, pointIdx)
+globalSeed = round(double(globalSeed));
+pointIdx = round(double(pointIdx));
+baseSeed = globalSeed + 1000000 * pointIdx;
+end
+
+function seed = local_frame_seed_local(baseSeed, frameIdx)
+seed = mod(round(double(baseSeed)) + round(double(frameIdx)) - 1, 2^32 - 1);
+if seed <= 0
+    seed = seed + 1;
+end
+end
+
+function frameOut = local_run_single_frame_local(frameIdx, frameCtx)
+if isfield(frameCtx, "frameSeedBase") && isfinite(double(frameCtx.frameSeedBase))
+    frameRngScope = rng_scope(local_frame_seed_local(frameCtx.frameSeedBase, frameIdx)); %#ok<NASGU>
+end
+
+p = frameCtx.p;
+waveform = frameCtx.waveform;
+eveEnabled = logical(frameCtx.eveEnabled);
+txPackets = frameCtx.txPackets;
+nPackets = numel(txPackets);
+phyHeaderTemplate = empty_phy_header_local();
+
+bobNom = struct();
+bobNom.ok = false(nPackets, 1);
+bobNom.headerOk = false(nPackets, 1);
+bobNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
+bobNom.rxState = cell(nPackets, 1);
+bobNom.rData = cell(nPackets, 1);
+bobNom.rDataPrepared = cell(nPackets, 1);
+bobNom.preambleRx = cell(nPackets, 1);
+bobNom.preambleRef = cell(nPackets, 1);
+bobNom.session = local_init_session_nominal_local(numel(frameCtx.sessionFrames));
+
+eveNom = struct();
+if eveEnabled
+    eveNom.ok = false(nPackets, 1);
+    eveNom.headerOk = false(nPackets, 1);
+    eveNom.phy = repmat(phyHeaderTemplate, nPackets, 1);
+    eveNom.rxState = cell(nPackets, 1);
+    eveNom.rData = cell(nPackets, 1);
+    eveNom.rDataPrepared = cell(nPackets, 1);
+    eveNom.preambleRx = cell(nPackets, 1);
+    eveNom.preambleRef = cell(nPackets, 1);
+    eveNom.session = local_init_session_nominal_local(numel(frameCtx.sessionFrames));
+end
+
+phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
+bobSyncCtrl = init_packet_sync_ctrl_local();
+if eveEnabled
+    eveSyncCtrl = init_packet_sync_ctrl_local();
+end
+
+frameDelaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
+frameDelay = round(double(frameDelaySym) * waveform.sps);
+channelSampleBob = local_freeze_channel_realization_local(frameCtx.channelSample);
+if eveEnabled
+    channelSampleEve = local_freeze_channel_realization_local(frameCtx.channelSample);
+end
+
+if ~isempty(frameCtx.sessionFrames)
+    bobNom.session = local_capture_session_frames_nominal_local( ...
+        frameCtx.sessionFrames, frameCtx.linkBudgetBobRxAmplitudeScale, frameCtx.N0, channelSampleBob, frameDelay, ...
+        frameCtx.syncCfgUseBob, frameCtx.bobRxSync, p, waveform, frameCtx.firstSyncSym, frameCtx.shortSyncSym);
+    if eveEnabled
+        eveNom.session = local_capture_session_frames_nominal_local( ...
+            frameCtx.sessionFrames, frameCtx.eveRxAmplitudeScale, frameCtx.N0Eve, channelSampleEve, frameDelay, ...
+            frameCtx.syncCfgUseEve, frameCtx.eveRxSync, p, waveform, frameCtx.firstSyncSym, frameCtx.shortSyncSym);
+    end
+end
+
+for pktIdx = 1:nPackets
+    pkt = txPackets(pktIdx);
+
+    tx = [zeros(frameDelay, 1); frameCtx.linkBudgetBobRxAmplitudeScale * pkt.txSymForChannel];
+    rx = channel_bg_impulsive(tx, frameCtx.N0, channelSampleBob);
+    rx = pulse_rx_to_symbol_rate(rx, waveform);
+
+    if eveEnabled
+        txEve = [zeros(frameDelay, 1); frameCtx.eveRxAmplitudeScale * pkt.txSymForChannel];
+        rxEve = channel_bg_impulsive(txEve, frameCtx.N0Eve, channelSampleEve);
+        rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
+    end
+
+    bobPhy = phyHeaderTemplate;
+    rxStateBobNominal = [];
+    rDataBobNominal = complex(zeros(0, 1));
+    rPreBobNominal = complex(zeros(0, 1));
+    bobHeaderOk = false;
+    [startIdx, rxBobSync, syncSymBob, bobSyncCtrl, bobOk] = acquire_packet_sync_local( ...
+        rx, frameCtx.syncCfgUseBob, p, pktIdx, frameCtx.firstSyncSym, frameCtx.shortSyncSym, bobSyncCtrl);
+    if bobOk
+        preLen = numel(syncSymBob);
+        [rPreBob, preOk] = extract_fractional_block(rxBobSync, startIdx, preLen, frameCtx.syncCfgUseBob, struct("type", "BPSK"));
+        if preOk
+            rPreBobNominal = rPreBob;
+        end
+        phyStart = startIdx + preLen;
+        [rPhyBobRaw, bobOk] = extract_fractional_block(rxBobSync, phyStart, phyHeaderSymLen, frameCtx.syncCfgUseBob, struct("type", "BPSK"));
+
+        eqBob = struct();
+        eqBobOk = false;
+        rPhyBob = rPhyBobRaw;
+        if bobOk && preOk && local_multipath_eq_enabled_local(p.channel, frameCtx.bobRxSync)
+            chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
+            eqCfg = frameCtx.bobRxSync.multipathEq;
+            [eqBob, eqBobOk] = multipath_equalizer_from_preamble(syncSymBob(:), rPreBob, eqCfg, frameCtx.N0, chLenSymbols);
+            if eqBobOk
+                yPrePhy = [rPreBob; rPhyBobRaw];
+                yEq = local_apply_equalizer_block_local(yPrePhy, eqBob);
+                rPreBobNominal = yEq(1:preLen);
+                rPhyBob = yEq(preLen+1:end);
+            end
+        end
+
+        if bobOk
+            bobPhyBits = decode_phy_header_symbols(rPhyBob, p.frame, p.fec, p.softMetric);
+            [bobPhyParsed, bobOk] = parse_phy_header_bits(bobPhyBits, p.frame);
+            if bobOk
+                bobPhy = bobPhyParsed;
+                bobHeaderOk = true;
+            end
+        end
+        if bobOk
+            rxStateBobNominal = derive_rx_packet_state_local( ...
+                p, double(bobPhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(bobPhy.packetIndex), bobPhy));
+            dataStart = phyStart + phyHeaderSymLen;
+            [rDataBobRaw, bobOk] = extract_fractional_block(rxBobSync, dataStart, rxStateBobNominal.nDataSym, frameCtx.syncCfgUseBob, p.mod);
+            if bobOk && eqBobOk
+                yAll = [rPreBob; rPhyBobRaw; rDataBobRaw];
+                yEqAll = local_apply_equalizer_block_local(yAll, eqBob);
+                rDataBobNominal = yEqAll(preLen + phyHeaderSymLen + 1:end);
+            else
+                rDataBobNominal = rDataBobRaw;
+            end
+        end
+    end
+    bobNom.ok(pktIdx) = bobOk;
+    bobNom.headerOk(pktIdx) = bobHeaderOk;
+    if bobOk
+        bobNom.phy(pktIdx) = bobPhy;
+        bobNom.rxState{pktIdx} = rxStateBobNominal;
+        bobNom.rData{pktIdx} = [];
+        if ~isempty(rPreBobNominal)
+            bobNom.preambleRx{pktIdx} = fit_complex_length_local(rPreBobNominal, numel(syncSymBob));
+            bobNom.preambleRef{pktIdx} = syncSymBob(:);
+        end
+        hopInfoBob = struct("enable", false);
+        if frameCtx.fhEnabled && isfield(rxStateBobNominal, "hopInfo")
+            hopInfoBob = rxStateBobNominal.hopInfo;
+        end
+        bobNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
+            rDataBobNominal, rxStateBobNominal, hopInfoBob, p.mod, frameCtx.bobRxSync, frameCtx.fhEnabled);
+    end
+
+    if eveEnabled
+        eveOk = false;
+        evePhy = phyHeaderTemplate;
+        rxStateEveNominal = [];
+        rDataEveNominal = complex(zeros(0, 1));
+        rPreEveNominal = complex(zeros(0, 1));
+        eveHeaderOk = false;
+        [startIdxEve, rxEveSync, syncSymEve, eveSyncCtrl, eveOk] = acquire_packet_sync_local( ...
+            rxEve, frameCtx.syncCfgUseEve, p, pktIdx, frameCtx.firstSyncSym, frameCtx.shortSyncSym, eveSyncCtrl);
+        if eveOk
+            preLenEve = numel(syncSymEve);
+            [rPreEve, preOkEve] = extract_fractional_block(rxEveSync, startIdxEve, preLenEve, frameCtx.syncCfgUseEve, struct("type", "BPSK"));
+            if preOkEve
+                rPreEveNominal = rPreEve;
+            end
+            phyStartEve = startIdxEve + preLenEve;
+            [rPhyEveRaw, eveOk] = extract_fractional_block(rxEveSync, phyStartEve, phyHeaderSymLen, frameCtx.syncCfgUseEve, struct("type", "BPSK"));
+
+            eqEve = struct();
+            eqEveOk = false;
+            rPhyEve = rPhyEveRaw;
+            if eveOk && preOkEve && local_multipath_eq_enabled_local(p.channel, frameCtx.eveRxSync)
+                chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
+                eqCfg = frameCtx.eveRxSync.multipathEq;
+                [eqEve, eqEveOk] = multipath_equalizer_from_preamble(syncSymEve(:), rPreEve, eqCfg, frameCtx.N0Eve, chLenSymbols);
+                if eqEveOk
+                    yPrePhy = [rPreEve; rPhyEveRaw];
+                    yEq = local_apply_equalizer_block_local(yPrePhy, eqEve);
+                    rPreEveNominal = yEq(1:preLenEve);
+                    rPhyEve = yEq(preLenEve+1:end);
+                end
+            end
+
+            if eveOk
+                evePhyBits = decode_phy_header_symbols(rPhyEve, p.frame, p.fec, p.softMetric);
+                [evePhyParsed, eveOk] = parse_phy_header_bits(evePhyBits, p.frame);
+                if eveOk
+                    evePhy = evePhyParsed;
+                    eveHeaderOk = true;
+                end
+            end
+            if eveOk
+                rxStateEveNominal = derive_rx_packet_state_local( ...
+                    p, double(evePhy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(evePhy.packetIndex), evePhy));
+                dataStartEve = phyStartEve + phyHeaderSymLen;
+                [rDataEveRaw, eveOk] = extract_fractional_block(rxEveSync, dataStartEve, rxStateEveNominal.nDataSym, frameCtx.syncCfgUseEve, p.mod);
+                if eveOk && eqEveOk
+                    yAll = [rPreEve; rPhyEveRaw; rDataEveRaw];
+                    yEqAll = local_apply_equalizer_block_local(yAll, eqEve);
+                    rDataEveNominal = yEqAll(preLenEve + phyHeaderSymLen + 1:end);
+                else
+                    rDataEveNominal = rDataEveRaw;
+                end
+            end
+        end
+        eveNom.ok(pktIdx) = eveOk;
+        eveNom.headerOk(pktIdx) = eveHeaderOk;
+        if eveOk
+            eveNom.phy(pktIdx) = evePhy;
+            eveNom.rxState{pktIdx} = rxStateEveNominal;
+            eveNom.rData{pktIdx} = [];
+            if ~isempty(rPreEveNominal)
+                eveNom.preambleRx{pktIdx} = fit_complex_length_local(rPreEveNominal, numel(syncSymEve));
+                eveNom.preambleRef{pktIdx} = syncSymEve(:);
+            end
+            hopInfoEvePrep = struct("enable", false);
+            if frameCtx.fhEnabled
+                hopInfoEvePrep = eve_hop_info_local(rxStateEveNominal, frameCtx.fhAssumptionEve);
+            end
+            eveNom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
+                rDataEveNominal, rxStateEveNominal, hopInfoEvePrep, p.mod, frameCtx.eveRxSync, frameCtx.fhEnabled);
+        end
+    end
+end
+
+[bobFrame, eveFrame] = local_decode_frame_methods_local( ...
+    frameCtx.methods, frameCtx.txPktIndex, frameCtx.txPayloadBits, frameCtx.sessionFrames, bobNom, eveNom, p, frameCtx.fhEnabled, ...
+    frameCtx.packetIndependentBitChaos, frameCtx.chaosEnabled, frameCtx.chaosEncInfo, ...
+    frameCtx.packetConcealActive, frameCtx.packetConcealMode, frameCtx.imgTx, frameCtx.meta, frameCtx.totalPayloadBits, ...
+    frameCtx.bobRxSync, frameCtx.bobMitigation, frameCtx.eveRxSync, frameCtx.eveMitigation, ...
+    eveEnabled, frameCtx.scrambleAssumptionEve, frameCtx.fhAssumptionEve, frameCtx.chaosAssumptionEve, frameCtx.chaosApproxDeltaEve, frameCtx.chaosEncInfoEve, ...
+    true, frameCtx.EbN0dB, frameCtx.EbN0dBEve, frameCtx.useParallelMethods);
+
+frameOut = struct();
+frameOut.bobFrontEndSuccessRate = mean(double(bobNom.ok));
+frameOut.bobHeaderSuccessRate = mean(double(bobNom.headerOk));
+frameOut.bobFrame = bobFrame;
+frameOut.eveFrontEndSuccessRate = 0;
+frameOut.eveHeaderSuccessRate = 0;
+frameOut.eveFrame = struct();
+if eveEnabled
+    frameOut.eveFrontEndSuccessRate = mean(double(eveNom.ok));
+    frameOut.eveHeaderSuccessRate = mean(double(eveNom.headerOk));
+    frameOut.eveFrame = eveFrame;
+end
 end
 
 function [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
