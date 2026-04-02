@@ -15,12 +15,12 @@ p.rngSeed = 1;
 
 %% 仿真控制
 p.sim = struct();
-p.sim.nFramesPerPoint = 30;
+p.sim.nFramesPerPoint = 10;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
 % 并行加速（主链路）：需要 Parallel Computing Toolbox
 p.sim.useParallel = true;
-p.sim.nWorkers = 8;
+p.sim.nWorkers = 16;
 p.sim.parallelMode = "frames"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
 
 % 链路预算（纯仿真口径）
@@ -226,7 +226,7 @@ p.mitigation.adaptiveNotch.radius = 0.97;     % 极点半径，越接近1越窄
 p.mitigation.adaptiveNotch.minFreqAbs = 0.01;
 p.mitigation.adaptiveNotch.stages = 1;
 p.mitigation.thresholdCalibration = struct();
-p.mitigation.thresholdCalibration.enable = true;
+p.mitigation.thresholdCalibration.enable = false;
 p.mitigation.thresholdCalibration.methods = ["ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard"];
 p.mitigation.thresholdCalibration.targetCleanPfa = 0.01; % 目标：在“可信干净”样本上维持的虚警率
 p.mitigation.thresholdCalibration.thresholdMinScale = 0.85; % 在线阈值下限 = 基线阈值 * scale
@@ -331,7 +331,7 @@ p.rxSync.timingDll.decisionDirected = true;
 %% 截获/隐蔽分析
 % 窃听者/截获者（Eve）
 p.eve = struct();
-p.eve.enable = true;
+p.eve.enable = false;
 % Eve链路增益 = Bob链路增益 + 偏移(dB)。负值表示Eve接收更差。
 p.eve.linkGainOffsetDb = -6;
 % Eve接收机知识模型：
@@ -357,7 +357,7 @@ p.eve.rxSync = p.rxSync;
 p.eve.mitigation = p.mitigation;
 % 隐蔽/低截获概率支持（监视者检测）
 p.covert = struct();
-p.covert.enable = true;
+p.covert.enable = false;
 p.covert.warden = struct();
 p.covert.warden.enable = true;
 % 敌方的能量检测器（辐射计）设置
