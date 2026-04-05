@@ -130,16 +130,16 @@ run_demo
 - 如缺失则自动训练并保存
 - 然后运行完整主链路仿真
 
-如果你要做中期答辩现场演示，建议直接跑：
+如果你要直接按当前默认配置跑演示，建议直接跑：
 
 ```matlab
 addpath(genpath('src'));
-run_demo("midterm")
+run_demo
 ```
 
-`"midterm"` 预设会关闭 Eve / Warden、关闭并行池、缩成单个链路预算点和单帧演示，并只保留 `none + blanking + ml_blanking` 三种方法；同时只导出 `results.mat`、一张 BER 快图和一张图像对比图，优先保证现场启动和出结果速度。
+`run_demo` 现在不再接受 `mode` 参数，会直接使用 `src/default_params.m` 的当前配置。需要调整链路预算、并行、Eve / Warden、干扰强度或抑制方法时，请直接修改 `src/default_params.m`。
 
-无论是完整结果保存还是 `midterm` 轻量导出，当前都会额外导出一组论文友好的 CSV 表格，便于后续画图和整理表格。
+只要 `p.sim.saveFigures = true`，运行结束后就会自动导出 `results.mat`、图像和论文友好的 CSV 表格，便于后续画图和整理表格。
 
 ### 2. 直接调用 `simulate`
 

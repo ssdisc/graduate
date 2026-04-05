@@ -15,7 +15,7 @@ p.rngSeed = 1;
 
 %% 仿真控制
 p.sim = struct();
-p.sim.nFramesPerPoint = 10;
+p.sim.nFramesPerPoint = 5;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
 % 并行加速（主链路）：需要 Parallel Computing Toolbox
@@ -28,7 +28,7 @@ p.linkBudget = struct();
 % 发射平均功率口径与txConstraint一致：按等效1 sps复基带均方功率统计。
 p.linkBudget.txPowerLin = 1.0;
 % 净链路增益（dB）= 发射端到接收端的总增益 - 总损耗；纯仿真下允许正值。
-p.linkBudget.linkGainDbList = 2:2:16;
+p.linkBudget.linkGainDbList = 6:2:10;
 % 接收端背景噪声功率谱密度（线性值，纯仿真归一化口径）。
 p.linkBudget.noisePsdLin = 1.0;
 

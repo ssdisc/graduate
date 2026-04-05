@@ -1,9 +1,5 @@
-function results = run_demo(mode)
+function results = run_demo()
 %RUN_DEMO Run the main demo pipeline from the repository root.
-
-arguments
-    mode (1,1) string {mustBeMember(mode, ["full" "midterm"])} = "full"
-end
 
 addpath(genpath(fullfile(fileparts(mfilename('fullpath')), 'src')));
 
@@ -11,7 +7,6 @@ p = default_params( ...
     "strictModelLoad", false, ...
     "requireTrainedMlModels", false, ...
     "loadMlModels", strings(1, 0));
-p = local_apply_demo_preset(p, mode);
 
 modelDir = fullfile(pwd, 'models');
 if ~exist(modelDir, 'dir')
@@ -24,7 +19,7 @@ generalizedTrainArgs = local_generalized_training_args();
 requiredModels = local_required_ml_models(p.mitigation.methods);
 
 fprintf('========================================\n');
-fprintf('Demo preset: %s\n', upper(char(mode)));
+fprintf('Demo config source: src/default_params.m\n');
 fprintf('========================================\n');
 fprintf('Methods: %s\n', strjoin(cellstr(p.mitigation.methods), ', '));
 fprintf('Link gain points: %s dB\n', mat2str(double(p.linkBudget.linkGainDbList)));
@@ -126,9 +121,6 @@ fprintf('Running link simulation...\n');
 fprintf('========================================\n\n');
 
 results = simulate(p);
-if mode == "midterm"
-    local_save_midterm_outputs(p, results);
-end
 disp(results.summary);
 if nargout == 0
     clear results
@@ -167,33 +159,6 @@ args = { ...
     'verbose', true};
 end
 
-function p = local_apply_demo_preset(p, mode)
-switch lower(string(mode))
-    case "full"
-        return;
-    case "midterm"
-        p.linkBudget.linkGainDbList = 6;
-        p.sim.nFramesPerPoint = 1;
-        p.sim.saveFigures = false;
-        p.sim.useParallel = false;
-        p.sim.nWorkers = 0;
-
-        p.eve.enable = false;
-        p.covert.enable = false;
-        p.covert.warden.enable = false;
-        p.covert.warden.useParallel = false;
-        p.covert.warden.nWorkers = 0;
-
-        p.mitigation.methods = ["none" "blanking" "ml_blanking"];
-
-        % Slightly stronger impulsive setting so the demo is easier to see live.
-        p.channel.impulseProb = 0.02;
-        p.channel.impulseToBgRatio = 60;
-    otherwise
-        error("Unsupported demo preset: %s", mode);
-end
-end
-
 function required = local_required_ml_models(methods)
 methods = lower(string(methods(:).'));
 required = struct();
@@ -207,70 +172,5 @@ if tf
     txt = 'ON';
 else
     txt = 'OFF';
-end
-end
-
-function local_save_midterm_outputs(p, results)
-fprintf('[RUN_DEMO] Saving lightweight midterm outputs...\n');
-
-outDir = make_results_dir(p.sim.resultsDir);
-save(fullfile(outDir, "results.mat"), "-struct", "results");
-export_thesis_tables(outDir, results);
-
-imgTx = load_source_image(p.source);
-imagesDir = fullfile(outDir, "images");
-if ~exist(imagesDir, 'dir')
-    mkdir(imagesDir);
-end
-
-figBer = figure("Name", "BER Quick View", "Visible", "off", "Color", "w");
-axBer = axes(figBer);
-bar(axBer, categorical(cellstr(results.methods)), results.ber(:, end), "FaceColor", [0.16 0.44 0.73]);
-grid(axBer, "on");
-ylabel(axBer, "BER");
-title(axBer, sprintf("BER @ Eb/N0 = %.1f dB", double(results.ebN0dB(end))));
-exportgraphics(figBer, fullfile(outDir, "ber_quick.png"), "Resolution", 180);
-close(figBer);
-
-examplePoint = results.example(end);
-figImg = figure("Name", "Midterm Comparison", "Visible", "off", "Color", "w");
-figImg.Position = [120 120 320 * (numel(results.methods) + 1) 320];
-tl = tiledlayout(figImg, 1, numel(results.methods) + 1, "TileSpacing", "compact", "Padding", "compact");
-title(tl, sprintf("Image Comparison @ Eb/N0 = %.1f dB", double(results.ebN0dB(end))));
-
-nexttile(tl);
-imshow(imgTx);
-title("TX", "FontSize", 12);
-
-for idx = 1:numel(results.methods)
-    methodName = char(results.methods(idx));
-    exampleEntry = examplePoint.methods.(methodName);
-    imgRx = local_pick_midterm_image(exampleEntry);
-
-    nexttile(tl);
-    imshow(imgRx);
-    title({ ...
-        methodName; ...
-        sprintf("BER=%.3g", double(results.ber(idx, end))); ...
-        sprintf("PSNR=%.2f dB", double(results.psnrCompensated(idx, end)))}, ...
-        "Interpreter", "none", "FontSize", 11);
-end
-
-exportgraphics(figImg, fullfile(imagesDir, "comparison.png"), "Resolution", 180);
-close(figImg);
-
-fprintf('[RUN_DEMO] Midterm outputs saved to: %s\n\n', outDir);
-end
-
-function img = local_pick_midterm_image(exampleEntry)
-if isfield(exampleEntry, "imgRxCompensated") && ~isempty(exampleEntry.imgRxCompensated)
-    img = exampleEntry.imgRxCompensated;
-elseif isfield(exampleEntry, "imgRx") && ~isempty(exampleEntry.imgRx)
-    img = exampleEntry.imgRx;
-elseif isfield(exampleEntry, "imgRxComm") && ~isempty(exampleEntry.imgRxComm)
-    img = exampleEntry.imgRxComm;
-else
-    error("run_demo:MissingMidtermExampleImage", ...
-        "No image available in the example entry for lightweight export.");
 end
 end
