@@ -27,12 +27,13 @@
 | 调制 | `QPSK` |
 | 跳频 | 启用，默认 `chaos` 序列，`8` 个频点，每跳 `64` 符号 |
 | 波形成型 | 启用 `RRC`，`sps=4`，`rolloff=0.25` |
-| 链路预算 | 纯仿真链路预算：`txPowerLin=1`，`linkGainDbList=-2:2:16`，`noisePsdLin=1` |
-| 发射约束 | 默认启用：`burst <= 21 s`，`avg power <= 1.05`（按 `1 sps` 等效功率口径） |
+| 发射功率 | 由 `p.tx.powerDbList` 配置扫描点，按 `1 sps` 等效功率口径缩放整段发射波形 |
+| 链路预算 | 纯仿真链路预算：`p.tx.powerDbList` 扫描发射功率，`p.linkBudget.noisePsdLin` 给定噪声 PSD |
+| 发射记录 | 发射时长与实测功率只记录和评估，不再作为超限约束 |
 | 同步 | 默认每个分包成帧时都使用长 `PN` 前导重同步 |
 | PHY头 | 默认 `compact_fec` |
 | Session 元数据 | 默认 `session_frame_repeat`，即先发送 3 次 dedicated session frame，再发送数据帧 |
-| Eve | 默认启用，链路增益比 Bob 低 `6 dB`，默认场景是 `scramble=known`、`fh=partial`、`chaos=known` |
+| Eve | 默认启用，接收端相对 Bob 低 `6 dB`，默认场景是 `scramble=known`、`fh=partial`、`chaos=known` |
 | Warden | 默认启用，主判据为 `energyOptUncertain` |
 
 ## 术语约定
@@ -578,7 +579,9 @@ p.frame.sessionStrongRepeat = 8;
 
 | 参数 | 作用 |
 |------|------|
-| `p.linkBudget.*` | 纯仿真链路预算：发射功率、链路增益扫描、噪声 PSD |
+| `p.tx.*` | 发射端配置：当前用于设置发射功率；发射时长只记录不设约束 |
+| `p.tx.powerDbList` | 发射功率扫描点（dB） |
+| `p.linkBudget.*` | 纯仿真链路预算：当前用于配置噪声 PSD |
 | `p.sim.nFramesPerPoint` | 每个链路预算点的帧数 |
 | `p.sim.useParallel` | 主链路是否并行 |
 | `p.source.*` | 图像路径、缩放、灰度化 |
@@ -592,7 +595,6 @@ p.frame.sessionStrongRepeat = 8;
 | `p.mod.*` | `BPSK` / `QPSK` / `MSK` |
 | `p.fh.*` | 跳频序列类型、频点数、每跳长度 |
 | `p.waveform.*` | `RRC` 成型与采样率 |
-| `p.txConstraint.*` | 发射时间 / 发射功率约束，超限直接报错 |
 | `p.channel.*` | 脉冲干扰、多径、同步失配、窄带/扫频干扰 |
 | `p.rxSync.*` | 细同步、CFO、PLL、多径均衡、DLL |
 | `p.mitigation.*` | 脉冲抑制与 ML 阈值校准 |

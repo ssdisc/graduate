@@ -22,9 +22,8 @@ fprintf('========================================\n');
 fprintf('Demo config source: src/default_params.m\n');
 fprintf('========================================\n');
 fprintf('Methods: %s\n', strjoin(cellstr(p.mitigation.methods), ', '));
-fprintf('Link gain points: %s dB\n', mat2str(double(p.linkBudget.linkGainDbList)));
-fprintf('Tx power: %.2f dB, Noise PSD: %.4g\n', ...
-    10 * log10(double(p.linkBudget.txPowerLin)), double(p.linkBudget.noisePsdLin));
+fprintf('Tx power points: %s dB\n', mat2str(double(p.tx.powerDbList)));
+fprintf('Noise PSD: %.4g\n', double(p.linkBudget.noisePsdLin));
 fprintf('Frames per point: %d\n', p.sim.nFramesPerPoint);
 fprintf('Parallel: %s\n', local_on_off_text(p.sim.useParallel));
 fprintf('Eve: %s, Warden: %s\n\n', ...

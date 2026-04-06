@@ -21,14 +21,15 @@ p.sim.resultsDir = fullfile(pwd, "results");
 % 并行加速（主链路）：需要 Parallel Computing Toolbox
 p.sim.useParallel = true;
 p.sim.nWorkers = 16;
-p.sim.parallelMode = "frames"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
+p.sim.parallelMode = "methods"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
+
+% 发射端记录/评估口径
+p.tx = struct();
+% 发射平均功率扫描点（dB），按“等效1 sps复基带均方功率”口径定义。
+p.tx.powerDbList = 6:2:10;
 
 % 链路预算（纯仿真口径）
 p.linkBudget = struct();
-% 发射平均功率口径与txConstraint一致：按等效1 sps复基带均方功率统计。
-p.linkBudget.txPowerLin = 1.0;
-% 净链路增益（dB）= 发射端到接收端的总增益 - 总损耗；纯仿真下允许正值。
-p.linkBudget.linkGainDbList = 6:2:10;
 % 接收端背景噪声功率谱密度（线性值，纯仿真归一化口径）。
 p.linkBudget.noisePsdLin = 1.0;
 
@@ -155,13 +156,6 @@ p.waveform.sps = 4;              % 每符号采样数
 p.waveform.rolloff = 0.25;       % RRC滚降系数
 p.waveform.spanSymbols = 10;     % RRC滤波器长度（单位：符号）
 p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
-
-% 9.6) 发射端资源约束（赛道一）
-p.txConstraint = struct();
-p.txConstraint.enable = true;
-p.txConstraint.maxBurstDurationSec = 21.0; % 当前默认整段burst约20.09 s；超限直接报错
-% 发射功率按“等效1 sps复基带均方功率”统计，避免RRC过采样把功率数值稀释。
-p.txConstraint.maxAveragePowerLin = 1.05;
 
 %% 信道
 % 对外配置口径：

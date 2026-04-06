@@ -3,7 +3,7 @@ function results = simulate(p)
 %
 % 输入:
 %   p - 仿真参数结构体（建议由default_params()生成）
-%       .rngSeed, .sim, .source, .chaosEncrypt, .payload, .waveform, .txConstraint, .linkBudget
+%       .rngSeed, .sim, .tx, .source, .chaosEncrypt, .payload, .waveform, .linkBudget
 %       .frame, .scramble, .fec, .interleaver, .mod, .fh
 %       .channel, .mitigation, .softMetric, .rxSync
 %       .eve（可选）, .covert（可选）
@@ -94,22 +94,26 @@ packetConcealActive = packetConcealEnable && nPackets > 1;
 % 用于信道/频谱/监视者评估的整段突发
 txSymForChannel = txPlan.txBurstForChannel;
 modInfo = txPlan.modInfo;
-txConstraintMeasureCfg = p.txConstraint;
-txConstraintMeasureCfg.enable = false;
-txBaseReport = check_tx_constraints(txSymForChannel, waveform, txConstraintMeasureCfg);
-linkBudget = resolve_link_budget(p.linkBudget, modInfo, txBaseReport.averagePowerLin);
-txBurstForChannelBudgeted = linkBudget.txAmplitudeScale * txSymForChannel;
-txConstraintReport = check_tx_constraints(txBurstForChannelBudgeted, waveform, p.txConstraint);
-txConstraintReport.baseAveragePowerLin = txBaseReport.averagePowerLin;
-txConstraintReport.txAmplitudeScale = linkBudget.txAmplitudeScale;
-if txConstraintReport.enabled
-    fprintf('[SIM] Tx约束通过: burst %.3fs / %.3fs, avg power %.4f / %.4f (1 sps等效)\n', ...
-        txConstraintReport.burstDurationSec, txConstraintReport.maxBurstDurationSec, ...
-        txConstraintReport.averagePowerLin, txConstraintReport.maxAveragePowerLin);
-else
-    fprintf('[SIM] Tx约束关闭: burst %.3fs, avg power %.4f (1 sps等效)\n', ...
-        txConstraintReport.burstDurationSec, txConstraintReport.averagePowerLin);
-end
+txBaseReport = measure_tx_burst(txSymForChannel, waveform);
+linkBudget = resolve_link_budget(p.linkBudget, p.tx, modInfo, txBaseReport.averagePowerLin);
+powerScaleLinList = linkBudget.bob.txPowerLin ./ txBaseReport.averagePowerLin;
+txReport = struct( ...
+    "burstDurationSec", txBaseReport.burstDurationSec, ...
+    "baseAveragePowerLin", txBaseReport.averagePowerLin, ...
+    "baseAveragePowerDb", txBaseReport.averagePowerDb, ...
+    "basePeakPowerLin", txBaseReport.peakPowerLin, ...
+    "basePeakPowerDb", txBaseReport.peakPowerDb, ...
+    "txAmplitudeScale", linkBudget.bob.rxAmplitudeScale, ...
+    "configuredPowerLin", linkBudget.bob.txPowerLin, ...
+    "configuredPowerDb", linkBudget.bob.txPowerDb, ...
+    "averagePowerLin", txBaseReport.averagePowerLin .* powerScaleLinList, ...
+    "averagePowerDb", 10 * log10(max(txBaseReport.averagePowerLin .* powerScaleLinList, realmin('double'))), ...
+    "peakPowerLin", txBaseReport.peakPowerLin .* powerScaleLinList, ...
+    "peakPowerDb", 10 * log10(max(txBaseReport.peakPowerLin .* powerScaleLinList, realmin('double'))), ...
+    "powerErrorLin", txBaseReport.averagePowerLin .* powerScaleLinList - linkBudget.bob.txPowerLin, ...
+    "powerErrorDb", 10 * log10(max(txBaseReport.averagePowerLin .* powerScaleLinList, realmin('double'))) - linkBudget.bob.txPowerDb);
+fprintf('[SIM] Tx记录: burst %.3fs, txPower点=%s dB, base avg %.4f (1 sps等效)\n', ...
+    txReport.burstDurationSec, mat2str(double(txReport.configuredPowerDb)), txBaseReport.averagePowerLin);
 
 %% 仿真参数初始化与配置
 
@@ -284,8 +288,7 @@ fprintf('\n========================================\n');
 fprintf('[SIM] 链路仿真开始\n');
 fprintf('[SIM] 链路预算点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
     totalEbN0Points, p.sim.nFramesPerPoint, totalFrames);
-fprintf('[SIM] Tx功率=%.2f dB, LinkGain点=%s dB\n', ...
-    linkBudget.txPowerDb, mat2str(double(linkBudget.bob.linkGainDb)));
+fprintf('[SIM] Tx功率点=%s dB\n', mat2str(double(linkBudget.bob.txPowerDb)));
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
 if numel(methods) > 1
     hasImpulse = isfield(p, "channel") && isfield(p.channel, "impulseProb") && double(p.channel.impulseProb) > 0;
@@ -341,8 +344,8 @@ for ie = 1:numel(EbN0dBList)
     txBurstBobForPoint = linkBudget.bob.rxAmplitudeScale(ie) * txSymForChannel;
     [klSigVsNoise(ie), klNoiseVsSig(ie), klSym(ie)] = signal_noise_kl(txBurstBobForPoint, N0, 128);
 
-    fprintf('[SIM] >>> 链路预算点 %d/%d: linkGain %.2f dB, Bob Eb/N0 %.2f dB\n', ...
-        ie, totalEbN0Points, linkBudget.bob.linkGainDb(ie), EbN0dB);
+    fprintf('[SIM] >>> 链路预算点 %d/%d: txPower %.2f dB, Bob Eb/N0 %.2f dB\n', ...
+        ie, totalEbN0Points, linkBudget.bob.txPowerDb(ie), EbN0dB);
 
     if eveEnabled
         EbN0dBEve = eveBudget.ebN0dB(ie);
@@ -564,7 +567,8 @@ for ie = 1:numel(EbN0dBList)
             packetConcealActive, "Eve");
     end
 
-    fprintf('[SIM] <<< 链路预算点完成: Bob Eb/N0 %.2f dB, 用时 %.2fs\n', EbN0dB, toc(pointTic));
+    fprintf('[SIM] <<< 链路预算点完成: txPower %.2f dB, Bob Eb/N0 %.2f dB, 用时 %.2fs\n', ...
+        linkBudget.bob.txPowerDb(ie), EbN0dB, toc(pointTic));
     fprintf('[SIM]     Bob BER: %s\n', format_metric_pairs(methods, ber(:, ie)));
     if eveEnabled
         fprintf('[SIM]     Eve BER: %s\n', format_metric_pairs(methods, berEve(:, ie)));
@@ -576,14 +580,16 @@ end
 fprintf('[SIM] 开始频谱估计与结果汇总...\n');
 
 % 波形/频谱（单次突发，无信道，基于真实发射采样波形）
+[~, spectrumPointIdx] = max(linkBudget.bob.txPowerLin);
+txBurstForSpectrum = linkBudget.bob.rxAmplitudeScale(spectrumPointIdx) * txSymForChannel;
 [psd, freqHz, bw99Hz, etaBpsHz, spectrumInfo] = estimate_spectrum( ...
-    txBurstForChannelBudgeted, modInfo, waveform, struct("payloadBits", numel(payloadBits)));
+    txBurstForSpectrum, modInfo, waveform, struct("payloadBits", numel(payloadBits)));
 
 results = struct();
 results.params = p;
 results.ebN0dB = EbN0dBList;
 results.methods = methods;
-results.tx = txConstraintReport;
+results.tx = txReport;
 results.linkBudget = linkBudget;
 results.ber = ber;
 results.packetDiagnostics = struct();
@@ -2636,6 +2642,8 @@ end
 
 gainScaleLin = 10 .^ (offsetDb / 10);
 budgetOut = struct( ...
+    "txPowerDb", baseBudget.txPowerDb, ...
+    "txPowerLin", baseBudget.txPowerLin, ...
     "linkGainDb", baseBudget.linkGainDb + offsetDb, ...
     "linkGainLin", baseBudget.linkGainLin .* gainScaleLin, ...
     "rxAmplitudeScale", baseBudget.rxAmplitudeScale .* sqrt(gainScaleLin), ...

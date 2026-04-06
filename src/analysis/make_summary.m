@@ -44,17 +44,21 @@ if isfield(results, "packetDiagnostics") && isfield(results.packetDiagnostics, "
 end
 s.klSymAtMaxEbN0 = results.kl.symmetric(end);
 if isfield(results, "tx")
-    s.txConstraintEnabled = logical(results.tx.enabled);
     s.txBurstDurationSec = results.tx.burstDurationSec;
+    s.txBaseAveragePowerLin = results.tx.baseAveragePowerLin;
+    s.txBaseAveragePowerDb = results.tx.baseAveragePowerDb;
     s.txAveragePowerLin = results.tx.averagePowerLin;
-    s.txMaxBurstDurationSec = results.tx.maxBurstDurationSec;
-    s.txMaxAveragePowerLin = results.tx.maxAveragePowerLin;
+    s.txAveragePowerDb = results.tx.averagePowerDb;
+    s.txPeakPowerLin = results.tx.peakPowerLin;
+    s.txPeakPowerDb = results.tx.peakPowerDb;
+    s.txConfiguredPowerLin = results.tx.configuredPowerLin;
+    s.txConfiguredPowerDb = results.tx.configuredPowerDb;
+    s.txPowerErrorLin = results.tx.powerErrorLin;
+    s.txPowerErrorDb = results.tx.powerErrorDb;
 end
 if isfield(results, "linkBudget")
-    s.linkBudgetTxPowerLin = results.linkBudget.txPowerLin;
-    s.linkBudgetTxPowerDb = results.linkBudget.txPowerDb;
-    if isfield(results.linkBudget, "bob") && isfield(results.linkBudget.bob, "linkGainDb")
-        s.linkBudgetBobLinkGainDb = results.linkBudget.bob.linkGainDb;
+    if isfield(results.linkBudget, "bob") && isfield(results.linkBudget.bob, "txPowerDb")
+        s.linkBudgetBobTxPowerDb = results.linkBudget.bob.txPowerDb;
     end
 end
 
