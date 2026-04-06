@@ -86,6 +86,10 @@ if isfield(reference, "featureNames")
     ok = ok && isfield(candidate, "featureNames") ...
         && isequal(string(candidate.featureNames(:)).', string(reference.featureNames(:)).');
 end
+if isfield(reference, "classNames")
+    ok = ok && isfield(candidate, "classNames") ...
+        && isequal(string(candidate.classNames(:)).', string(reference.classNames(:)).');
+end
 if isfield(reference, "features")
     ok = ok && isfield(candidate, "features") ...
         && isequal(string(candidate.features(:)).', string(reference.features(:)).');

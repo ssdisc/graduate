@@ -16,6 +16,7 @@ end
 forceRetrain = false;
 batchTag = string(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
 generalizedTrainArgs = local_generalized_training_args();
+selectorTrainArgs = local_selector_training_args();
 requiredModels = local_required_ml_models(p.mitigation.methods);
 
 fprintf('========================================\n');
@@ -112,8 +113,39 @@ else
     fprintf('Skipping GRU model load: current methods do not use ml_gru/ml_gru_hard.\n\n');
 end
 
+if requiredModels.selector
+    selectorModelPath = fullfile(modelDir, 'interference_selector_model.mat');
+    if ~forceRetrain
+        [p.mitigation.selector, loadedSelector, loadedSelectorPath] = load_pretrained_model(selectorModelPath, @ml_interference_selector_model);
+        loadedSelector = loadedSelector && isfield(p.mitigation.selector, 'trained') && logical(p.mitigation.selector.trained);
+        if ~loadedSelector
+            loadedSelectorPath = "";
+        end
+    else
+        loadedSelector = false;
+        loadedSelectorPath = "";
+    end
+    if loadedSelector
+        fprintf('Loaded selector model: %s\n\n', char(loadedSelectorPath));
+    else
+        fprintf('Training selector model...\n');
+        [p.mitigation.selector, selectorReport] = ml_train_interference_selector(p, ...
+            selectorTrainArgs{:}, ...
+            'nBlocks', 900, 'dataSymbolsPerBlock', 512, 'epochs', 60, ...
+            'saveArtifacts', true, 'saveDir', string(modelDir), ...
+            'saveTag', batchTag, 'savedBy', "run_demo");
+        fprintf('Selector model saved (latest): %s\n', char(selectorReport.artifacts.latestPath));
+        fprintf('Selector model saved (batch): %s\n\n', char(selectorReport.artifacts.batchPath));
+    end
+else
+    fprintf('Skipping selector model load: current methods do not use adaptive_ml_frontend.\n\n');
+end
+
 p.mitigation.strictModelLoad = true;
 p.mitigation.requireTrainedModels = true;
+if isfield(p, 'eve') && isstruct(p.eve) && isfield(p.eve, 'mitigation')
+    p.eve.mitigation = p.mitigation;
+end
 
 fprintf('========================================\n');
 fprintf('Running link simulation...\n');
@@ -163,7 +195,8 @@ methods = lower(string(methods(:).'));
 required = struct();
 required.lr = any(methods == "ml_blanking");
 required.cnn = any(methods == "ml_cnn" | methods == "ml_cnn_hard");
-required.gru = any(methods == "ml_gru" | methods == "ml_gru_hard");
+required.gru = any(methods == "ml_gru" | methods == "ml_gru_hard" | methods == "adaptive_ml_frontend");
+required.selector = any(methods == "adaptive_ml_frontend");
 end
 
 function txt = local_on_off_text(tf)
@@ -172,4 +205,11 @@ if tf
 else
     txt = 'OFF';
 end
+end
+
+function args = local_selector_training_args()
+args = { ...
+    'ebN0dBRange', [-4, 16], ...
+    'maxRetriesPerBlock', 10, ...
+    'verbose', true};
 end

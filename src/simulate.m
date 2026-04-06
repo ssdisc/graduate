@@ -126,6 +126,11 @@ packetHeaderBobVals = nan(1, numel(EbN0dBList));
 packetFrontEndBobMethodVals = nan(numel(methods), numel(EbN0dBList));
 packetHeaderBobMethodVals = nan(numel(methods), numel(EbN0dBList));
 packetSuccessBobVals = nan(numel(methods), numel(EbN0dBList));
+adaptiveDiagCfgGlobal = local_adaptive_frontend_catalog_local(bobMitigation);
+adaptiveClassBobVals = zeros(numel(adaptiveDiagCfgGlobal.classNames), numel(methods), numel(EbN0dBList));
+adaptiveActionBobVals = zeros(numel(adaptiveDiagCfgGlobal.actionNames), numel(methods), numel(EbN0dBList));
+adaptivePathBobVals = zeros(numel(adaptiveDiagCfgGlobal.bootstrapPaths), numel(methods), numel(EbN0dBList));
+adaptiveMeanConfidenceBobVals = nan(numel(methods), numel(EbN0dBList));
 mseCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的MSE
 psnrCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的PSNR
 ssimCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的SSIM
@@ -384,6 +389,11 @@ for ie = 1:numel(EbN0dBList)
     packetFrontEndBobAcc = zeros(numel(methods), 1);
     packetHeaderBobAcc = zeros(numel(methods), 1);
     packetSuccessBobAcc = zeros(numel(methods), 1);
+    adaptiveClassBobAcc = zeros(numel(adaptiveDiagCfgGlobal.classNames), numel(methods));
+    adaptiveActionBobAcc = zeros(numel(adaptiveDiagCfgGlobal.actionNames), numel(methods));
+    adaptivePathBobAcc = zeros(numel(adaptiveDiagCfgGlobal.bootstrapPaths), numel(methods));
+    adaptiveConfidenceBobAcc = zeros(numel(methods), 1);
+    adaptiveDecisionBobAcc = zeros(numel(methods), 1);
     metricAccComm = init_image_metric_acc_local(numel(methods));
     metricAccComp = init_image_metric_acc_local(numel(methods));
     exampleCandidates = init_example_candidate_bank_local(numel(methods), p.sim.nFramesPerPoint);
@@ -497,6 +507,11 @@ for ie = 1:numel(EbN0dBList)
         nErr = nErr + bobFrame.nErr;
         nTot = nTot + bobFrame.nTot;
         packetSuccessBobAcc = packetSuccessBobAcc + bobFrame.packetSuccessRate;
+        adaptiveClassBobAcc = adaptiveClassBobAcc + bobFrame.adaptiveFrontEnd.classCounts;
+        adaptiveActionBobAcc = adaptiveActionBobAcc + bobFrame.adaptiveFrontEnd.actionCounts;
+        adaptivePathBobAcc = adaptivePathBobAcc + bobFrame.adaptiveFrontEnd.pathCounts;
+        adaptiveConfidenceBobAcc = adaptiveConfidenceBobAcc + bobFrame.adaptiveFrontEnd.confidenceSum;
+        adaptiveDecisionBobAcc = adaptiveDecisionBobAcc + bobFrame.adaptiveFrontEnd.decisionCount;
         for im = 1:numel(methods)
             metricAccComm = accumulate_image_metric_acc_local(metricAccComm, im, ...
                 bobFrame.metricsComm.mse(im), bobFrame.metricsComm.psnr(im), bobFrame.metricsComm.ssim(im));
@@ -528,6 +543,14 @@ for ie = 1:numel(EbN0dBList)
     packetFrontEndBobVals(ie) = mean(packetFrontEndBobMethodVals(:, ie));
     packetHeaderBobVals(ie) = mean(packetHeaderBobMethodVals(:, ie));
     packetSuccessBobVals(:, ie) = packetSuccessBobAcc / p.sim.nFramesPerPoint;
+    adaptiveClassBobVals(:, :, ie) = adaptiveClassBobAcc;
+    adaptiveActionBobVals(:, :, ie) = adaptiveActionBobAcc;
+    adaptivePathBobVals(:, :, ie) = adaptivePathBobAcc;
+    adaptiveMeanConfidenceNow = nan(numel(methods), 1);
+    hasAdaptiveDecision = adaptiveDecisionBobAcc > 0;
+    adaptiveMeanConfidenceNow(hasAdaptiveDecision) = ...
+        adaptiveConfidenceBobAcc(hasAdaptiveDecision) ./ adaptiveDecisionBobAcc(hasAdaptiveDecision);
+    adaptiveMeanConfidenceBobVals(:, ie) = adaptiveMeanConfidenceNow;
 
     [mseOutComm, psnrOutComm, ssimOutComm] = finalize_image_metric_acc_local(metricAccComm);
     [mseOutComp, psnrOutComp, ssimOutComp] = finalize_image_metric_acc_local(metricAccComp);
@@ -598,7 +621,15 @@ results.packetDiagnostics.bob = struct( ...
     "headerSuccessRate", packetHeaderBobVals, ...
     "frontEndSuccessRateByMethod", packetFrontEndBobMethodVals, ...
     "headerSuccessRateByMethod", packetHeaderBobMethodVals, ...
-    "payloadSuccessRate", packetSuccessBobVals);
+    "payloadSuccessRate", packetSuccessBobVals, ...
+    "adaptiveFrontEnd", struct( ...
+        "classNames", adaptiveDiagCfgGlobal.classNames, ...
+        "actionNames", adaptiveDiagCfgGlobal.actionNames, ...
+        "bootstrapPaths", adaptiveDiagCfgGlobal.bootstrapPaths, ...
+        "classCounts", adaptiveClassBobVals, ...
+        "actionCounts", adaptiveActionBobVals, ...
+        "pathCounts", adaptivePathBobVals, ...
+        "meanConfidence", adaptiveMeanConfidenceBobVals));
 results.packetConceal = struct("configured", packetConcealEnable, "active", packetConcealActive, "mode", packetConcealMode);
 results.imageMetrics = struct();
 results.imageMetrics.communication = struct("mse", mseCommVals, "psnr", psnrCommVals, "ssim", ssimCommVals);
@@ -1062,6 +1093,12 @@ psnrCompBob = nan(nMethods, 1);
 ssimCompBob = nan(nMethods, 1);
 packetSuccessBob = zeros(nMethods, 1);
 exampleBob = cell(nMethods, 1);
+adaptiveDiagCfg = local_adaptive_frontend_catalog_local(bobMitigation);
+adaptiveClassBob = zeros(numel(adaptiveDiagCfg.classNames), nMethods);
+adaptiveActionBob = zeros(numel(adaptiveDiagCfg.actionNames), nMethods);
+adaptivePathBob = zeros(numel(adaptiveDiagCfg.bootstrapPaths), nMethods);
+adaptiveConfidenceBob = zeros(nMethods, 1);
+adaptiveDecisionBob = zeros(nMethods, 1);
 
 % Always preallocate Eve arrays so PARFOR variable classification is stable.
 nErrEve = zeros(nMethods, 1);
@@ -1083,12 +1120,12 @@ if useParfor
         parfor im = 1:nMethods
             bobNom = local_build_packet_nominal_local( ...
                 bobRaw, txPackets, sessionFrames, methods(im), bobMitigation, ...
-                syncCfgUseBob, bobRxSync, p, waveform, N0Bob, fhEnabled, "known");
+                syncCfgUseBob, bobRxSync, p, waveform, N0Bob, fhEnabled, "known", true);
             eveNom = struct();
             if eveEnabled
                 eveNom = local_build_packet_nominal_local( ...
                     eveRaw, txPackets, sessionFrames, methods(im), eveMitigation, ...
-                    syncCfgUseEve, eveRxSync, p, waveform, N0Eve, fhEnabled, fhAssumptionEve);
+                    syncCfgUseEve, eveRxSync, p, waveform, N0Eve, fhEnabled, fhAssumptionEve, false);
             end
 
             [bobRes, eveRes] = local_decode_single_method_local( ...
@@ -1111,6 +1148,11 @@ if useParfor
             ssimCompBob(im) = bobRes.ssimComp;
             packetSuccessBob(im) = bobRes.packetSuccessRate;
             exampleBob{im} = bobRes.example;
+            adaptiveClassBob(:, im) = bobRes.adaptiveFrontEnd.classCounts;
+            adaptiveActionBob(:, im) = bobRes.adaptiveFrontEnd.actionCounts;
+            adaptivePathBob(:, im) = bobRes.adaptiveFrontEnd.pathCounts;
+            adaptiveConfidenceBob(im) = bobRes.adaptiveFrontEnd.confidenceSum;
+            adaptiveDecisionBob(im) = bobRes.adaptiveFrontEnd.decisionCount;
 
             if eveEnabled
                 nErrEve(im) = eveRes.nErr;
@@ -1150,6 +1192,11 @@ if useParfor
         ssimCompBob = nan(nMethods, 1);
         packetSuccessBob = zeros(nMethods, 1);
         exampleBob = cell(nMethods, 1);
+        adaptiveClassBob = zeros(numel(adaptiveDiagCfg.classNames), nMethods);
+        adaptiveActionBob = zeros(numel(adaptiveDiagCfg.actionNames), nMethods);
+        adaptivePathBob = zeros(numel(adaptiveDiagCfg.bootstrapPaths), nMethods);
+        adaptiveConfidenceBob = zeros(nMethods, 1);
+        adaptiveDecisionBob = zeros(nMethods, 1);
 
         nErrEve = zeros(nMethods, 1);
         nTotEve = zeros(nMethods, 1);
@@ -1170,12 +1217,12 @@ if ~useParfor
     for im = 1:nMethods
         bobNom = local_build_packet_nominal_local( ...
             bobRaw, txPackets, sessionFrames, methods(im), bobMitigation, ...
-            syncCfgUseBob, bobRxSync, p, waveform, N0Bob, fhEnabled, "known");
+            syncCfgUseBob, bobRxSync, p, waveform, N0Bob, fhEnabled, "known", true);
         eveNom = struct();
         if eveEnabled
             eveNom = local_build_packet_nominal_local( ...
                 eveRaw, txPackets, sessionFrames, methods(im), eveMitigation, ...
-                syncCfgUseEve, eveRxSync, p, waveform, N0Eve, fhEnabled, fhAssumptionEve);
+                syncCfgUseEve, eveRxSync, p, waveform, N0Eve, fhEnabled, fhAssumptionEve, false);
         end
 
         [bobRes, eveRes] = local_decode_single_method_local( ...
@@ -1198,6 +1245,11 @@ if ~useParfor
         ssimCompBob(im) = bobRes.ssimComp;
         packetSuccessBob(im) = bobRes.packetSuccessRate;
         exampleBob{im} = bobRes.example;
+        adaptiveClassBob(:, im) = bobRes.adaptiveFrontEnd.classCounts;
+        adaptiveActionBob(:, im) = bobRes.adaptiveFrontEnd.actionCounts;
+        adaptivePathBob(:, im) = bobRes.adaptiveFrontEnd.pathCounts;
+        adaptiveConfidenceBob(im) = bobRes.adaptiveFrontEnd.confidenceSum;
+        adaptiveDecisionBob(im) = bobRes.adaptiveFrontEnd.decisionCount;
 
         if eveEnabled
             nErrEve(im) = eveRes.nErr;
@@ -1224,6 +1276,15 @@ bobFrame.headerSuccessRate = headerBob;
 bobFrame.packetSuccessRate = packetSuccessBob;
 bobFrame.metricsComm = struct("mse", mseCommBob, "psnr", psnrCommBob, "ssim", ssimCommBob);
 bobFrame.metricsComp = struct("mse", mseCompBob, "psnr", psnrCompBob, "ssim", ssimCompBob);
+bobFrame.adaptiveFrontEnd = struct( ...
+    "classNames", adaptiveDiagCfg.classNames, ...
+    "actionNames", adaptiveDiagCfg.actionNames, ...
+    "bootstrapPaths", adaptiveDiagCfg.bootstrapPaths, ...
+    "classCounts", adaptiveClassBob, ...
+    "actionCounts", adaptiveActionBob, ...
+    "pathCounts", adaptivePathBob, ...
+    "confidenceSum", adaptiveConfidenceBob, ...
+    "decisionCount", adaptiveDecisionBob);
 bobFrame.example = exampleBob;
 
 eveFrame = struct();
@@ -1350,6 +1411,7 @@ bobRes.mseComp = mseNowComp;
 bobRes.psnrComp = psnrNowComp;
 bobRes.ssimComp = ssimNowComp;
 bobRes.packetSuccessRate = mean(packetOkBob);
+bobRes.adaptiveFrontEnd = local_collect_adaptive_frontend_summary_local(bobNom, bobMitigation);
 bobRes.thresholdCalibration = local_pack_threshold_calibration_state_local(calStateBob);
 bobRes.example = [];
 if captureExample
@@ -1364,6 +1426,7 @@ if captureExample
     bobRes.example.imgRx = imgRxComp;
     bobRes.example.packetSuccessRate = bobRes.packetSuccessRate;
     bobRes.example.headerOk = all(bobNom.headerOk);
+    bobRes.example.adaptiveFrontEnd = bobRes.adaptiveFrontEnd;
     bobRes.example.thresholdCalibration = bobRes.thresholdCalibration;
 end
 
@@ -1476,6 +1539,7 @@ eveRes.mseComp = mseNowCompEve;
 eveRes.psnrComp = psnrNowCompEve;
 eveRes.ssimComp = ssimNowCompEve;
 eveRes.packetSuccessRate = mean(packetOkEve);
+eveRes.adaptiveFrontEnd = local_collect_adaptive_frontend_summary_local(eveNom, eveMitigation);
 eveRes.thresholdCalibration = local_pack_threshold_calibration_state_local(calStateEve);
 eveRes.example = [];
 if captureExample
@@ -1947,6 +2011,10 @@ nom.preambleRx = cell(nPackets, 1);
 nom.preambleRef = cell(nPackets, 1);
 nom.rDataPrepared = cell(nPackets, 1);
 nom.rDataReliability = cell(nPackets, 1);
+nom.adaptiveClass = strings(nPackets, 1);
+nom.adaptiveAction = strings(nPackets, 1);
+nom.adaptiveBootstrapPath = strings(nPackets, 1);
+nom.adaptiveConfidence = nan(nPackets, 1);
 nom.session = local_init_session_nominal_local(nSessionFrames);
 end
 
@@ -1957,6 +2025,10 @@ nom.rDataPrepared = cell(nFrames, 1);
 nom.rDataReliability = cell(nFrames, 1);
 nom.preambleRx = cell(nFrames, 1);
 nom.preambleRef = cell(nFrames, 1);
+nom.adaptiveClass = strings(nFrames, 1);
+nom.adaptiveAction = strings(nFrames, 1);
+nom.adaptiveBootstrapPath = strings(nFrames, 1);
+nom.adaptiveConfidence = nan(nFrames, 1);
 end
 
 function sessionRx = local_capture_session_frames_raw_local(sessionFrames, rxAmplitudeScale, N0, channelSample, frameDelay, waveform)
@@ -1974,34 +2046,46 @@ for frameIdx = 1:numel(sessionFrames)
 end
 end
 
-function nom = local_build_packet_nominal_local(rawCapture, txPackets, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, fhEnabled, fhAssumption)
+function nom = local_build_packet_nominal_local(rawCapture, txPackets, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, fhEnabled, fhAssumption, adaptiveEnabled)
 nPackets = numel(txPackets);
 nom = local_init_packet_nominal_local(nPackets, numel(sessionFrames));
 nom.session = local_build_session_nominal_local( ...
-    rawCapture.sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0);
+    rawCapture.sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, adaptiveEnabled);
 
 for pktIdx = 1:nPackets
     if numel(rawCapture.rxPackets) < pktIdx || isempty(rawCapture.rxPackets{pktIdx})
         continue;
     end
     rxRaw = rawCapture.rxPackets{pktIdx};
-    [rxMit, reliability] = mitigate_impulses(rxRaw, methodName, mitigation);
-
     syncSymRef = txPackets(pktIdx).syncSym(:);
-    [startIdx, rxSync] = frame_sync(rxMit, syncSymRef, syncCfgUse);
-    if isempty(startIdx)
-        continue;
-    end
-
     preLen = numel(syncSymRef);
     hdrLen = numel(txPackets(pktIdx).phyHeaderSym);
     dataLen = numel(txPackets(pktIdx).dataSymTx);
     totalLen = preLen + hdrLen + dataLen;
-    [rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, syncCfgUse, p.mod);
-    if ~okFull
-        continue;
+    if local_is_adaptive_frontend_method_local(methodName) && adaptiveEnabled
+        front = adaptive_ml_frontend_nominal(rxRaw, syncSymRef, totalLen, syncCfgUse, rxSyncCfg, p, waveform, p.mod, N0, mitigation);
+        nom.adaptiveClass(pktIdx) = string(front.selectedClass);
+        nom.adaptiveAction(pktIdx) = string(front.selectedAction);
+        nom.adaptiveBootstrapPath(pktIdx) = string(front.bootstrapPath);
+        nom.adaptiveConfidence(pktIdx) = double(front.confidence);
+        if ~front.ok
+            continue;
+        end
+        rFull = front.rFull;
+        reliabilityFull = front.reliabilityFull;
+    else
+        methodNameUse = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
+        [rxMit, reliability] = mitigate_impulses(rxRaw, methodNameUse, mitigation);
+        [startIdx, rxSync] = frame_sync(rxMit, syncSymRef, syncCfgUse);
+        if isempty(startIdx)
+            continue;
+        end
+        [rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, syncCfgUse, p.mod);
+        if ~okFull
+            continue;
+        end
+        reliabilityFull = local_extract_reliability_block_local(reliability, startIdx, totalLen);
     end
-    reliabilityFull = local_extract_reliability_block_local(reliability, startIdx, totalLen);
 
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
@@ -2043,7 +2127,7 @@ for pktIdx = 1:nPackets
 end
 end
 
-function nom = local_build_session_nominal_local(sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0)
+function nom = local_build_session_nominal_local(sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, adaptiveEnabled)
 nom = local_init_session_nominal_local(numel(sessionFrames));
 if isempty(sessionFrames)
     return;
@@ -2055,19 +2139,32 @@ for frameIdx = 1:numel(sessionFrames)
     end
 
     sessionFrame = sessionFrames(frameIdx);
-    [rxMit, reliability] = mitigate_impulses(sessionRx{frameIdx}, methodName, mitigation);
-    [startIdx, rxSync] = frame_sync(rxMit, sessionFrame.syncSym(:), syncCfgUse);
-    if isempty(startIdx)
-        continue;
-    end
-
     preLen = numel(sessionFrame.syncSym);
     totalLen = preLen + sessionFrame.nDataSym;
-    [rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, syncCfgUse, sessionFrame.modCfg);
-    if ~okFull
-        continue;
+    if local_is_adaptive_frontend_method_local(methodName) && adaptiveEnabled
+        front = adaptive_ml_frontend_nominal(sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, rxSyncCfg, p, waveform, sessionFrame.modCfg, N0, mitigation);
+        nom.adaptiveClass(frameIdx) = string(front.selectedClass);
+        nom.adaptiveAction(frameIdx) = string(front.selectedAction);
+        nom.adaptiveBootstrapPath(frameIdx) = string(front.bootstrapPath);
+        nom.adaptiveConfidence(frameIdx) = double(front.confidence);
+        if ~front.ok
+            continue;
+        end
+        rFull = front.rFull;
+        reliabilityFull = front.reliabilityFull;
+    else
+        methodNameUse = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
+        [rxMit, reliability] = mitigate_impulses(sessionRx{frameIdx}, methodNameUse, mitigation);
+        [startIdx, rxSync] = frame_sync(rxMit, sessionFrame.syncSym(:), syncCfgUse);
+        if isempty(startIdx)
+            continue;
+        end
+        [rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, syncCfgUse, sessionFrame.modCfg);
+        if ~okFull
+            continue;
+        end
+        reliabilityFull = local_extract_reliability_block_local(reliability, startIdx, totalLen);
     end
-    reliabilityFull = local_extract_reliability_block_local(reliability, startIdx, totalLen);
 
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
@@ -2210,6 +2307,114 @@ function rate = local_nominal_success_rate_local(nom)
 rate = 0;
 if isfield(nom, "ok") && ~isempty(nom.ok)
     rate = mean(double(nom.ok));
+end
+end
+
+function tf = local_is_adaptive_frontend_method_local(methodName)
+tf = string(methodName) == "adaptive_ml_frontend";
+end
+
+function methodNameUse = local_effective_presync_method_name_local(methodName, adaptiveEnabled)
+methodNameUse = string(methodName);
+if local_is_adaptive_frontend_method_local(methodNameUse) && ~logical(adaptiveEnabled)
+    methodNameUse = "none";
+end
+end
+
+function diagCfg = local_adaptive_frontend_catalog_local(mitigationCfg)
+if ~isstruct(mitigationCfg) || ~isscalar(mitigationCfg)
+    error("mitigation 配置必须是标量struct。");
+end
+if ~isfield(mitigationCfg, "adaptiveFrontend") || ~isstruct(mitigationCfg.adaptiveFrontend)
+    error("mitigation.adaptiveFrontend 缺失。");
+end
+cfg = mitigationCfg.adaptiveFrontend;
+local_require_struct_fields_local(cfg, ...
+    ["bootstrapSyncChain", "classNames", "classToAction", "diagnostics"], ...
+    "mitigation.adaptiveFrontend");
+
+    classNames = string(cfg.classNames(:).');
+    bootstrapPaths = string(cfg.bootstrapSyncChain(:).');
+    if isempty(classNames)
+        error("mitigation.adaptiveFrontend.classNames 不能为空。");
+    end
+    if isempty(bootstrapPaths)
+        error("mitigation.adaptiveFrontend.bootstrapSyncChain 不能为空。");
+    end
+    if ~isstruct(cfg.classToAction) || ~isscalar(cfg.classToAction)
+        error("mitigation.adaptiveFrontend.classToAction 必须是标量struct。");
+    end
+
+    actionNames = strings(1, 0);
+    for k = 1:numel(classNames)
+        fieldName = matlab.lang.makeValidName(char(classNames(k)));
+        if ~isfield(cfg.classToAction, fieldName)
+            error("mitigation.adaptiveFrontend.classToAction 缺少类别 %s 的映射。", char(classNames(k)));
+        end
+        actionName = string(cfg.classToAction.(fieldName));
+        if strlength(actionName) == 0
+            error("mitigation.adaptiveFrontend.classToAction.%s 不能为空。", fieldName);
+        end
+        if ~any(actionNames == actionName)
+            actionNames(end+1) = actionName; %#ok<AGROW>
+        end
+    end
+
+    diagCfg = struct( ...
+        "classNames", classNames, ...
+        "actionNames", actionNames, ...
+        "bootstrapPaths", bootstrapPaths);
+end
+
+function summary = local_collect_adaptive_frontend_summary_local(nom, mitigationCfg)
+diagCfg = local_adaptive_frontend_catalog_local(mitigationCfg);
+summary = struct( ...
+    "classCounts", zeros(numel(diagCfg.classNames), 1), ...
+    "actionCounts", zeros(numel(diagCfg.actionNames), 1), ...
+    "pathCounts", zeros(numel(diagCfg.bootstrapPaths), 1), ...
+    "confidenceSum", 0, ...
+    "decisionCount", 0);
+
+summary = local_accumulate_adaptive_frontend_summary_local(summary, nom, diagCfg);
+if isstruct(nom) && isfield(nom, "session") && isstruct(nom.session)
+    summary = local_accumulate_adaptive_frontend_summary_local(summary, nom.session, diagCfg);
+end
+end
+
+function summary = local_accumulate_adaptive_frontend_summary_local(summary, nomPart, diagCfg)
+if ~isstruct(nomPart) || ~isscalar(nomPart)
+    return;
+end
+requiredFields = ["adaptiveClass", "adaptiveAction", "adaptiveBootstrapPath", "adaptiveConfidence"];
+for k = 1:numel(requiredFields)
+    if ~isfield(nomPart, requiredFields(k))
+        return;
+    end
+end
+
+classList = string(nomPart.adaptiveClass(:));
+actionList = string(nomPart.adaptiveAction(:));
+pathList = string(nomPart.adaptiveBootstrapPath(:));
+confidenceList = double(nomPart.adaptiveConfidence(:));
+decisionMask = strlength(classList) > 0 & strlength(actionList) > 0 & strlength(pathList) > 0 ...
+    & isfinite(confidenceList);
+
+for idx = find(decisionMask(:)).'
+    classIdx = local_adaptive_frontend_lookup_index_local(classList(idx), diagCfg.classNames, "class");
+    actionIdx = local_adaptive_frontend_lookup_index_local(actionList(idx), diagCfg.actionNames, "action");
+    pathIdx = local_adaptive_frontend_lookup_index_local(pathList(idx), diagCfg.bootstrapPaths, "bootstrapPath");
+    summary.classCounts(classIdx) = summary.classCounts(classIdx) + 1;
+    summary.actionCounts(actionIdx) = summary.actionCounts(actionIdx) + 1;
+    summary.pathCounts(pathIdx) = summary.pathCounts(pathIdx) + 1;
+    summary.confidenceSum = summary.confidenceSum + confidenceList(idx);
+    summary.decisionCount = summary.decisionCount + 1;
+end
+end
+
+function idx = local_adaptive_frontend_lookup_index_local(name, catalog, catalogName)
+idx = find(catalog == string(name), 1, "first");
+if isempty(idx)
+    error("Adaptive front-end %s %s is not registered in the catalog.", catalogName, char(string(name)));
 end
 end
 
@@ -2813,7 +3018,8 @@ local_require_struct_fields_local(eveCfg.rxSync.timingDll, ...
 
 local_require_struct_fields_local(eveCfg.mitigation, [ ...
     "methods", "thresholdStrategy", "thresholdAlpha", "thresholdFixed", ...
-    "fftNotch", "adaptiveNotch", "thresholdCalibration", ...
+    "fftNotch", "fftBandstop", "adaptiveNotch", "stftNotch", ...
+    "adaptiveFrontend", "thresholdCalibration", "selector", ...
     "strictModelLoad", "requireTrainedModels", "ml", "mlCnn", "mlGru"], "eve.mitigation");
 local_require_struct_fields_local(eveCfg.mitigation.thresholdCalibration, [ ...
     "enable", "methods", "targetCleanPfa", "thresholdMinScale", ...
@@ -2821,6 +3027,9 @@ local_require_struct_fields_local(eveCfg.mitigation.thresholdCalibration, [ ...
     "bufferMaxSamples", "minBufferSamples", "minPreambleTrustedSamples", ...
     "minPacketTrustedSamples", "preambleUpdateAlpha", "packetUpdateAlpha", ...
     "preambleResidualAlpha", "packetResidualAlpha"], "eve.mitigation.thresholdCalibration");
+local_require_struct_fields_local(eveCfg.mitigation.adaptiveFrontend, [ ...
+    "bootstrapSyncChain", "classNames", "classToAction", "diagnostics"], ...
+    "eve.mitigation.adaptiveFrontend");
 
 methodsEve = string(eveCfg.mitigation.methods(:).');
 if ~isequal(methodsEve, methodsMain)

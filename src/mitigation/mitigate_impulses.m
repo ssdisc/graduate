@@ -43,12 +43,26 @@ switch lower(string(method))
         end
         [rOut, ~] = fft_domain_notch_filter(r, cfg);
 
+    case "fft_bandstop"
+        cfg = struct();
+        if isfield(mit, "fftBandstop") && isstruct(mit.fftBandstop)
+            cfg = mit.fftBandstop;
+        end
+        [rOut, ~] = fft_bandstop_filter(r, cfg);
+
     case "adaptive_notch"
         cfg = struct();
         if isfield(mit, "adaptiveNotch") && isstruct(mit.adaptiveNotch)
             cfg = mit.adaptiveNotch;
         end
         [rOut, ~] = adaptive_notch_filter(r, cfg);
+
+    case "stft_notch"
+        cfg = struct();
+        if isfield(mit, "stftNotch") && isstruct(mit.stftNotch)
+            cfg = mit.stftNotch;
+        end
+        [rOut, ~] = stft_notch_filter(r, cfg);
 
     case "blanking"
         rOut = r;
@@ -152,6 +166,9 @@ switch lower(string(method))
         rOut(mask) = 0;
         reliability = double(rel);
         reliability(mask) = 0;
+
+    case "adaptive_ml_frontend"
+        error("adaptive_ml_frontend is orchestrated at the packet front-end level and must not be sent to mitigate_impulses directly.");
 
     otherwise
         error("未知的抑制方法: %s", method);
