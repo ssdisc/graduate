@@ -72,12 +72,14 @@ end
 
 % 构建按包发送计划（每包独立同步/头部/载荷）
 [txPackets, txPlan] = build_tx_packets(payloadBits, meta, p, packetIndependentBitChaos, waveform);
-nPackets = numel(txPackets);
+meta = txPlan.sessionMeta;
+nTxPackets = numel(txPackets);
+nDataPackets = txPlan.nDataPackets;
 sessionFrames = txPlan.sessionFrames;
 hasDedicatedSessionFrames = ~isempty(sessionFrames);
 % 主链路译码统计仅依赖每包payload比特（避免在并行worker间广播巨大的txPackets结构体）
-txPktIndex = (1:nPackets).';
-txPayloadBits = {txPackets.payloadBits}.';
+txPktIndex = (1:nTxPackets).';
+txPayloadBits = {txPackets.payloadBitsPlain}.';
 fhEnabled = txPlan.fhEnabled;
 packetConcealEnable = false;
 packetConcealMode = "nearest";
@@ -89,13 +91,13 @@ if isfield(p, "packet") && isstruct(p.packet)
         packetConcealMode = lower(string(p.packet.concealMode));
     end
 end
-packetConcealActive = packetConcealEnable && nPackets > 1;
+packetConcealActive = packetConcealEnable && nDataPackets > 1;
 
 % 用于信道/频谱/监视者评估的整段突发
 txSymForChannel = txPlan.txBurstForChannel;
 modInfo = txPlan.modInfo;
 txBaseReport = measure_tx_burst(txSymForChannel, waveform);
-linkBudget = resolve_link_budget(p.linkBudget, p.tx, modInfo, txBaseReport.averagePowerLin);
+linkBudget = resolve_link_budget(p.linkBudget, modInfo, txBaseReport.averagePowerLin);
 powerScaleLinList = linkBudget.bob.txPowerLin ./ txBaseReport.averagePowerLin;
 txReport = struct( ...
     "burstDurationSec", txBaseReport.burstDurationSec, ...
@@ -112,12 +114,15 @@ txReport = struct( ...
     "peakPowerDb", 10 * log10(max(txBaseReport.peakPowerLin .* powerScaleLinList, realmin('double'))), ...
     "powerErrorLin", txBaseReport.averagePowerLin .* powerScaleLinList - linkBudget.bob.txPowerLin, ...
     "powerErrorDb", 10 * log10(max(txBaseReport.averagePowerLin .* powerScaleLinList, realmin('double'))) - linkBudget.bob.txPowerDb);
-fprintf('[SIM] Tx记录: burst %.3fs, txPower点=%s dB, base avg %.4f (1 sps等效)\n', ...
-    txReport.burstDurationSec, mat2str(double(txReport.configuredPowerDb)), txBaseReport.averagePowerLin);
+fprintf('[SIM] Tx记录: burst %.3fs, Eb/N0点=%s dB, JSR点=%s dB, base avg %.4f (1 sps等效)\n', ...
+    txReport.burstDurationSec, mat2str(double(linkBudget.snrDbList)), mat2str(double(linkBudget.jsrDbList)), txBaseReport.averagePowerLin);
 
 %% 仿真参数初始化与配置
 
-EbN0dBList = linkBudget.bob.ebN0dB(:).'; % 由链路预算推导的Bob接收端Eb/N0
+EbN0dBList = linkBudget.bob.ebN0dB(:).'; % 按点展开后的Bob接收端Eb/N0
+JsrDbList = linkBudget.bob.jsrDb(:).';
+pointSnrIndex = double(linkBudget.bob.snrIndex(:).');
+pointJsrIndex = double(linkBudget.bob.jsrIndex(:).');
 methods = string(bobMitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
 ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
@@ -279,21 +284,20 @@ if wardenEnabled
     wardenEbN0dBList = wardenBudget.ebN0dB;
 end
 
-% 将“对外按符号/Hz配置”的信道参数映射到“对内按采样执行”。
-channelSample = adapt_channel_for_sps(p.channel, waveform);
 maxDelaySamples = max(0, round(double(p.channel.maxDelaySymbols) * waveform.sps));
 
-totalEbN0Points = numel(EbN0dBList);
-totalFrames = totalEbN0Points * p.sim.nFramesPerPoint;
+totalPointCount = numel(EbN0dBList);
+totalFrames = totalPointCount * p.sim.nFramesPerPoint;
 globalFrameIdx = 0;
 frameLogStep = max(1, floor(p.sim.nFramesPerPoint / 10));
 simTic = tic;
 
 fprintf('\n========================================\n');
 fprintf('[SIM] 链路仿真开始\n');
-fprintf('[SIM] 链路预算点数=%d, 每点帧数=%d, 总帧数=%d\n', ...
-    totalEbN0Points, p.sim.nFramesPerPoint, totalFrames);
-fprintf('[SIM] Tx功率点=%s dB\n', mat2str(double(linkBudget.bob.txPowerDb)));
+fprintf('[SIM] 仿真点数=%d (Eb/N0=%d × JSR=%d), 每点帧数=%d, 总帧数=%d\n', ...
+    totalPointCount, double(linkBudget.nSnr), double(linkBudget.nJsr), p.sim.nFramesPerPoint, totalFrames);
+fprintf('[SIM] Eb/N0点=%s dB\n', mat2str(double(linkBudget.snrDbList)));
+fprintf('[SIM] JSR点=%s dB\n', mat2str(double(linkBudget.jsrDbList)));
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
 if numel(methods) > 1
     hasImpulse = isfield(p, "channel") && isfield(p.channel, "impulseProb") && double(p.channel.impulseProb) > 0;
@@ -345,12 +349,15 @@ fprintf('========================================\n\n');
 for ie = 1:numel(EbN0dBList)
     pointTic = tic;
     EbN0dB = EbN0dBList(ie);
+    JsrDb = JsrDbList(ie);
     N0 = linkBudget.bob.noisePsdLin(ie);
     txBurstBobForPoint = linkBudget.bob.rxAmplitudeScale(ie) * txSymForChannel;
+    channelPoint = local_scale_channel_for_jsr_local(p.channel, linkBudget.bob.rxPowerLin(ie), N0, JsrDb);
+    channelSample = adapt_channel_for_sps(channelPoint, waveform);
     [klSigVsNoise(ie), klNoiseVsSig(ie), klSym(ie)] = signal_noise_kl(txBurstBobForPoint, N0, 128);
 
-    fprintf('[SIM] >>> 链路预算点 %d/%d: txPower %.2f dB, Bob Eb/N0 %.2f dB\n', ...
-        ie, totalEbN0Points, linkBudget.bob.txPowerDb(ie), EbN0dB);
+    fprintf('[SIM] >>> 仿真点 %d/%d: Eb/N0 %.2f dB, JSR %.2f dB, txPower %.2f dB\n', ...
+        ie, totalPointCount, EbN0dB, JsrDb, linkBudget.bob.txPowerDb(ie));
 
     if eveEnabled
         EbN0dBEve = eveBudget.ebN0dB(ie);
@@ -411,7 +418,7 @@ for ie = 1:numel(EbN0dBList)
     end
 
     % --- 帧循环：每个链路预算点仿真多帧 ---
-    totalPayloadBits = numel(payloadBits);
+    totalPayloadBits = double(meta.totalPayloadBytes) * 8;
     useParallelFrames = simUseParallel && simParallelMode == "frames";
     useParallelMethods = simUseParallel && simParallelMode == "methods";
     if useParallelFrames && ~local_has_parallel_pool_local()
@@ -455,6 +462,7 @@ for ie = 1:numel(EbN0dBList)
     frameCtx.packetIndependentBitChaos = packetIndependentBitChaos;
     frameCtx.chaosEnabled = chaosEnabled;
     frameCtx.chaosEncInfo = chaosEncInfo;
+    frameCtx.outerRs = txPlan.outerRs;
     frameCtx.packetConcealActive = packetConcealActive;
     frameCtx.packetConcealMode = packetConcealMode;
     frameCtx.imgTx = imgTx;
@@ -590,8 +598,8 @@ for ie = 1:numel(EbN0dBList)
             packetConcealActive, "Eve");
     end
 
-    fprintf('[SIM] <<< 链路预算点完成: txPower %.2f dB, Bob Eb/N0 %.2f dB, 用时 %.2fs\n', ...
-        linkBudget.bob.txPowerDb(ie), EbN0dB, toc(pointTic));
+    fprintf('[SIM] <<< 仿真点完成: Eb/N0 %.2f dB, JSR %.2f dB, txPower %.2f dB, 用时 %.2fs\n', ...
+        EbN0dB, JsrDb, linkBudget.bob.txPowerDb(ie), toc(pointTic));
     fprintf('[SIM]     Bob BER: %s\n', format_metric_pairs(methods, ber(:, ie)));
     if eveEnabled
         fprintf('[SIM]     Eve BER: %s\n', format_metric_pairs(methods, berEve(:, ie)));
@@ -611,10 +619,20 @@ txBurstForSpectrum = linkBudget.bob.rxAmplitudeScale(spectrumPointIdx) * txSymFo
 results = struct();
 results.params = p;
 results.ebN0dB = EbN0dBList;
+results.jsrDb = JsrDbList;
+results.scan = struct( ...
+    "type", string(linkBudget.scanType), ...
+    "ebN0dBList", linkBudget.snrDbList, ...
+    "jsrDbList", linkBudget.jsrDbList, ...
+    "snrIndex", pointSnrIndex, ...
+    "jsrIndex", pointJsrIndex, ...
+    "nSnr", double(linkBudget.nSnr), ...
+    "nJsr", double(linkBudget.nJsr));
 results.methods = methods;
 results.tx = txReport;
 results.linkBudget = linkBudget;
 results.ber = ber;
+results.per = max(min(1 - packetSuccessBobVals, 1), 0);
 results.packetDiagnostics = struct();
 results.packetDiagnostics.bob = struct( ...
     "frontEndSuccessRate", packetFrontEndBobVals, ...
@@ -652,6 +670,7 @@ results.spectrum = struct( ...
     "grossInfoBitRateBps", spectrumInfo.grossInfoBitRateBps, ...
     "payloadBitRateBps", spectrumInfo.payloadBitRateBps);
 results.kl = struct("ebN0dB", EbN0dBList, ...
+    "jsrDb", JsrDbList, ...
     "signalVsNoise", klSigVsNoise, ...
     "noiseVsSignal", klNoiseVsSig, ...
     "symmetric", klSym);
@@ -662,7 +681,10 @@ if eveEnabled
     results.eve = struct();
     results.eve.methods = methods;
     results.eve.ebN0dB = eveEbN0dBList;
+    results.eve.jsrDb = JsrDbList;
+    results.eve.scan = results.scan;
     results.eve.ber = berEve;
+    results.eve.per = max(min(1 - packetSuccessEveVals, 1), 0);
     results.eve.packetDiagnostics = struct( ...
         "frontEndSuccessRate", packetFrontEndEveVals, ...
         "headerSuccessRate", packetHeaderEveVals, ...
@@ -698,6 +720,8 @@ if wardenEnabled
     results.covert = struct();
     results.covert.warden = local_pack_warden_results( ...
         wardenPointDetections, EbN0dBList, wardenEbN0dBList, wardenReferenceLink);
+    results.covert.warden.jsrDb = JsrDbList;
+    results.covert.warden.scan = results.scan;
     if eveEnabled
         results.covert.warden.eveEbN0dB = eveEbN0dBList;
     end
@@ -1129,7 +1153,7 @@ if useParfor
             end
 
             [bobRes, eveRes] = local_decode_single_method_local( ...
-                methods(im), txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
+                methods(im), txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
                 packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
                 packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
                 bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
@@ -1226,7 +1250,7 @@ if ~useParfor
         end
 
         [bobRes, eveRes] = local_decode_single_method_local( ...
-            methods(im), txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
+            methods(im), txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
             packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
             bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
@@ -1301,17 +1325,23 @@ end
 end
 
 function [bobRes, eveRes] = local_decode_single_method_local( ...
-    methodName, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
+    methodName, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
     packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
     bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
     eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
     captureExample, EbN0dB, EbN0dBEve, nPackets)
 
+outerRsCfgBob = resolve_outer_rs_cfg(p);
+outerRsCfgEve = resolve_outer_rs_cfg(p);
+if packetIndependentBitChaos && chaosEnabled && chaosAssumptionEve ~= "known"
+    outerRsCfgEve.enable = false;
+end
+
 % -------- Bob --------
 sessionBob = local_init_rx_session_local(p, metaTx, nPackets);
-payloadFrameBob = zeros(totalPayloadBitsTx, 1, "uint8");
-packetOkBob = false(1, nPackets);
+packetPayloadBob = cell(nPackets, 1);
+packetOkBobTx = false(1, nPackets);
 nErrBob = 0;
 nTotBob = 0;
 calStateBob = local_init_threshold_calibration_state_local(methodName, bobMitigation);
@@ -1341,25 +1371,22 @@ for pktIdx = 1:nPackets
         packetDataBitsRx = fit_bits_length(packetDataBitsRx, rxState.packetDataBitsLen);
 
         [payloadPktRx, sessionNext, packetInfo, okPacket] = recover_payload_packet_local(packetDataBitsRx, phy, sessionBob, p);
-        if okPacket
+        if okPacket && packetInfo.packetIndex == txPktIndex(pktIdx)
             sessionBob = sessionNext;
-            if packetInfo.packetIndex == txPktIndex(pktIdx)
-                txBits = txPayload;
-                nCompare = min(numel(payloadPktRx), numel(txBits));
-                if nCompare > 0
-                    nErrBob = nErrBob + sum(payloadPktRx(1:nCompare) ~= txBits(1:nCompare));
-                end
-                if numel(payloadPktRx) < numel(txBits)
-                    nErrBob = nErrBob + (numel(txBits) - numel(payloadPktRx));
-                end
-                nTotBob = nTotBob + numel(txBits);
-            else
-                nErrBob = nErrBob + numel(txPayload);
-                nTotBob = nTotBob + numel(txPayload);
+            payloadPktBob = local_prepare_plain_packet_payload_local( ...
+                payloadPktRx, txPktIndex(pktIdx), packetIndependentBitChaos, chaosEnabled, ...
+                p.chaosEncrypt, "known", 0);
+            txBits = txPayload;
+            nCompare = min(numel(payloadPktBob), numel(txBits));
+            if nCompare > 0
+                nErrBob = nErrBob + sum(payloadPktBob(1:nCompare) ~= txBits(1:nCompare));
             end
-
-            payloadFrameBob(packetInfo.range.startBit:packetInfo.range.endBit) = fit_bits_length(payloadPktRx, packetInfo.range.nBits);
-            packetOkBob(packetInfo.packetIndex) = true;
+            if numel(payloadPktBob) < numel(txBits)
+                nErrBob = nErrBob + (numel(txBits) - numel(payloadPktBob));
+            end
+            nTotBob = nTotBob + numel(txBits);
+            packetPayloadBob{pktIdx} = payloadPktBob;
+            packetOkBobTx(pktIdx) = true;
         else
             nErrBob = nErrBob + numel(txPayload);
             nTotBob = nTotBob + numel(txPayload);
@@ -1370,6 +1397,9 @@ for pktIdx = 1:nPackets
     end
 end
 
+[payloadFrameBob, packetOkBob, outerRsInfoBob] = outer_rs_recover_payload( ...
+    packetPayloadBob, packetOkBobTx, txPackets, totalPayloadBitsTx, nominal_payload_bits_local(p), outerRsCfgBob);
+
 metaBobUse = metaTx;
 totalPayloadBitsBob = totalPayloadBitsTx;
 if isfield(sessionBob, "known") && sessionBob.known
@@ -1379,8 +1409,7 @@ end
 rxLayoutBob = derive_packet_layout_local(totalPayloadBitsBob, p);
 
 if packetIndependentBitChaos && chaosEnabled
-    payloadBitsRxDec = decrypt_payload_packets_rx_local(payloadFrameBob, packetOkBob, p, totalPayloadBitsBob, "known", 0);
-    imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
+    imgRxComm = payload_bits_to_image(payloadFrameBob, metaBobUse, p.payload);
 elseif chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
     if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
         payloadBitsRxDec = chaos_decrypt_bits(payloadFrameBob, chaosEncInfo);
@@ -1411,6 +1440,8 @@ bobRes.mseComp = mseNowComp;
 bobRes.psnrComp = psnrNowComp;
 bobRes.ssimComp = ssimNowComp;
 bobRes.packetSuccessRate = mean(packetOkBob);
+bobRes.rawPacketSuccessRate = outerRsInfoBob.rawDataPacketSuccessRate;
+bobRes.outerRs = outerRsInfoBob;
 bobRes.adaptiveFrontEnd = local_collect_adaptive_frontend_summary_local(bobNom, bobMitigation);
 bobRes.thresholdCalibration = local_pack_threshold_calibration_state_local(calStateBob);
 bobRes.example = [];
@@ -1425,9 +1456,11 @@ if captureExample
     bobRes.example.imgRxCompensated = imgRxComp;
     bobRes.example.imgRx = imgRxComp;
     bobRes.example.packetSuccessRate = bobRes.packetSuccessRate;
+    bobRes.example.rawPacketSuccessRate = bobRes.rawPacketSuccessRate;
     bobRes.example.headerOk = all(bobNom.headerOk);
     bobRes.example.adaptiveFrontEnd = bobRes.adaptiveFrontEnd;
     bobRes.example.thresholdCalibration = bobRes.thresholdCalibration;
+    bobRes.example.outerRs = outerRsInfoBob;
 end
 
 % -------- Eve --------
@@ -1437,8 +1470,8 @@ if ~eveEnabled
 end
 
 sessionEve = local_init_rx_session_local(p, metaTx, nPackets);
-payloadFrameEve = zeros(totalPayloadBitsTx, 1, "uint8");
-packetOkEve = false(1, nPackets);
+packetPayloadEve = cell(nPackets, 1);
+packetOkEveTx = false(1, nPackets);
 nErrEve = 0;
 nTotEve = 0;
 calStateEve = local_init_threshold_calibration_state_local(methodName, eveMitigation);
@@ -1469,25 +1502,22 @@ for pktIdx = 1:nPackets
         packetDataBitsEve = fit_bits_length(packetDataBitsEve, rxState.packetDataBitsLen);
 
         [payloadPktEve, sessionNext, packetInfo, okPacket] = recover_payload_packet_local(packetDataBitsEve, phy, sessionEve, p);
-        if okPacket
+        if okPacket && packetInfo.packetIndex == txPktIndex(pktIdx)
             sessionEve = sessionNext;
-            if packetInfo.packetIndex == txPktIndex(pktIdx)
-                txBits = txPayload;
-                nCompare = min(numel(payloadPktEve), numel(txBits));
-                if nCompare > 0
-                    nErrEve = nErrEve + sum(payloadPktEve(1:nCompare) ~= txBits(1:nCompare));
-                end
-                if numel(payloadPktEve) < numel(txBits)
-                    nErrEve = nErrEve + (numel(txBits) - numel(payloadPktEve));
-                end
-                nTotEve = nTotEve + numel(txBits);
-            else
-                nErrEve = nErrEve + numel(txPayload);
-                nTotEve = nTotEve + numel(txPayload);
+            payloadPktEve = local_prepare_plain_packet_payload_local( ...
+                payloadPktEve, txPktIndex(pktIdx), packetIndependentBitChaos, chaosEnabled, ...
+                p.chaosEncrypt, chaosAssumptionEve, chaosApproxDeltaEve);
+            txBits = txPayload;
+            nCompare = min(numel(payloadPktEve), numel(txBits));
+            if nCompare > 0
+                nErrEve = nErrEve + sum(payloadPktEve(1:nCompare) ~= txBits(1:nCompare));
             end
-
-            payloadFrameEve(packetInfo.range.startBit:packetInfo.range.endBit) = fit_bits_length(payloadPktEve, packetInfo.range.nBits);
-            packetOkEve(packetInfo.packetIndex) = true;
+            if numel(payloadPktEve) < numel(txBits)
+                nErrEve = nErrEve + (numel(txBits) - numel(payloadPktEve));
+            end
+            nTotEve = nTotEve + numel(txBits);
+            packetPayloadEve{pktIdx} = payloadPktEve;
+            packetOkEveTx(pktIdx) = true;
         else
             nErrEve = nErrEve + numel(txPayload);
             nTotEve = nTotEve + numel(txPayload);
@@ -1498,6 +1528,9 @@ for pktIdx = 1:nPackets
     end
 end
 
+[payloadFrameEve, packetOkEve, outerRsInfoEve] = outer_rs_recover_payload( ...
+    packetPayloadEve, packetOkEveTx, txPackets, totalPayloadBitsTx, nominal_payload_bits_local(p), outerRsCfgEve);
+
 metaEveUse = metaTx;
 totalPayloadBitsEve = totalPayloadBitsTx;
 if isfield(sessionEve, "known") && sessionEve.known
@@ -1506,10 +1539,8 @@ if isfield(sessionEve, "known") && sessionEve.known
 end
 rxLayoutEve = derive_packet_layout_local(totalPayloadBitsEve, p);
 
-if packetIndependentBitChaos && chaosEnabled && chaosAssumptionEve ~= "none"
-    payloadBitsEveDec = decrypt_payload_packets_rx_local( ...
-        payloadFrameEve, packetOkEve, p, totalPayloadBitsEve, chaosAssumptionEve, chaosApproxDeltaEve);
-    imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
+if packetIndependentBitChaos && chaosEnabled
+    imgEveComm = payload_bits_to_image(payloadFrameEve, metaEveUse, p.payload);
 elseif chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
     if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
         payloadBitsEveDec = chaos_decrypt_bits(payloadFrameEve, chaosEncInfoEve);
@@ -1539,6 +1570,8 @@ eveRes.mseComp = mseNowCompEve;
 eveRes.psnrComp = psnrNowCompEve;
 eveRes.ssimComp = ssimNowCompEve;
 eveRes.packetSuccessRate = mean(packetOkEve);
+eveRes.rawPacketSuccessRate = outerRsInfoEve.rawDataPacketSuccessRate;
+eveRes.outerRs = outerRsInfoEve;
 eveRes.adaptiveFrontEnd = local_collect_adaptive_frontend_summary_local(eveNom, eveMitigation);
 eveRes.thresholdCalibration = local_pack_threshold_calibration_state_local(calStateEve);
 eveRes.example = [];
@@ -1550,11 +1583,13 @@ if captureExample
     eveRes.example.sessionKnown = logical(sessionEve.known);
     eveRes.example.sessionFrameFrontEndSuccessRate = local_nominal_success_rate_local(eveNom.session);
     eveRes.example.packetSuccessRate = eveRes.packetSuccessRate;
+    eveRes.example.rawPacketSuccessRate = eveRes.rawPacketSuccessRate;
     eveRes.example.imgRxComm = imgEveComm;
     eveRes.example.imgRxCompensated = imgEveComp;
     eveRes.example.imgRx = imgEveComp;
     eveRes.example.headerOk = all(eveNom.headerOk);
     eveRes.example.thresholdCalibration = eveRes.thresholdCalibration;
+    eveRes.example.outerRs = outerRsInfoEve;
 end
 end
 
@@ -1949,17 +1984,18 @@ end
 yEq = z(d+1:d+N);
 end
 
-function yPrep = local_prepare_data_symbols_local(rData, rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled)
-% Prepare per-packet data symbols (dehop -> carrier PLL).
+function [yPrep, relPrep] = local_prepare_data_symbols_local(rData, rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation)
+% Prepare per-packet data symbols (dehop -> targeted mitigation -> carrier PLL).
 %
-% Multipath equalization has already been applied at the nominal Rx stage on
-% the full [preamble; PHY; data] block to avoid edge transients. Here we only
-% apply the hop derotation and the (optional) carrier PLL once per packet.
+% Multipath equalization has already been applied on the full [preamble; PHY; data]
+% block. Here we only process the payload region.
 r = fit_complex_length_local(rData, rxState.nDataSym);
 
 if fhEnabled
     r = fh_demodulate(r, hopInfoUsed);
 end
+
+[r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled);
 
 if isfield(rxSyncCfg, "carrierPll") && isfield(rxSyncCfg.carrierPll, "enable") ...
         && rxSyncCfg.carrierPll.enable
@@ -1967,6 +2003,45 @@ if isfield(rxSyncCfg, "carrierPll") && isfield(rxSyncCfg.carrierPll, "enable") .
 end
 
 yPrep = r;
+relPrep = local_fit_reliability_length_local(relPrep, rxState.nDataSym);
+end
+
+function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled)
+r = rIn(:);
+actionName = string(actionName);
+reliability = ones(numel(r), 1);
+if actionName == "none"
+    rOut = r;
+    return;
+end
+
+if local_action_prefers_per_hop_local(actionName) && fhEnabled ...
+        && isstruct(hopInfoUsed) && isfield(hopInfoUsed, "enable") && hopInfoUsed.enable ...
+        && isfield(hopInfoUsed, "hopLen") && double(hopInfoUsed.hopLen) > 0
+    [rOut, reliability] = local_apply_action_per_hop_local(r, actionName, mitigation, round(double(hopInfoUsed.hopLen)));
+    return;
+end
+
+[rOut, reliability] = mitigate_impulses(r, actionName, mitigation);
+end
+
+function [rOut, reliability] = local_apply_action_per_hop_local(rIn, actionName, mitigation, hopLen)
+r = rIn(:);
+hopLen = max(1, round(double(hopLen)));
+rOut = complex(zeros(size(r)));
+reliability = zeros(numel(r), 1);
+
+for startIdx = 1:hopLen:numel(r)
+    stopIdx = min(numel(r), startIdx + hopLen - 1);
+    [segOut, segRel] = mitigate_impulses(r(startIdx:stopIdx), actionName, mitigation);
+    rOut(startIdx:stopIdx) = segOut;
+    reliability(startIdx:stopIdx) = local_fit_reliability_length_local(segRel, stopIdx - startIdx + 1);
+end
+end
+
+function tf = local_action_prefers_per_hop_local(actionName)
+actionName = lower(string(actionName));
+tf = any(actionName == ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch"]);
 end
 
 function relPrep = local_fit_reliability_length_local(reliability, targetLen)
@@ -1992,6 +2067,127 @@ t = startPos + (0:nSamp-1).';
 relBlk = interp1(idx, reliability, t, "linear", 0);
 relBlk(~isfinite(relBlk)) = 0;
 relBlk = max(min(relBlk, 1), 0);
+end
+
+function front = local_capture_synced_block_local(rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg)
+rxRaw = rxRaw(:);
+syncSymRef = syncSymRef(:);
+front = struct( ...
+    "ok", false, ...
+    "bootstrapPath", "", ...
+    "bootstrapCapture", struct(), ...
+    "startIdx", NaN, ...
+    "syncInfo", struct(), ...
+    "rxSync", complex(zeros(0, 1)), ...
+    "rFull", complex(zeros(0, 1)), ...
+    "reliabilityFull", zeros(0, 1));
+
+capture = adaptive_frontend_bootstrap_capture(rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg);
+front.bootstrapCapture = capture;
+front.bootstrapPath = string(capture.bootstrapPath);
+if ~capture.ok
+    return;
+end
+
+refineCfg = syncCfgUse;
+fineSearchRadius = 0;
+if isfield(syncCfgUse, "fineSearchRadius") && ~isempty(syncCfgUse.fineSearchRadius)
+    fineSearchRadius = round(double(syncCfgUse.fineSearchRadius));
+end
+searchRadius = max([8, round(numel(syncSymRef) / 4), fineSearchRadius + 4]);
+maxCoarseIdx = max(1, numel(rxRaw) - numel(syncSymRef) + 1);
+refineCfg.minSearchIndex = max(1, floor(double(capture.startIdx) - searchRadius));
+refineCfg.maxSearchIndex = min(maxCoarseIdx, ceil(double(capture.startIdx) + searchRadius));
+
+[startIdx, rxSync, syncInfo] = frame_sync(rxRaw, syncSymRef, refineCfg);
+if isempty(startIdx)
+    return;
+end
+
+[rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, refineCfg, modCfg);
+if ~okFull
+    return;
+end
+
+front.ok = true;
+front.startIdx = startIdx;
+front.syncInfo = syncInfo;
+front.rxSync = rxSync;
+front.rFull = rFull;
+front.reliabilityFull = ones(totalLen, 1);
+end
+
+function decision = local_select_frontend_action_local(methodName, adaptiveEnabled, rFull, syncSymRef, syncInfo, bootstrapPath, mitigation, channelCfg, waveform, N0)
+featureCount = numel(ml_interference_selector_feature_names());
+decision = struct( ...
+    "selectedClass", "", ...
+    "selectedAction", "", ...
+    "confidence", NaN, ...
+    "classProbabilities", zeros(0, 1), ...
+    "featureRow", zeros(1, featureCount), ...
+    "bootstrapPath", string(bootstrapPath));
+
+methodName = string(methodName);
+if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnabled)
+    selectorModel = local_require_selector_model_local(mitigation);
+    captureDiag = struct( ...
+        "ok", true, ...
+        "rFull", rFull(:), ...
+        "syncInfo", syncInfo);
+    channelLenSymbols = local_multipath_channel_len_symbols_local(channelCfg, waveform);
+    [featureRow, ~] = adaptive_frontend_extract_features(captureDiag, syncSymRef, N0, ...
+        "channelLenSymbols", channelLenSymbols);
+    [className, confidence, classProbabilities] = ml_predict_interference_class(featureRow, selectorModel);
+    actionName = local_map_class_to_action_local(mitigation, className);
+
+    decision.selectedClass = string(className);
+    decision.selectedAction = string(actionName);
+    decision.confidence = double(confidence);
+    decision.classProbabilities = classProbabilities;
+    decision.featureRow = featureRow;
+    return;
+end
+
+decision.selectedAction = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
+end
+
+function model = local_require_selector_model_local(mitigation)
+if ~isfield(mitigation, "selector") || isempty(mitigation.selector)
+    error("mitigation.selector is required for adaptive_ml_frontend.");
+end
+model = mitigation.selector;
+if ~(isfield(model, "trained") && logical(model.trained))
+    error("adaptive_ml_frontend requires a trained selector model.");
+end
+end
+
+function actionName = local_map_class_to_action_local(mitigation, className)
+if ~(isfield(mitigation, "adaptiveFrontend") && isstruct(mitigation.adaptiveFrontend))
+    error("mitigation.adaptiveFrontend is required for adaptive_ml_frontend.");
+end
+cfg = mitigation.adaptiveFrontend;
+if ~(isfield(cfg, "classToAction") && isstruct(cfg.classToAction))
+    error("mitigation.adaptiveFrontend.classToAction is required.");
+end
+fieldName = matlab.lang.makeValidName(char(string(className)));
+if ~isfield(cfg.classToAction, fieldName)
+    error("Missing adaptive front-end action mapping for class %s.", char(string(className)));
+end
+actionName = string(cfg.classToAction.(fieldName));
+if strlength(actionName) == 0
+    error("Adaptive front-end action mapping for class %s must not be empty.", char(string(className)));
+end
+end
+
+function hdrSymPrep = local_prepare_header_symbols_local(hdrSym, actionName, mitigation)
+hdrSym = hdrSym(:);
+actionName = string(actionName);
+if actionName == "none"
+    hdrSymPrep = hdrSym;
+    return;
+end
+
+[hdrSymPrep, ~] = mitigate_impulses(hdrSym, actionName, mitigation);
 end
 
 function raw = local_init_raw_capture_local(nPackets, nSessionFrames)
@@ -2062,30 +2258,20 @@ for pktIdx = 1:nPackets
     hdrLen = numel(txPackets(pktIdx).phyHeaderSym);
     dataLen = numel(txPackets(pktIdx).dataSymTx);
     totalLen = preLen + hdrLen + dataLen;
-    if local_is_adaptive_frontend_method_local(methodName) && adaptiveEnabled
-        front = adaptive_ml_frontend_nominal(rxRaw, syncSymRef, totalLen, syncCfgUse, rxSyncCfg, p, waveform, p.mod, N0, mitigation);
-        nom.adaptiveClass(pktIdx) = string(front.selectedClass);
-        nom.adaptiveAction(pktIdx) = string(front.selectedAction);
-        nom.adaptiveBootstrapPath(pktIdx) = string(front.bootstrapPath);
-        nom.adaptiveConfidence(pktIdx) = double(front.confidence);
-        if ~front.ok
-            continue;
-        end
-        rFull = front.rFull;
-        reliabilityFull = front.reliabilityFull;
-    else
-        methodNameUse = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
-        [rxMit, reliability] = mitigate_impulses(rxRaw, methodNameUse, mitigation);
-        [startIdx, rxSync] = frame_sync(rxMit, syncSymRef, syncCfgUse);
-        if isempty(startIdx)
-            continue;
-        end
-        [rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, syncCfgUse, p.mod);
-        if ~okFull
-            continue;
-        end
-        reliabilityFull = local_extract_reliability_block_local(reliability, startIdx, totalLen);
+    front = local_capture_synced_block_local(rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod);
+    if ~front.ok
+        continue;
     end
+
+    rFull = front.rFull;
+    reliabilityFull = front.reliabilityFull;
+    decision = local_select_frontend_action_local( ...
+        methodName, adaptiveEnabled, rFull, syncSymRef, front.syncInfo, front.bootstrapPath, ...
+        mitigation, p.channel, waveform, N0);
+    nom.adaptiveClass(pktIdx) = string(decision.selectedClass);
+    nom.adaptiveAction(pktIdx) = string(decision.selectedAction);
+    nom.adaptiveBootstrapPath(pktIdx) = string(front.bootstrapPath);
+    nom.adaptiveConfidence(pktIdx) = double(decision.confidence);
 
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
@@ -2100,7 +2286,8 @@ for pktIdx = 1:nPackets
     nom.preambleRx{pktIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
     nom.preambleRef{pktIdx} = syncSymRef;
 
-    hdrSym = rFull(preLen+1:preLen+hdrLen);
+    actionName = string(decision.selectedAction);
+    hdrSym = local_prepare_header_symbols_local(rFull(preLen+1:preLen+hdrLen), actionName, mitigation);
     hdrBits = decode_phy_header_symbols(hdrSym, p.frame, p.fec, p.softMetric);
     [phy, headerOk] = parse_phy_header_bits(hdrBits, p.frame);
     nom.headerOk(pktIdx) = headerOk;
@@ -2120,9 +2307,11 @@ for pktIdx = 1:nPackets
     rDataRel = reliabilityFull(preLen+hdrLen+1:end);
     nom.phy(pktIdx) = phy;
     nom.rxState{pktIdx} = rxState;
-    nom.rDataPrepared{pktIdx} = local_prepare_data_symbols_local( ...
-        rData, rxState, hopInfoUsed, p.mod, rxSyncCfg, fhEnabled);
-    nom.rDataReliability{pktIdx} = local_fit_reliability_length_local(rDataRel, rxState.nDataSym);
+    [nom.rDataPrepared{pktIdx}, nom.rDataReliability{pktIdx}] = local_prepare_data_symbols_local( ...
+        rData, rxState, hopInfoUsed, p.mod, rxSyncCfg, fhEnabled, actionName, mitigation);
+    if all(nom.rDataReliability{pktIdx} >= 0.999999)
+        nom.rDataReliability{pktIdx} = local_fit_reliability_length_local(rDataRel, rxState.nDataSym);
+    end
     nom.ok(pktIdx) = true;
 end
 end
@@ -2141,30 +2330,21 @@ for frameIdx = 1:numel(sessionFrames)
     sessionFrame = sessionFrames(frameIdx);
     preLen = numel(sessionFrame.syncSym);
     totalLen = preLen + sessionFrame.nDataSym;
-    if local_is_adaptive_frontend_method_local(methodName) && adaptiveEnabled
-        front = adaptive_ml_frontend_nominal(sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, rxSyncCfg, p, waveform, sessionFrame.modCfg, N0, mitigation);
-        nom.adaptiveClass(frameIdx) = string(front.selectedClass);
-        nom.adaptiveAction(frameIdx) = string(front.selectedAction);
-        nom.adaptiveBootstrapPath(frameIdx) = string(front.bootstrapPath);
-        nom.adaptiveConfidence(frameIdx) = double(front.confidence);
-        if ~front.ok
-            continue;
-        end
-        rFull = front.rFull;
-        reliabilityFull = front.reliabilityFull;
-    else
-        methodNameUse = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
-        [rxMit, reliability] = mitigate_impulses(sessionRx{frameIdx}, methodNameUse, mitigation);
-        [startIdx, rxSync] = frame_sync(rxMit, sessionFrame.syncSym(:), syncCfgUse);
-        if isempty(startIdx)
-            continue;
-        end
-        [rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, syncCfgUse, sessionFrame.modCfg);
-        if ~okFull
-            continue;
-        end
-        reliabilityFull = local_extract_reliability_block_local(reliability, startIdx, totalLen);
+    front = local_capture_synced_block_local( ...
+        sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg);
+    if ~front.ok
+        continue;
     end
+
+    rFull = front.rFull;
+    reliabilityFull = front.reliabilityFull;
+    decision = local_select_frontend_action_local( ...
+        methodName, adaptiveEnabled, rFull, sessionFrame.syncSym(:), front.syncInfo, front.bootstrapPath, ...
+        mitigation, p.channel, waveform, N0);
+    nom.adaptiveClass(frameIdx) = string(decision.selectedClass);
+    nom.adaptiveAction(frameIdx) = string(decision.selectedAction);
+    nom.adaptiveBootstrapPath(frameIdx) = string(front.bootstrapPath);
+    nom.adaptiveConfidence(frameIdx) = double(decision.confidence);
 
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
@@ -2178,10 +2358,13 @@ for frameIdx = 1:numel(sessionFrames)
     rxStateSession = struct("nDataSym", sessionFrame.nDataSym);
     nom.preambleRx{frameIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
     nom.preambleRef{frameIdx} = sessionFrame.syncSym(:);
-    nom.rDataPrepared{frameIdx} = local_prepare_data_symbols_local( ...
-        rFull(preLen+1:end), rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false);
-    nom.rDataReliability{frameIdx} = local_fit_reliability_length_local( ...
-        reliabilityFull(preLen+1:end), sessionFrame.nDataSym);
+    actionName = string(decision.selectedAction);
+    [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = local_prepare_data_symbols_local( ...
+        rFull(preLen+1:end), rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false, actionName, mitigation);
+    if all(nom.rDataReliability{frameIdx} >= 0.999999)
+        nom.rDataReliability{frameIdx} = local_fit_reliability_length_local( ...
+            reliabilityFull(preLen+1:end), sessionFrame.nDataSym);
+    end
     nom.ok(frameIdx) = true;
 end
 end
@@ -2423,6 +2606,7 @@ session = struct();
 session.known = false;
 session.totalPayloadBits = NaN;
 session.totalPackets = NaN;
+session.totalDataPackets = NaN;
 session.meta = struct();
 end
 
@@ -2438,13 +2622,25 @@ session = rx_session_empty_local();
 session.known = true;
 session.totalPayloadBits = double(metaRx.totalPayloadBytes) * 8;
 session.totalPackets = double(metaRx.totalPackets);
+session.totalDataPackets = double(metaRx.totalDataPackets);
 session.meta = metaRx;
 end
 
 function metaOut = local_preshared_session_meta_local(metaTx, nPackets)
 metaOut = metaTx;
 metaOut.totalPayloadBytes = uint32(metaTx.payloadBytes);
-metaOut.totalPackets = uint16(nPackets);
+if ~isfield(metaOut, "totalDataPackets")
+    metaOut.totalDataPackets = uint16(nPackets);
+end
+if ~isfield(metaOut, "totalPackets")
+    metaOut.totalPackets = uint16(nPackets);
+end
+if ~isfield(metaOut, "rsDataPacketsPerBlock")
+    metaOut.rsDataPacketsPerBlock = metaOut.totalDataPackets;
+end
+if ~isfield(metaOut, "rsParityPacketsPerBlock")
+    metaOut.rsParityPacketsPerBlock = uint16(0);
+end
 end
 
 function state = derive_rx_packet_state_local(p, pktIdx, packetDataBitsLen)
@@ -2476,6 +2672,9 @@ payloadPktRx = uint8([]);
 sessionOut = sessionIn;
 packetInfo = struct();
 packetInfo.packetIndex = double(phyHeader.packetIndex);
+packetInfo.sourcePacketIndex = 0;
+packetInfo.isDataPacket = false;
+packetInfo.isParityPacket = false;
 packetInfo.range = struct('startBit', 1, 'endBit', 0, 'nBits', 0);
 
 packetDataBitsLen = local_packet_data_bits_len_from_header_local(p, double(phyHeader.packetIndex), phyHeader);
@@ -2510,13 +2709,19 @@ if ~ok
     return;
 end
 
+packetRole = packet_role_from_session_meta(sessionOut.meta, packetIndex);
 packetInfo.packetIndex = packetIndex;
-packetInfo.range = derive_packet_range_from_meta_local(sessionOut.meta, packetIndex, p);
-if packetInfo.range.nBits <= 0
-    ok = false;
-    return;
+packetInfo.sourcePacketIndex = double(packetRole.sourcePacketIndex);
+packetInfo.isDataPacket = logical(packetRole.isDataPacket);
+packetInfo.isParityPacket = logical(packetRole.isParityPacket);
+if packetRole.isDataPacket
+    packetInfo.range = derive_packet_range_from_meta_local(sessionOut.meta, double(packetRole.sourcePacketIndex), p);
+    if packetInfo.range.nBits <= 0
+        ok = false;
+        return;
+    end
+    payloadPktRx = fit_bits_length(payloadPktRx, packetInfo.range.nBits);
 end
-payloadPktRx = fit_bits_length(payloadPktRx, packetInfo.range.nBits);
 end
 
 function ok = packet_data_crc_valid_local(packetDataBitsRx, phyHeader, p)
@@ -2553,7 +2758,9 @@ end
 end
 
 function ok = session_meta_compatible_local(metaA, metaB)
-fields = ["rows", "cols", "channels", "bitsPerPixel", "totalPayloadBytes", "totalPackets"];
+fields = ["rows", "cols", "channels", "bitsPerPixel", ...
+    "totalPayloadBytes", "totalDataPackets", "totalPackets", ...
+    "rsDataPacketsPerBlock", "rsParityPacketsPerBlock"];
 ok = true;
 for k = 1:numel(fields)
     if ~isfield(metaA, fields(k)) || ~isfield(metaB, fields(k))
@@ -2566,7 +2773,7 @@ end
 
 function range = derive_packet_range_from_meta_local(metaRx, pktIdx, p)
 nominalPayloadBits = nominal_payload_bits_local(p);
-totalPackets = double(metaRx.totalPackets);
+totalPackets = double(metaRx.totalDataPackets);
 totalPayloadBits = double(metaRx.totalPayloadBytes) * 8;
 
 range = struct();
@@ -2605,6 +2812,42 @@ for pktIdx = 1:nPacketsLocal
     layout(pktIdx).startBit = startBit;
     layout(pktIdx).endBit = endBit;
 end
+end
+
+function payloadBitsOut = local_prepare_plain_packet_payload_local( ...
+    payloadBitsIn, pktIdx, packetIndependentBitChaos, chaosEnabled, chaosEncBase, assumption, approxDelta)
+payloadBitsOut = uint8(payloadBitsIn(:) ~= 0);
+if ~(packetIndependentBitChaos && chaosEnabled)
+    return;
+end
+
+assumption = lower(string(assumption));
+if assumption == "none"
+    return;
+end
+
+infoUse = local_tx_packet_chaos_info_local(chaosEncBase, pktIdx, numel(payloadBitsOut));
+if assumption == "wrong_key"
+    infoUse = perturb_chaos_enc_info(infoUse, local_wrong_key_delta_local(pktIdx));
+elseif assumption == "approximate"
+    infoUse = perturb_chaos_enc_info(infoUse, approxDelta);
+elseif assumption ~= "known"
+    error("Unknown packet chaos assumption: %s", assumption);
+end
+
+payloadBitsOut = chaos_decrypt_bits(payloadBitsOut, infoUse);
+end
+
+function infoUse = local_tx_packet_chaos_info_local(encBase, pktIdx, nValidBits)
+encPkt = derive_packet_chaos_cfg(encBase, pktIdx);
+infoUse = struct();
+infoUse.enabled = true;
+infoUse.mode = "payload_bits";
+infoUse.chaosMethod = string(encPkt.chaosMethod);
+infoUse.chaosParams = encPkt.chaosParams;
+infoUse.diffusionRounds = encPkt.diffusionRounds;
+infoUse.nBytes = uint32(ceil(double(nValidBits) / 8));
+infoUse.nValidBits = uint32(nValidBits);
 end
 
 function payloadBitsOut = decrypt_payload_packets_rx_local(payloadBitsIn, packetOk, p, totalPayloadBits, assumption, approxDelta)
@@ -2855,7 +3098,117 @@ budgetOut = struct( ...
     "rxPowerLin", baseBudget.rxPowerLin .* gainScaleLin, ...
     "noisePsdLin", baseBudget.noisePsdLin, ...
     "ebN0Lin", baseBudget.ebN0Lin .* gainScaleLin, ...
-    "ebN0dB", baseBudget.ebN0dB + offsetDb);
+    "ebN0dB", baseBudget.ebN0dB + offsetDb, ...
+    "jsrDb", baseBudget.jsrDb, ...
+    "snrIndex", baseBudget.snrIndex, ...
+    "jsrIndex", baseBudget.jsrIndex);
+end
+
+function channelOut = local_scale_channel_for_jsr_local(channelCfg, signalPowerLin, N0, jsrDb)
+signalPowerLin = double(signalPowerLin);
+N0 = double(N0);
+jsrDb = double(jsrDb);
+if ~isscalar(signalPowerLin) || ~isfinite(signalPowerLin) || signalPowerLin <= 0
+    error("signalPowerLin 必须是正有限标量。");
+end
+if ~isscalar(N0) || ~isfinite(N0) || N0 <= 0
+    error("N0 必须是正有限标量。");
+end
+if ~isscalar(jsrDb) || ~isfinite(jsrDb)
+    error("jsrDb 必须是有限标量。");
+end
+
+channelOut = channelCfg;
+targetJammerPower = signalPowerLin * 10 .^ (jsrDb / 10);
+[totalWeight, detail] = local_channel_weight_budget_local(channelCfg);
+if totalWeight <= 0
+    error("启用JSR扫描时，至少需要一个启用且权重大于0的干扰源。");
+end
+
+if detail.impulseActive
+    avgImpulsePower = targetJammerPower * detail.impulseWeight / totalWeight;
+    impulseProb = double(channelCfg.impulseProb);
+    if ~(isfinite(impulseProb) && impulseProb > 0)
+        error("impulseWeight>0 时，channel.impulseProb 必须为正有限数。");
+    end
+    channelOut.impulseToBgRatio = avgImpulsePower / max(impulseProb * N0, eps);
+else
+    channelOut.impulseToBgRatio = 0;
+end
+
+sourceNames = ["singleTone" "narrowband" "sweep"];
+for k = 1:numel(sourceNames)
+    sourceName = sourceNames(k);
+    if ~detail.(sourceName + "Active")
+        continue;
+    end
+    channelOut.(sourceName).power = targetJammerPower * detail.(sourceName + "Weight") / totalWeight;
+end
+end
+
+function [totalWeight, detail] = local_channel_weight_budget_local(channelCfg)
+detail = struct( ...
+    "impulseActive", false, ...
+    "singleToneActive", false, ...
+    "narrowbandActive", false, ...
+    "sweepActive", false, ...
+    "impulseWeight", 0, ...
+    "singleToneWeight", 0, ...
+    "narrowbandWeight", 0, ...
+    "sweepWeight", 0);
+
+totalWeight = 0;
+
+impulseProb = 0;
+if isfield(channelCfg, "impulseProb") && ~isempty(channelCfg.impulseProb)
+    impulseProb = max(double(channelCfg.impulseProb), 0);
+end
+impulseWeight = 0;
+if isfield(channelCfg, "impulseWeight") && ~isempty(channelCfg.impulseWeight)
+    impulseWeight = max(double(channelCfg.impulseWeight), 0);
+end
+if impulseWeight > 0
+    if impulseProb <= 0
+        error("channel.impulseWeight>0 时，channel.impulseProb 必须为正。");
+    end
+    detail.impulseActive = true;
+    detail.impulseWeight = impulseWeight;
+    totalWeight = totalWeight + impulseWeight;
+end
+
+sourceNames = ["singleTone" "narrowband" "sweep"];
+for k = 1:numel(sourceNames)
+    sourceName = sourceNames(k);
+    if ~isfield(channelCfg, sourceName) || ~isstruct(channelCfg.(sourceName))
+        continue;
+    end
+    cfg = channelCfg.(sourceName);
+    enableNow = isfield(cfg, "enable") && cfg.enable;
+    weightNow = local_interference_weight_local(cfg, "channel." + sourceName);
+    if enableNow
+        if weightNow <= 0
+            error("%s.enable=true 时，%s.weight 必须为正。", sourceName, sourceName);
+        end
+        detail.(sourceName + "Active") = true;
+        detail.(sourceName + "Weight") = weightNow;
+        totalWeight = totalWeight + weightNow;
+        continue;
+    end
+    if weightNow > 0
+        error("%s.weight>0 时，%s.enable 也必须为 true。", sourceName, sourceName);
+    end
+end
+end
+
+function weight = local_interference_weight_local(cfg, cfgName)
+weight = 0;
+if ~isfield(cfg, "weight") || isempty(cfg.weight)
+    return;
+end
+weight = double(cfg.weight);
+if ~isscalar(weight) || ~isfinite(weight) || weight < 0
+    error("%s.weight 必须是非负有限标量。", char(string(cfgName)));
+end
 end
 
 function [wardenBudget, referenceLink] = local_resolve_warden_budget_local(bobBudget, eveBudget, eveEnabled, wardenCfg)

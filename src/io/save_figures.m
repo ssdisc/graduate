@@ -20,59 +20,107 @@ function save_figures(outDir, imgTx, results)
 
 methods = results.methods;
 EbN0dB = results.ebN0dB;
+scan = local_get_scan_descriptor(results);
 [commMetrics, compMetrics] = local_get_image_metrics(results);
 packetConcealActive = local_packet_conceal_active(results);
 
-fig1 = local_create_line_figure("BER");
-ax1 = axes(fig1);
-local_plot_series_matrix(ax1, EbN0dB, results.ber, "logy");
-local_apply_line_labels(ax1, "E_b/N_0 (dB)", "BER (payload)");
-local_format_ber_axis(ax1, EbN0dB, results.ber);
-local_style_legend(ax1, methods, "southwest");
+fig1 = local_create_point_metric_figure( ...
+    "BER", methods, results.ber, scan, "logy", ...
+    "BER (payload)", "BER", "southwest", ...
+    "xLabelSingle", "E_b/N_0 (dB)", ...
+    "xLabelGrid", "J/S (dB)", ...
+    "subplotTitlePrefix", "E_b/N_0", ...
+    "subplotTitleValues", scan.ebN0dBPoint, ...
+    "applyBerFormatting", true);
 local_export_figure(fig1, fullfile(outDir, "ber.png"), "");
 close(fig1);
 
-fig2 = local_create_line_figure("PSNR (Communication)");
-ax2 = axes(fig2);
-local_plot_series_matrix(ax2, EbN0dB, commMetrics.psnr, "linear");
-local_apply_line_labels(ax2, "E_b/N_0 (dB)", "PSNR (dB, communication only)");
-local_style_legend(ax2, methods, "southeast");
+if logical(scan.isGrid)
+    fig1e = local_create_fixed_jsr_metric_figure( ...
+        "BER vs EbN0 (Fixed JSR)", methods, results.ber, scan, "logy", ...
+        "BER (payload)", "BER vs E_b/N_0 @ Fixed J/S", "southwest", ...
+        "xLabel", "E_b/N_0 (dB)", ...
+        "subplotTitlePrefix", "J/S", ...
+        "subplotTitleValues", scan.jsrDbList, ...
+        "applyBerFormatting", true);
+    local_export_figure(fig1e, fullfile(outDir, "ber_vs_ebn0_fixed_jsr.png"), "");
+    close(fig1e);
+end
+
+fig1p = local_create_point_metric_figure( ...
+    "PER", methods, results.per, scan, "logy", ...
+    "PER (packet)", "PER", "southwest", ...
+    "xLabelSingle", "E_b/N_0 (dB)", ...
+    "xLabelGrid", "J/S (dB)", ...
+    "subplotTitlePrefix", "E_b/N_0", ...
+    "subplotTitleValues", scan.ebN0dBPoint, ...
+    "applyBerFormatting", true);
+local_export_figure(fig1p, fullfile(outDir, "per.png"), "");
+close(fig1p);
+
+if logical(scan.isGrid)
+    fig1pe = local_create_fixed_jsr_metric_figure( ...
+        "PER vs EbN0 (Fixed JSR)", methods, results.per, scan, "logy", ...
+        "PER (packet)", "PER vs E_b/N_0 @ Fixed J/S", "southwest", ...
+        "xLabel", "E_b/N_0 (dB)", ...
+        "subplotTitlePrefix", "J/S", ...
+        "subplotTitleValues", scan.jsrDbList, ...
+        "applyBerFormatting", true);
+    local_export_figure(fig1pe, fullfile(outDir, "per_vs_ebn0_fixed_jsr.png"), "");
+    close(fig1pe);
+end
+
+fig2 = local_create_point_metric_figure( ...
+    "PSNR (Communication)", methods, commMetrics.psnr, scan, "linear", ...
+    "PSNR (dB, communication only)", "PSNR (Communication)", "southeast", ...
+    "xLabelSingle", "E_b/N_0 (dB)", ...
+    "xLabelGrid", "J/S (dB)", ...
+    "subplotTitlePrefix", "E_b/N_0", ...
+    "subplotTitleValues", scan.ebN0dBPoint);
 local_export_figure(fig2, fullfile(outDir, "psnr.png"), fullfile(outDir, "psnr_comm.png"));
 close(fig2);
 
-fig2m = local_create_line_figure("MSE (Communication)");
-ax2m = axes(fig2m);
-local_plot_series_matrix(ax2m, EbN0dB, commMetrics.mse, "logy");
-local_apply_line_labels(ax2m, "E_b/N_0 (dB)", "MSE (communication only)");
-local_style_legend(ax2m, methods, "northeast");
+fig2m = local_create_point_metric_figure( ...
+    "MSE (Communication)", methods, commMetrics.mse, scan, "logy", ...
+    "MSE (communication only)", "MSE (Communication)", "northeast", ...
+    "xLabelSingle", "E_b/N_0 (dB)", ...
+    "xLabelGrid", "J/S (dB)", ...
+    "subplotTitlePrefix", "E_b/N_0", ...
+    "subplotTitleValues", scan.ebN0dBPoint);
 local_export_figure(fig2m, fullfile(outDir, "mse.png"), fullfile(outDir, "mse_comm.png"));
 close(fig2m);
 
 if packetConcealActive
-    fig2c = local_create_line_figure("PSNR (Compensated)");
-    ax2c = axes(fig2c);
-    local_plot_series_matrix(ax2c, EbN0dB, compMetrics.psnr, "linear");
-    local_apply_line_labels(ax2c, "E_b/N_0 (dB)", "PSNR (dB, after concealment)");
-    local_style_legend(ax2c, methods, "southeast");
+    fig2c = local_create_point_metric_figure( ...
+        "PSNR (Compensated)", methods, compMetrics.psnr, scan, "linear", ...
+        "PSNR (dB, after concealment)", "PSNR (Compensated)", "southeast", ...
+        "xLabelSingle", "E_b/N_0 (dB)", ...
+        "xLabelGrid", "J/S (dB)", ...
+        "subplotTitlePrefix", "E_b/N_0", ...
+        "subplotTitleValues", scan.ebN0dBPoint);
     local_export_figure(fig2c, fullfile(outDir, "psnr_compensated.png"), "");
     close(fig2c);
 
-    fig2cm = local_create_line_figure("MSE (Compensated)");
-    ax2cm = axes(fig2cm);
-    local_plot_series_matrix(ax2cm, EbN0dB, compMetrics.mse, "logy");
-    local_apply_line_labels(ax2cm, "E_b/N_0 (dB)", "MSE (after concealment)");
-    local_style_legend(ax2cm, methods, "northeast");
+    fig2cm = local_create_point_metric_figure( ...
+        "MSE (Compensated)", methods, compMetrics.mse, scan, "logy", ...
+        "MSE (after concealment)", "MSE (Compensated)", "northeast", ...
+        "xLabelSingle", "E_b/N_0 (dB)", ...
+        "xLabelGrid", "J/S (dB)", ...
+        "subplotTitlePrefix", "E_b/N_0", ...
+        "subplotTitleValues", scan.ebN0dBPoint);
     local_export_figure(fig2cm, fullfile(outDir, "mse_compensated.png"), "");
     close(fig2cm);
 end
 
 if isfield(results, "kl")
-    fig2k = local_create_line_figure("KL Divergence");
-    ax2k = axes(fig2k);
     klValues = [results.kl.signalVsNoise(:).'; results.kl.symmetric(:).'];
-    local_plot_series_matrix(ax2k, results.kl.ebN0dB, klValues, "linear");
-    local_apply_line_labels(ax2k, "E_b/N_0 (dB)", "KL divergence");
-    local_style_legend(ax2k, ["KL(P_{sig}||P_{noise})", "Symmetric KL"], "best");
+    fig2k = local_create_point_metric_figure( ...
+        "KL Divergence", ["KL(P_{sig}||P_{noise})", "Symmetric KL"], klValues, scan, "linear", ...
+        "KL divergence", "KL Divergence", "best", ...
+        "xLabelSingle", "E_b/N_0 (dB)", ...
+        "xLabelGrid", "J/S (dB)", ...
+        "subplotTitlePrefix", "E_b/N_0", ...
+        "subplotTitleValues", scan.ebN0dBPoint);
     local_export_figure(fig2k, fullfile(outDir, "kl.png"), "");
     close(fig2k);
 end
@@ -80,50 +128,95 @@ end
 
 if isfield(results, "eve")
     [commMetricsEve, compMetricsEve] = local_get_image_metrics(results.eve);
-    fig2b = local_create_line_figure("PSNR (Eve, Communication)");
-    ax2b = axes(fig2b);
-    local_plot_series_matrix(ax2b, results.eve.ebN0dB, commMetricsEve.psnr, "linear");
-    local_apply_line_labels(ax2b, "E_b/N_0 at Eve (dB)", "PSNR (dB, communication only)");
-    local_style_legend(ax2b, methods, "southeast");
+    fig2b = local_create_point_metric_figure( ...
+        "PSNR (Eve, Communication)", methods, commMetricsEve.psnr, scan, "linear", ...
+        "PSNR (dB, communication only)", "PSNR (Eve, Communication)", "southeast", ...
+        "xLabelSingle", "E_b/N_0 at Eve (dB)", ...
+        "xLabelGrid", "J/S (dB)", ...
+        "subplotTitlePrefix", "E_b/N_0 at Eve", ...
+        "subplotTitleValues", results.eve.ebN0dB(:));
     local_export_figure(fig2b, fullfile(outDir, "psnr_eve.png"), fullfile(outDir, "psnr_eve_comm.png"));
     close(fig2b);
 
     if isfield(commMetricsEve, "mse")
-        fig2bm = local_create_line_figure("MSE (Eve, Communication)");
-        ax2bm = axes(fig2bm);
-        local_plot_series_matrix(ax2bm, results.eve.ebN0dB, commMetricsEve.mse, "logy");
-        local_apply_line_labels(ax2bm, "E_b/N_0 at Eve (dB)", "MSE (communication only)");
-        local_style_legend(ax2bm, methods, "northeast");
+        fig2bm = local_create_point_metric_figure( ...
+            "MSE (Eve, Communication)", methods, commMetricsEve.mse, scan, "logy", ...
+            "MSE (communication only)", "MSE (Eve, Communication)", "northeast", ...
+            "xLabelSingle", "E_b/N_0 at Eve (dB)", ...
+            "xLabelGrid", "J/S (dB)", ...
+            "subplotTitlePrefix", "E_b/N_0 at Eve", ...
+            "subplotTitleValues", results.eve.ebN0dB(:));
         local_export_figure(fig2bm, fullfile(outDir, "mse_eve.png"), fullfile(outDir, "mse_eve_comm.png"));
         close(fig2bm);
     end
 
     if packetConcealActive
-        fig2bc = local_create_line_figure("PSNR (Eve, Compensated)");
-        ax2bc = axes(fig2bc);
-        local_plot_series_matrix(ax2bc, results.eve.ebN0dB, compMetricsEve.psnr, "linear");
-        local_apply_line_labels(ax2bc, "E_b/N_0 at Eve (dB)", "PSNR (dB, after concealment)");
-        local_style_legend(ax2bc, methods, "southeast");
+        fig2bc = local_create_point_metric_figure( ...
+            "PSNR (Eve, Compensated)", methods, compMetricsEve.psnr, scan, "linear", ...
+            "PSNR (dB, after concealment)", "PSNR (Eve, Compensated)", "southeast", ...
+            "xLabelSingle", "E_b/N_0 at Eve (dB)", ...
+            "xLabelGrid", "J/S (dB)", ...
+            "subplotTitlePrefix", "E_b/N_0 at Eve", ...
+            "subplotTitleValues", results.eve.ebN0dB(:));
         local_export_figure(fig2bc, fullfile(outDir, "psnr_eve_compensated.png"), "");
         close(fig2bc);
 
-        fig2bcm = local_create_line_figure("MSE (Eve, Compensated)");
-        ax2bcm = axes(fig2bcm);
-        local_plot_series_matrix(ax2bcm, results.eve.ebN0dB, compMetricsEve.mse, "logy");
-        local_apply_line_labels(ax2bcm, "E_b/N_0 at Eve (dB)", "MSE (after concealment)");
-        local_style_legend(ax2bcm, methods, "northeast");
+        fig2bcm = local_create_point_metric_figure( ...
+            "MSE (Eve, Compensated)", methods, compMetricsEve.mse, scan, "logy", ...
+            "MSE (after concealment)", "MSE (Eve, Compensated)", "northeast", ...
+            "xLabelSingle", "E_b/N_0 at Eve (dB)", ...
+            "xLabelGrid", "J/S (dB)", ...
+            "subplotTitlePrefix", "E_b/N_0 at Eve", ...
+            "subplotTitleValues", results.eve.ebN0dB(:));
         local_export_figure(fig2bcm, fullfile(outDir, "mse_eve_compensated.png"), "");
         close(fig2bcm);
     end
 
-    fig1b = local_create_line_figure("BER (Eve)");
-    ax1b = axes(fig1b);
-    local_plot_series_matrix(ax1b, results.eve.ebN0dB, results.eve.ber, "logy");
-    local_apply_line_labels(ax1b, "E_b/N_0 at Eve (dB)", "BER (payload)");
-    local_format_ber_axis(ax1b, results.eve.ebN0dB, results.eve.ber);
-    local_style_legend(ax1b, methods, "southwest");
+    fig1b = local_create_point_metric_figure( ...
+        "BER (Eve)", methods, results.eve.ber, scan, "logy", ...
+        "BER (payload)", "BER (Eve)", "southwest", ...
+        "xLabelSingle", "E_b/N_0 at Eve (dB)", ...
+        "xLabelGrid", "J/S (dB)", ...
+        "subplotTitlePrefix", "E_b/N_0 at Eve", ...
+        "subplotTitleValues", results.eve.ebN0dB(:), ...
+        "applyBerFormatting", true);
     local_export_figure(fig1b, fullfile(outDir, "ber_eve.png"), "");
     close(fig1b);
+
+    if logical(scan.isGrid)
+        fig1be = local_create_fixed_jsr_metric_figure( ...
+            "BER (Eve) vs EbN0 (Fixed JSR)", methods, results.eve.ber, scan, "logy", ...
+            "BER (payload)", "BER (Eve) vs E_b/N_0 @ Fixed J/S", "southwest", ...
+            "xLabel", "E_b/N_0 at Eve (dB)", ...
+            "subplotTitlePrefix", "J/S", ...
+            "subplotTitleValues", scan.jsrDbList, ...
+            "applyBerFormatting", true);
+        local_export_figure(fig1be, fullfile(outDir, "ber_eve_vs_ebn0_fixed_jsr.png"), "");
+        close(fig1be);
+    end
+
+    fig1bp = local_create_point_metric_figure( ...
+        "PER (Eve)", methods, results.eve.per, scan, "logy", ...
+        "PER (packet)", "PER (Eve)", "southwest", ...
+        "xLabelSingle", "E_b/N_0 at Eve (dB)", ...
+        "xLabelGrid", "J/S (dB)", ...
+        "subplotTitlePrefix", "E_b/N_0 at Eve", ...
+        "subplotTitleValues", results.eve.ebN0dB(:), ...
+        "applyBerFormatting", true);
+    local_export_figure(fig1bp, fullfile(outDir, "per_eve.png"), "");
+    close(fig1bp);
+
+    if logical(scan.isGrid)
+        fig1bpe = local_create_fixed_jsr_metric_figure( ...
+            "PER (Eve) vs EbN0 (Fixed JSR)", methods, results.eve.per, scan, "logy", ...
+            "PER (packet)", "PER (Eve) vs E_b/N_0 @ Fixed J/S", "southwest", ...
+            "xLabel", "E_b/N_0 at Eve (dB)", ...
+            "subplotTitlePrefix", "J/S", ...
+            "subplotTitleValues", scan.jsrDbList, ...
+            "applyBerFormatting", true);
+        local_export_figure(fig1bpe, fullfile(outDir, "per_eve_vs_ebn0_fixed_jsr.png"), "");
+        close(fig1bpe);
+    end
 end
 
 fig3 = local_create_line_figure("Spectrum");
@@ -153,10 +246,11 @@ nMethods = numel(methods);
 
 for ie = 1:numel(EbN0dB)
     examplePoint = local_get_example_point(results.example, ie, EbN0dB(ie));
-    fig4 = figure("Name", sprintf("Images @ %.1f dB", EbN0dB(ie)), "Visible", "off");
+    pointTitle = local_point_title_suffix(scan, ie);
+    fig4 = figure("Name", sprintf("Images @ %s", pointTitle), "Visible", "off");
     fig4.Position = [100 100 320 * (nMethods + 1) 300 * numel(exampleVariants)];
     tl4 = tiledlayout(fig4, numel(exampleVariants), nMethods + 1, 'TileSpacing', 'compact', 'Padding', 'compact');
-    title(tl4, sprintf("Bob Integrated Images @ Eb/N0=%.1f dB", EbN0dB(ie)));
+    title(tl4, sprintf("Bob Integrated Images @ %s", pointTitle));
 
     for iv = 1:numel(exampleVariants)
         variant = exampleVariants(iv);
@@ -166,7 +260,8 @@ for ie = 1:numel(EbN0dB)
         title(local_example_title_lines( ...
             sprintf("TX (%s)", variant.shortLabel), ...
             EbN0dB(ie), ...
-            "Reference image"), "FontSize", 11);
+            "Reference image", ...
+            scan.jsrDbPoint(ie)), "FontSize", 11);
 
         for k = 1:nMethods
             exampleEntry = local_get_method_example(examplePoint, methods(k));
@@ -182,13 +277,14 @@ for ie = 1:numel(EbN0dB)
             title(local_example_title_lines( ...
                 sprintf("RX (%s) - %s", variant.shortLabel, methods(k)), ...
                 EbN0dB(ie), ...
-                local_example_metric_line(variant.key, commMetrics, compMetrics, k, ie, true)), ...
+                local_example_metric_line(variant.key, commMetrics, compMetrics, k, ie, true), ...
+                scan.jsrDbPoint(ie)), ...
                 "FontSize", 10);
         end
     end
 
-    fileTag = local_snr_file_tag(EbN0dB(ie));
-    local_export_figure(fig4, fullfile(imagesDir, sprintf("snr_%02d_%sdB.png", ie, fileTag)), "", 'Resolution', 170);
+    fileTag = local_point_file_tag(scan, ie);
+    local_export_figure(fig4, fullfile(imagesDir, sprintf("point_%02d_%s.png", ie, fileTag)), "", 'Resolution', 170);
     close(fig4);
 end
 
@@ -202,12 +298,13 @@ if isfield(results, "eve") && isfield(results.eve, "example")
         bobPoint = local_get_example_point(results.example, ie, EbN0dB(ie));
         evePoint = local_get_example_point(results.eve.example, ie, results.eve.ebN0dB(ie));
 
-        fig5 = figure("Name", sprintf("Intercept @ %.1f dB", EbN0dB(ie)), "Visible", "off");
+        pointTitle = local_point_title_suffix(scan, ie);
+        fig5 = figure("Name", sprintf("Intercept @ %s", pointTitle), "Visible", "off");
         nRows = 2 * numel(exampleVariants);
         fig5.Position = [100 100 320 * (nMethods + 1) 270 * nRows];
         tl5 = tiledlayout(fig5, nRows, nMethods + 1, 'TileSpacing', 'compact', 'Padding', 'compact');
-        title(tl5, sprintf("Bob vs Eve @ Bob Eb/N0=%.1f dB, Eve Eb/N0=%.1f dB", ...
-            EbN0dB(ie), results.eve.ebN0dB(ie)));
+        title(tl5, sprintf("Bob vs Eve @ Bob %s, Eve Eb/N0=%.1f dB", ...
+            pointTitle, results.eve.ebN0dB(ie)));
 
         for iv = 1:numel(exampleVariants)
             variant = exampleVariants(iv);
@@ -217,7 +314,8 @@ if isfield(results, "eve") && isfield(results.eve, "example")
             title(local_example_title_lines( ...
                 sprintf("TX / Bob (%s)", variant.shortLabel), ...
                 EbN0dB(ie), ...
-                "Reference image"), "FontSize", 11);
+                "Reference image", ...
+                scan.jsrDbPoint(ie)), "FontSize", 11);
 
             for k = 1:nMethods
                 bobEntry = local_get_method_example(bobPoint, methods(k));
@@ -233,14 +331,15 @@ if isfield(results, "eve") && isfield(results.eve, "example")
                 title(local_example_title_lines( ...
                     sprintf("Bob (%s) - %s", variant.shortLabel, methods(k)), ...
                     EbN0dB(ie), ...
-                    local_example_metric_line(variant.key, commMetrics, compMetrics, k, ie, false)), ...
+                    local_example_metric_line(variant.key, commMetrics, compMetrics, k, ie, false), ...
+                    scan.jsrDbPoint(ie)), ...
                     "FontSize", 10);
             end
 
             nexttile(tl5);
             eveInfoLines = { ...
                 char(sprintf("Eve (%s)", variant.shortLabel)); ...
-                char(sprintf("Eb/N0=%.1f dB", results.eve.ebN0dB(ie))); ...
+                char(sprintf("Eb/N0=%.1f dB, J/S=%.1f dB", results.eve.ebN0dB(ie), scan.jsrDbPoint(ie))); ...
                 "Intercept view"};
             text(0.05, 0.5, eveInfoLines, "Units", "normalized", "Interpreter", "none", "FontSize", 11);
             axis off;
@@ -260,24 +359,20 @@ if isfield(results, "eve") && isfield(results.eve, "example")
                 title(local_example_title_lines( ...
                     sprintf("Eve (%s) - %s%s", variant.shortLabel, methods(k), local_example_header_status(eveEntry)), ...
                     results.eve.ebN0dB(ie), ...
-                    local_example_metric_line(variant.key, commMetricsEve, compMetricsEve, k, ie, false)), ...
+                    local_example_metric_line(variant.key, commMetricsEve, compMetricsEve, k, ie, false), ...
+                    scan.jsrDbPoint(ie)), ...
                     "FontSize", 10);
             end
         end
 
-        fileTag = local_snr_file_tag(EbN0dB(ie));
-        local_export_figure(fig5, fullfile(eveDir, sprintf("snr_%02d_%sdB.png", ie, fileTag)), "", 'Resolution', 170);
+        fileTag = local_point_file_tag(scan, ie);
+        local_export_figure(fig5, fullfile(eveDir, sprintf("point_%02d_%s.png", ie, fileTag)), "", 'Resolution', 170);
         close(fig5);
     end
 end
 
 if isfield(results, "covert") && isfield(results.covert, "warden")
     w = results.covert.warden;
-    [x, xlab] = local_get_warden_axis(w);
-    fig6 = local_create_line_figure("Warden");
-    tl6 = tiledlayout(fig6, 2, 1, "TileSpacing", "compact", "Padding", "compact");
-
-    ax6a = nexttile(tl6);
     if isfield(w, "layers") && isfield(w.layers, "energyNp")
         np = w.layers.energyNp;
         wardenValues = [np.pd(:).'; np.pfa(:).'; np.pe(:).'; np.xi(:).'];
@@ -293,19 +388,7 @@ if isfield(results, "covert") && isfield(results.covert, "warden")
             local_get_warden_series_style("pfa"), ...
             local_get_warden_series_style("pe")];
     end
-    h6a = local_plot_series_matrix(ax6a, x, wardenValues, "linear");
-    local_apply_series_styles(h6a, wardenStyles, true);
-    local_apply_line_labels(ax6a, ...
-        xlab, ...
-        "Probability", ...
-        sprintf("Energy NP layer: P_FA target=%.3g, nObs=%d, nTrials=%d", w.pfaTarget, round(w.nObs(1)), round(w.nTrials)));
-    if size(wardenValues, 1) >= 4
-        local_style_legend(ax6a, ["P_D", "P_{FA}", "P_e", "\xi"], "best");
-    else
-        local_style_legend(ax6a, ["P_D", "P_{FA}", "P_e"], "best");
-    end
 
-    ax6b = nexttile(tl6);
     covertValues = [];
     covertLabels = strings(1, 0);
     covertStyles = struct("Color", {}, "LineStyle", {}, "Marker", {});
@@ -330,13 +413,7 @@ if isfield(results, "covert") && isfield(results.covert, "warden")
             local_get_warden_series_style("xi"), ...
             local_get_warden_series_style("pe")];
     end
-    h6b = local_plot_series_matrix(ax6b, x, covertValues, "linear");
-    local_apply_series_styles(h6b, covertStyles, true);
-    local_apply_line_labels(ax6b, ...
-        xlab, ...
-        "Covert metric", ...
-        sprintf("Primary layer: %s", local_get_primary_warden_layer(w)));
-    local_style_legend(ax6b, covertLabels, "best");
+    fig6 = local_create_warden_figure(scan, w, wardenValues, wardenStyles, covertValues, covertLabels, covertStyles);
     local_export_figure(fig6, fullfile(outDir, "warden.png"), "");
     close(fig6);
 end
@@ -345,6 +422,281 @@ end
 function fig = local_create_line_figure(name)
 fig = figure("Name", name, "Color", "w", "Visible", "off");
 fig.Position = [100 100 1000 632];
+end
+
+function scan = local_get_scan_descriptor(results)
+scan = struct( ...
+    "type", "single_axis", ...
+    "isGrid", false, ...
+    "nSnr", numel(results.ebN0dB), ...
+    "nJsr", 1, ...
+    "ebN0dBList", double(results.ebN0dB(:)), ...
+    "jsrDbList", nan(0, 1), ...
+    "ebN0dBPoint", double(results.ebN0dB(:)), ...
+    "jsrDbPoint", nan(numel(results.ebN0dB), 1), ...
+    "snrIndex", (1:numel(results.ebN0dB)).', ...
+    "jsrIndex", ones(numel(results.ebN0dB), 1));
+
+if ~(isfield(results, "scan") && isstruct(results.scan))
+    return;
+end
+
+required = ["type" "ebN0dBList" "jsrDbList" "snrIndex" "jsrIndex" "nSnr" "nJsr"];
+for k = 1:numel(required)
+    if ~isfield(results.scan, required(k))
+        error("save_figures:MissingScanField", ...
+            "results.scan.%s is required.", required(k));
+    end
+end
+if ~isfield(results, "jsrDb")
+    error("save_figures:MissingJsrDb", "results.jsrDb is required when results.scan is present.");
+end
+
+scan.type = string(results.scan.type);
+scan.isGrid = scan.type == "ebn0_jsr_grid";
+scan.nSnr = double(results.scan.nSnr);
+scan.nJsr = double(results.scan.nJsr);
+scan.ebN0dBList = double(results.scan.ebN0dBList(:));
+scan.jsrDbList = double(results.scan.jsrDbList(:));
+scan.ebN0dBPoint = double(results.ebN0dB(:));
+scan.jsrDbPoint = double(results.jsrDb(:));
+scan.snrIndex = double(results.scan.snrIndex(:));
+scan.jsrIndex = double(results.scan.jsrIndex(:));
+if numel(scan.ebN0dBPoint) ~= numel(scan.jsrDbPoint) ...
+        || numel(scan.snrIndex) ~= numel(scan.ebN0dBPoint) ...
+        || numel(scan.jsrIndex) ~= numel(scan.ebN0dBPoint)
+    error("save_figures:InvalidScanPointCount", ...
+        "results.scan and point-wise Eb/N0/JSR vectors must have the same length.");
+end
+end
+
+function fig = local_create_point_metric_figure(name, legendLabels, values, scan, scaleMode, yLabel, overallTitle, legendLocation, opts)
+arguments
+    name
+    legendLabels
+    values
+    scan (1,1) struct
+    scaleMode
+    yLabel
+    overallTitle
+    legendLocation
+    opts.xLabelSingle = "E_b/N_0 (dB)"
+    opts.xLabelGrid = "J/S (dB)"
+    opts.subplotTitlePrefix = "E_b/N_0"
+    opts.subplotTitleValues = []
+    opts.applyBerFormatting (1,1) logical = false
+end
+
+legendLabels = string(legendLabels(:).');
+subplotTitleValues = double(opts.subplotTitleValues(:));
+
+if ~logical(scan.isGrid)
+    fig = local_create_line_figure(name);
+    ax = axes(fig);
+    local_plot_series_matrix(ax, scan.ebN0dBPoint(:).', values, scaleMode);
+    local_apply_line_labels(ax, opts.xLabelSingle, yLabel);
+    if opts.applyBerFormatting
+        local_format_ber_axis(ax, scan.ebN0dBPoint(:).', values);
+    end
+    local_style_legend(ax, legendLabels, legendLocation);
+    return;
+end
+
+fig = local_create_line_figure(name);
+[nRows, nCols] = local_metric_subplot_shape(scan.nSnr);
+fig.Position = [100 100 1040 * nCols 420 * nRows];
+tl = tiledlayout(fig, nRows, nCols, "TileSpacing", "compact", "Padding", "compact");
+title(tl, char(string(overallTitle)));
+
+for snrIdx = 1:scan.nSnr
+    ax = nexttile(tl);
+    pointMask = scan.snrIndex == snrIdx;
+    order = local_sort_indices(scan.jsrIndex(pointMask));
+    x = scan.jsrDbPoint(pointMask);
+    x = x(order).';
+    valsNow = values(:, pointMask);
+    valsNow = valsNow(:, order);
+    local_plot_series_matrix(ax, x, valsNow, scaleMode);
+    local_apply_line_labels(ax, opts.xLabelGrid, yLabel, ...
+        sprintf("%s = %.1f dB", char(string(opts.subplotTitlePrefix)), subplotTitleValues(find(pointMask, 1, "first"))));
+    if opts.applyBerFormatting
+        local_format_ber_axis(ax, x, valsNow);
+    end
+    if snrIdx == 1
+        local_style_legend(ax, legendLabels, legendLocation);
+    end
+end
+end
+
+function fig = local_create_fixed_jsr_metric_figure(name, legendLabels, values, scan, scaleMode, yLabel, overallTitle, legendLocation, opts)
+arguments
+    name
+    legendLabels
+    values
+    scan (1,1) struct
+    scaleMode
+    yLabel
+    overallTitle
+    legendLocation
+    opts.xLabel = "E_b/N_0 (dB)"
+    opts.subplotTitlePrefix = "J/S"
+    opts.subplotTitleValues = []
+    opts.applyBerFormatting (1,1) logical = false
+end
+
+if ~logical(scan.isGrid)
+    error("save_figures:FixedJsrFigureRequiresGrid", ...
+        "Fixed-JSR figures require ebn0_jsr_grid scan results.");
+end
+
+legendLabels = string(legendLabels(:).');
+subplotTitleValues = double(opts.subplotTitleValues(:));
+if numel(subplotTitleValues) ~= scan.nJsr
+    error("save_figures:FixedJsrTitleCountMismatch", ...
+        "Expected %d fixed-JSR subplot titles, but received %d.", ...
+        scan.nJsr, numel(subplotTitleValues));
+end
+
+fig = local_create_line_figure(name);
+[nRows, nCols] = local_metric_subplot_shape(scan.nJsr);
+fig.Position = [100 100 1040 * nCols 420 * nRows];
+tl = tiledlayout(fig, nRows, nCols, "TileSpacing", "compact", "Padding", "compact");
+title(tl, char(string(overallTitle)));
+
+for jsrIdx = 1:scan.nJsr
+    ax = nexttile(tl);
+    pointMask = scan.jsrIndex == jsrIdx;
+    order = local_sort_indices(scan.snrIndex(pointMask));
+    x = scan.ebN0dBPoint(pointMask);
+    x = x(order).';
+    valsNow = values(:, pointMask);
+    valsNow = valsNow(:, order);
+    local_plot_series_matrix(ax, x, valsNow, scaleMode);
+    local_apply_line_labels(ax, opts.xLabel, yLabel, ...
+        sprintf("%s = %.1f dB", char(string(opts.subplotTitlePrefix)), subplotTitleValues(jsrIdx)));
+    if opts.applyBerFormatting
+        local_format_ber_axis(ax, x, valsNow);
+    end
+    if jsrIdx == 1
+        local_style_legend(ax, legendLabels, legendLocation);
+    end
+end
+end
+
+function [nRows, nCols] = local_metric_subplot_shape(nPanels)
+nPanels = max(1, round(double(nPanels)));
+if nPanels <= 2
+    nRows = 1;
+    nCols = nPanels;
+    return;
+end
+if nPanels <= 4
+    nRows = 2;
+    nCols = 2;
+    return;
+end
+nCols = 3;
+nRows = ceil(nPanels / nCols);
+end
+
+function order = local_sort_indices(values)
+[~, order] = sort(double(values(:)), "ascend");
+end
+
+function suffix = local_point_title_suffix(scan, pointIdx)
+pointIdx = round(double(pointIdx));
+if ~logical(scan.isGrid)
+    suffix = sprintf("Eb/N0=%.1f dB", scan.ebN0dBPoint(pointIdx));
+    return;
+end
+suffix = sprintf("Eb/N0=%.1f dB, J/S=%.1f dB", scan.ebN0dBPoint(pointIdx), scan.jsrDbPoint(pointIdx));
+end
+
+function tag = local_point_file_tag(scan, pointIdx)
+pointIdx = round(double(pointIdx));
+ebTag = local_scalar_tag(scan.ebN0dBPoint(pointIdx));
+if ~logical(scan.isGrid)
+    tag = "ebn0_" + ebTag + "dB";
+    return;
+end
+jsrTag = local_scalar_tag(scan.jsrDbPoint(pointIdx));
+tag = "ebn0_" + ebTag + "dB_jsr_" + jsrTag + "dB";
+end
+
+function tag = local_scalar_tag(value)
+tag = string(sprintf("%.1f", double(value)));
+tag = replace(tag, "-", "neg");
+tag = replace(tag, ".", "p");
+end
+
+function fig = local_create_warden_figure(scan, w, wardenValues, wardenStyles, covertValues, covertLabels, covertStyles)
+if ~logical(scan.isGrid)
+    [x, xlab] = local_get_warden_axis(w);
+    fig = local_create_line_figure("Warden");
+    tl = tiledlayout(fig, 2, 1, "TileSpacing", "compact", "Padding", "compact");
+    axTop = nexttile(tl);
+    hTop = local_plot_series_matrix(axTop, x, wardenValues, "linear");
+    local_apply_series_styles(hTop, wardenStyles, true);
+    local_apply_line_labels(axTop, xlab, "Probability", ...
+        sprintf("Energy NP layer: P_FA target=%.3g, nObs=%d, nTrials=%d", w.pfaTarget, round(w.nObs(1)), round(w.nTrials)));
+    if size(wardenValues, 1) >= 4
+        local_style_legend(axTop, ["P_D", "P_{FA}", "P_e", "\xi"], "best");
+    else
+        local_style_legend(axTop, ["P_D", "P_{FA}", "P_e"], "best");
+    end
+
+    axBottom = nexttile(tl);
+    hBottom = local_plot_series_matrix(axBottom, x, covertValues, "linear");
+    local_apply_series_styles(hBottom, covertStyles, true);
+    local_apply_line_labels(axBottom, xlab, "Covert metric", ...
+        sprintf("Primary layer: %s", local_get_primary_warden_layer(w)));
+    local_style_legend(axBottom, covertLabels, "best");
+    return;
+end
+
+fig = local_create_line_figure("Warden");
+[nRows, nCols] = local_metric_subplot_shape(scan.nSnr);
+fig.Position = [100 100 1100 * nCols 360 * (2 * nRows)];
+tl = tiledlayout(fig, 2 * nRows, nCols, "TileSpacing", "compact", "Padding", "compact");
+title(tl, sprintf("Warden Metrics by J/S (%s)", local_get_primary_warden_layer(w)));
+
+for snrIdx = 1:scan.nSnr
+    ax = nexttile(tl, snrIdx);
+    pointMask = scan.snrIndex == snrIdx;
+    order = local_sort_indices(scan.jsrIndex(pointMask));
+    x = scan.jsrDbPoint(pointMask);
+    valsNow = wardenValues(:, pointMask);
+    x = x(order).';
+    valsNow = valsNow(:, order);
+    hNow = local_plot_series_matrix(ax, x, valsNow, "linear");
+    local_apply_series_styles(hNow, wardenStyles, true);
+    local_apply_line_labels(ax, "J/S (dB)", "Probability", ...
+        sprintf("E_b/N_0 = %.1f dB", scan.ebN0dBList(snrIdx)));
+    if snrIdx == 1
+        if size(wardenValues, 1) >= 4
+            local_style_legend(ax, ["P_D", "P_{FA}", "P_e", "\xi"], "best");
+        else
+            local_style_legend(ax, ["P_D", "P_{FA}", "P_e"], "best");
+        end
+    end
+end
+
+for snrIdx = 1:scan.nSnr
+    ax = nexttile(tl, nRows * nCols + snrIdx);
+    pointMask = scan.snrIndex == snrIdx;
+    order = local_sort_indices(scan.jsrIndex(pointMask));
+    x = scan.jsrDbPoint(pointMask);
+    valsNow = covertValues(:, pointMask);
+    x = x(order).';
+    valsNow = valsNow(:, order);
+    hNow = local_plot_series_matrix(ax, x, valsNow, "linear");
+    local_apply_series_styles(hNow, covertStyles, true);
+    local_apply_line_labels(ax, "J/S (dB)", "Covert metric", ...
+        sprintf("E_b/N_0 = %.1f dB", scan.ebN0dBList(snrIdx)));
+    if snrIdx == 1
+        local_style_legend(ax, covertLabels, "best");
+    end
+end
 end
 
 function local_export_figure(fig, primaryPath, aliasPath, varargin)
@@ -828,10 +1180,15 @@ switch lower(string(variantKey))
 end
 end
 
-function titleLines = local_example_title_lines(nameLine, ebN0Val, metricLine)
+function titleLines = local_example_title_lines(nameLine, ebN0Val, metricLine, jsrVal)
+if nargin < 4 || isempty(jsrVal) || ~isfinite(double(jsrVal))
+    pointLine = sprintf("Eb/N0=%.1f dB", ebN0Val);
+else
+    pointLine = sprintf("Eb/N0=%.1f dB, J/S=%.1f dB", ebN0Val, double(jsrVal));
+end
 titleLines = { ...
     char(string(nameLine)); ...
-    sprintf("Eb/N0=%.1f dB", ebN0Val); ...
+    pointLine; ...
     char(string(metricLine))};
 end
 

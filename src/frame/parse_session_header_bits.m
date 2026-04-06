@@ -6,7 +6,7 @@ if nargin < 2
 end
 
 rxBits = uint8(rxBits(:) ~= 0);
-needBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16;
+needBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16 + 16 + 16 + 16;
 if numel(rxBits) < needBits
     meta = struct();
     payloadBits = uint8([]);
@@ -22,7 +22,10 @@ cols = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
 channels = bits_to_uint(bodyBits(idx:idx+7), 'uint8'); idx = idx + 8;
 bitsPerPixel = bits_to_uint(bodyBits(idx:idx+7), 'uint8'); idx = idx + 8;
 totalPayloadBytes = bits_to_uint(bodyBits(idx:idx+31), 'uint32'); idx = idx + 32;
-totalPackets = bits_to_uint(bodyBits(idx:idx+15), 'uint16');
+totalDataPackets = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
+totalPackets = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
+rsDataPacketsPerBlock = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
+rsParityPacketsPerBlock = bits_to_uint(bodyBits(idx:idx+15), 'uint16');
 headerCrc16 = bits_to_uint(rxBits(needBits-15:needBits), 'uint16');
 
 ok = true;
@@ -32,7 +35,11 @@ ok = ok && rows >= 1 && cols >= 1 && rows <= 4096 && cols <= 4096;
 ok = ok && (channels == 1 || channels == 3);
 ok = ok && bitsPerPixel == 8;
 ok = ok && totalPayloadBytes >= 1;
+ok = ok && totalDataPackets >= 1;
 ok = ok && totalPackets >= 1;
+ok = ok && totalPackets >= totalDataPackets;
+ok = ok && rsDataPacketsPerBlock >= 1;
+ok = ok && rsParityPacketsPerBlock >= 0;
 
 if ~ok
     meta = struct();
@@ -47,7 +54,10 @@ meta.channels = channels;
 meta.bitsPerPixel = bitsPerPixel;
 meta.payloadBytes = totalPayloadBytes;
 meta.totalPayloadBytes = totalPayloadBytes;
+meta.totalDataPackets = totalDataPackets;
 meta.totalPackets = totalPackets;
+meta.rsDataPacketsPerBlock = rsDataPacketsPerBlock;
+meta.rsParityPacketsPerBlock = rsParityPacketsPerBlock;
 meta.sessionHeaderCrc16 = headerCrc16;
 payloadBits = rxBits(needBits+1:end);
 end

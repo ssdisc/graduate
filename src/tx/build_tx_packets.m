@@ -29,19 +29,29 @@ if ~packetEnable
     pktBitsPerPacket = max(pktBitsPerPacket, totalBits);
 end
 
+rsCfg = resolve_outer_rs_cfg(p);
+if rsCfg.enable && ~packetEnable
+    error("启用跨包RS外码时，packet.enable 必须为 true。");
+end
+
 useCompactPhy = local_use_compact_phy_header(p.frame);
 if useCompactPhy && ~packetEnable
     error("packet.enable=false requires frame.phyHeaderMode='legacy_repeat'; compact_fec omits packetDataBytes so the receiver cannot infer the protected payload length.");
 end
 
-nPackets = max(1, ceil(totalBits / pktBitsPerPacket));
+[outerRsPlan] = build_outer_rs_packet_plan(payloadBits, pktBitsPerPacket, rsCfg);
+nPackets = outerRsPlan.totalTxPacketCount;
+nDataPackets = outerRsPlan.dataPacketCount;
 if nPackets > 65535
     error("分包数量过大(%d)，超出uint16可表示范围。", nPackets);
 end
 
 sessionMeta = meta;
 sessionMeta.totalPayloadBytes = uint32(meta.payloadBytes);
+sessionMeta.totalDataPackets = uint16(nDataPackets);
 sessionMeta.totalPackets = uint16(nPackets);
+sessionMeta.rsDataPacketsPerBlock = uint16(max(1, outerRsPlan.dataPacketsPerBlock));
+sessionMeta.rsParityPacketsPerBlock = uint16(outerRsPlan.parityPacketsPerBlock);
 sessionHeader = struct();
 sessionHeaderBits = uint8([]);
 if session_header_enabled(p.frame)
@@ -81,19 +91,21 @@ txBurstChannelParts = cell(nPackets, 1);
 modInfoRef = struct();
 
 for pktIdx = 1:nPackets
-    startBit = (pktIdx - 1) * pktBitsPerPacket + 1;
-    endBit = min(pktIdx * pktBitsPerPacket, totalBits);
-    payloadPktPlain = payloadBits(startBit:endBit);
+    packetSpec = outerRsPlan.packetSpecs(pktIdx);
+    startBit = packetSpec.startBit;
+    endBit = packetSpec.endBit;
+    payloadPktPlain = packetSpec.payloadBitsPlain;
     payloadPkt = payloadPktPlain;
+    chaosEncInfoPkt = struct('enabled', false, 'mode', "none");
     if packetChaosEnable
         chaosPktCfg = derive_packet_chaos_cfg(p.chaosEncrypt, pktIdx);
-        payloadPkt = chaos_encrypt_bits(payloadPktPlain, chaosPktCfg);
+        [payloadPkt, chaosEncInfoPkt] = chaos_encrypt_bits(payloadPktPlain, chaosPktCfg);
     end
     payloadPktTx = payloadPkt;
     if useCompactPhy
         payloadPktTx = fit_bits_length(payloadPktTx, pktBitsPerPacket);
     end
-    payloadPktBytes = ceil(numel(payloadPkt) / 8);
+    payloadPktBytes = ceil(numel(payloadPktPlain) / 8);
     if payloadPktBytes > 65535
         error("单包payload过大(%d bytes)，超出uint16可表示范围。", payloadPktBytes);
     end
@@ -142,6 +154,14 @@ for pktIdx = 1:nPackets
     txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
 
     txPackets(pktIdx).packetIndex = pktIdx;
+    txPackets(pktIdx).isDataPacket = logical(packetSpec.isDataPacket);
+    txPackets(pktIdx).isParityPacket = logical(packetSpec.isParityPacket);
+    txPackets(pktIdx).sourcePacketIndex = double(packetSpec.sourcePacketIndex);
+    txPackets(pktIdx).blockIndex = double(packetSpec.blockIndex);
+    txPackets(pktIdx).blockDataCount = double(packetSpec.blockDataCount);
+    txPackets(pktIdx).blockParityCount = double(packetSpec.blockParityCount);
+    txPackets(pktIdx).blockLocalDataIndex = double(packetSpec.blockLocalDataIndex);
+    txPackets(pktIdx).blockLocalParityIndex = double(packetSpec.blockLocalParityIndex);
     txPackets(pktIdx).syncKind = syncInfoPkt.kind;
     txPackets(pktIdx).syncSym = syncSymPkt;
     txPackets(pktIdx).startBit = startBit;
@@ -155,6 +175,7 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).packetDataBits = packetDataBits;
     txPackets(pktIdx).packetDataBytes = packetDataBytes;
     txPackets(pktIdx).packetDataCrc16 = phyMeta.packetDataCrc16;
+    txPackets(pktIdx).chaosEncInfo = chaosEncInfoPkt;
     txPackets(pktIdx).phyHeader = phyHeader;
     txPackets(pktIdx).phyHeaderBits = phyHeaderBits;
     txPackets(pktIdx).phyHeaderSym = phyHeaderSym;
@@ -172,6 +193,7 @@ end
 plan = struct();
 plan.packetEnable = packetEnable;
 plan.nPackets = nPackets;
+plan.nDataPackets = nDataPackets;
 plan.sessionHeaderLenBits = sessionHeaderLenBits;
 plan.phyHeaderLenBits = phyHeaderLenBits;
 plan.phyHeaderSymLen = phyHeaderSymLen;
@@ -183,6 +205,8 @@ plan.fhEnabled = fhEnabled;
 plan.packetChaosEnable = packetChaosEnable;
 plan.waveform = waveform;
 plan.modInfo = modInfoRef;
+plan.outerRs = outerRsPlan;
+plan.sessionMeta = sessionMeta;
 plan.sessionFrames = sessionFrames;
 plan.sessionFramePlan = sessionFramePlan;
 plan.txBurstForChannel = vertcat(sessionFramePlan.txBurstForChannel(:), vertcat(txBurstChannelParts{:}));

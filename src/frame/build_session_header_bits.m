@@ -3,7 +3,8 @@
 %
 % 字段：
 %   magic16 | rows16 | cols16 | channels8 | bitsPerPixel8 |
-%   totalPayloadBytes32 | totalPackets16 | headerCrc16
+%   totalPayloadBytes32 | totalDataPackets16 | totalTxPackets16 |
+%   rsDataPacketsPerBlock16 | rsParityPacketsPerBlock16 | headerCrc16
 
 if nargin < 2
     frameCfg = struct();
@@ -20,10 +21,25 @@ if isfield(meta, "totalPayloadBytes")
 else
     header.totalPayloadBytes = uint32(meta.payloadBytes);
 end
+if isfield(meta, "totalDataPackets")
+    header.totalDataPackets = uint16(meta.totalDataPackets);
+else
+    header.totalDataPackets = uint16(1);
+end
 if isfield(meta, "totalPackets")
     header.totalPackets = uint16(meta.totalPackets);
 else
-    header.totalPackets = uint16(1);
+    header.totalPackets = header.totalDataPackets;
+end
+if isfield(meta, "rsDataPacketsPerBlock")
+    header.rsDataPacketsPerBlock = uint16(meta.rsDataPacketsPerBlock);
+else
+    header.rsDataPacketsPerBlock = header.totalDataPackets;
+end
+if isfield(meta, "rsParityPacketsPerBlock")
+    header.rsParityPacketsPerBlock = uint16(meta.rsParityPacketsPerBlock);
+else
+    header.rsParityPacketsPerBlock = uint16(0);
 end
 header.payloadBytes = header.totalPayloadBytes;
 
@@ -34,7 +50,10 @@ bodyBits = [ ...
     uint_to_bits(header.channels, 'uint8'); ...
     uint_to_bits(header.bitsPerPixel, 'uint8'); ...
     uint_to_bits(header.totalPayloadBytes, 'uint32'); ...
-    uint_to_bits(header.totalPackets, 'uint16') ...
+    uint_to_bits(header.totalDataPackets, 'uint16'); ...
+    uint_to_bits(header.totalPackets, 'uint16'); ...
+    uint_to_bits(header.rsDataPacketsPerBlock, 'uint16'); ...
+    uint_to_bits(header.rsParityPacketsPerBlock, 'uint16') ...
     ];
 header.headerCrc16 = crc16_ccitt_bits(bodyBits);
 headerBits = [bodyBits; uint_to_bits(header.headerCrc16, 'uint16')];

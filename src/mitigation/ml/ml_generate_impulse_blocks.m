@@ -92,13 +92,13 @@ sampler.impulseToBgRatioRange = local_resolve_range(double(p.channel.impulseToBg
     "impulseToBgRatioRange", 0, inf);
 
 sampler.singleToneProbability = local_validate_probability(opts.singleToneProbability, "singleToneProbability");
-sampler.singleTonePowerRange = local_resolve_range(double(p.channel.singleTone.power), opts.singleTonePowerRange, ...
+sampler.singleTonePowerRange = local_resolve_range(0.01, opts.singleTonePowerRange, ...
     "singleTonePowerRange", 0, inf);
 sampler.singleToneFreqHzRange = local_resolve_range(double(p.channel.singleTone.freqHz), opts.singleToneFreqHzRange, ...
     "singleToneFreqHzRange", -freqLimit, freqLimit);
 
 sampler.narrowbandProbability = local_validate_probability(opts.narrowbandProbability, "narrowbandProbability");
-sampler.narrowbandPowerRange = local_resolve_range(double(p.channel.narrowband.power), opts.narrowbandPowerRange, ...
+sampler.narrowbandPowerRange = local_resolve_range(0.1, opts.narrowbandPowerRange, ...
     "narrowbandPowerRange", 0, inf);
 sampler.narrowbandCenterHzRange = local_resolve_range(double(p.channel.narrowband.centerHz), opts.narrowbandCenterHzRange, ...
     "narrowbandCenterHzRange", -freqLimit, freqLimit);
@@ -106,7 +106,7 @@ sampler.narrowbandBandwidthHzRange = local_resolve_range(double(p.channel.narrow
     "narrowbandBandwidthHzRange", 1e-6, sampleRateHz);
 
 sampler.sweepProbability = local_validate_probability(opts.sweepProbability, "sweepProbability");
-sampler.sweepPowerRange = local_resolve_range(double(p.channel.sweep.power), opts.sweepPowerRange, ...
+sampler.sweepPowerRange = local_resolve_range(0.01, opts.sweepPowerRange, ...
     "sweepPowerRange", 0, inf);
 sampler.sweepStartHzRange = local_resolve_range(double(p.channel.sweep.startHz), opts.sweepStartHzRange, ...
     "sweepStartHzRange", -freqLimit, freqLimit);
@@ -206,7 +206,6 @@ profile.activeExtraCount = nnz(extraFlags);
 pBlock.channel.singleTone.enable = false;
 if extraFlags(1)
     pBlock.channel.singleTone.enable = true;
-    pBlock.channel.singleTone.powerMode = "absolute";
     pBlock.channel.singleTone.power = local_sample_uniform(sampler.singleTonePowerRange);
     pBlock.channel.singleTone.freqHz = local_sample_uniform(sampler.singleToneFreqHzRange);
     profile.singleToneEnable = true;
@@ -217,7 +216,6 @@ end
 pBlock.channel.narrowband.enable = false;
 if extraFlags(2)
     pBlock.channel.narrowband.enable = true;
-    pBlock.channel.narrowband.powerMode = "absolute";
     pBlock.channel.narrowband.power = local_sample_uniform(sampler.narrowbandPowerRange);
     pBlock.channel.narrowband.centerHz = local_sample_uniform(sampler.narrowbandCenterHzRange);
     pBlock.channel.narrowband.bandwidthHz = local_sample_uniform(sampler.narrowbandBandwidthHzRange);
@@ -230,7 +228,6 @@ end
 pBlock.channel.sweep.enable = false;
 if extraFlags(3)
     pBlock.channel.sweep.enable = true;
-    pBlock.channel.sweep.powerMode = "absolute";
     pBlock.channel.sweep.power = local_sample_uniform(sampler.sweepPowerRange);
     pBlock.channel.sweep.startHz = local_sample_uniform(sampler.sweepStartHzRange);
     pBlock.channel.sweep.stopHz = local_sample_uniform(sampler.sweepStopHzRange);

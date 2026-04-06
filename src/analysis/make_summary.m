@@ -15,8 +15,16 @@ function s = make_summary(results)
 s = struct();
 s.methods = results.methods;
 s.ebN0dB = results.ebN0dB;
+s.jsrDb = results.jsrDb;
+if isfield(results, "scan")
+    s.scan = results.scan;
+end
+if isfield(results, "params") && isfield(results.params, "outerRs")
+    s.outerRs = results.params.outerRs;
+end
 [commMetrics, compMetrics] = local_get_image_metrics(results);
 s.berAtMaxEbN0 = results.ber(:, end);
+s.perAtMaxEbN0 = results.per(:, end);
 s.mseAtMaxEbN0 = commMetrics.mse(:, end);
 s.psnrAtMaxEbN0 = commMetrics.psnr(:, end);
 s.ssimAtMaxEbN0 = commMetrics.ssim(:, end);
@@ -26,6 +34,8 @@ s.commSsimAtMaxEbN0 = commMetrics.ssim(:, end);
 s.compMseAtMaxEbN0 = compMetrics.mse(:, end);
 s.compPsnrAtMaxEbN0 = compMetrics.psnr(:, end);
 s.compSsimAtMaxEbN0 = compMetrics.ssim(:, end);
+s.lastPointEbN0dB = results.ebN0dB(end);
+s.lastPointJsrDb = results.jsrDb(end);
 s.packetConcealActive = false;
 if isfield(results, "packetConceal") && isfield(results.packetConceal, "active")
     s.packetConcealActive = logical(results.packetConceal.active);
@@ -64,11 +74,13 @@ end
 
 if isfield(results, "eve")
     s.eveEbN0dB = results.eve.ebN0dB;
+    s.eveJsrDb = results.jsrDb;
     if isfield(results.eve, "assumptions")
         s.eveAssumptions = results.eve.assumptions;
     end
     [commMetricsEve, compMetricsEve] = local_get_image_metrics(results.eve);
     s.eveBerAtMaxEbN0 = results.eve.ber(:, end);
+    s.evePerAtMaxEbN0 = results.eve.per(:, end);
     s.eveMseAtMaxEbN0 = commMetricsEve.mse(:, end);
     s.evePsnrAtMaxEbN0 = commMetricsEve.psnr(:, end);
     s.eveSsimAtMaxEbN0 = commMetricsEve.ssim(:, end);

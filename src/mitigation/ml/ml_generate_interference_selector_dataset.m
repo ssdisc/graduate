@@ -129,19 +129,16 @@ switch lower(string(labelName))
         pBlock.channel.impulseToBgRatio = 15 + 55 * rand();
     case "tone"
         pBlock.channel.singleTone.enable = true;
-        pBlock.channel.singleTone.powerMode = "absolute";
         pBlock.channel.singleTone.power = 0.004 + 0.08 * rand();
         pBlock.channel.singleTone.freqHz = -2500 + 5000 * rand();
         pBlock.channel.singleTone.randomPhase = true;
     case "narrowband"
         pBlock.channel.narrowband.enable = true;
-        pBlock.channel.narrowband.powerMode = "absolute";
         pBlock.channel.narrowband.power = 0.004 + 0.08 * rand();
         pBlock.channel.narrowband.centerHz = -2200 + 4400 * rand();
         pBlock.channel.narrowband.bandwidthHz = 300 + 1400 * rand();
     case "sweep"
         pBlock.channel.sweep.enable = true;
-        pBlock.channel.sweep.powerMode = "absolute";
         pBlock.channel.sweep.power = 0.004 + 0.06 * rand();
         pBlock.channel.sweep.startHz = -3500 + 1500 * rand();
         pBlock.channel.sweep.stopHz = 2000 + 1500 * rand();

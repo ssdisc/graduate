@@ -8,9 +8,9 @@ function [y, impMask, chState] = channel_bg_impulsive(x, N0, ch)
 %        .impulseProb      - 脉冲噪声出现概率
 %        .impulseToBgRatio - 脉冲噪声功率与背景噪声功率比
 %        .multipath.enable/.pathDelays/.pathGainsDb（可选，pathDelays单位: sample）
-%        .singleTone.enable/.powerMode/.power/.toBgRatio/.normFreq（可选，normFreq单位: cycles/sample）
-%        .narrowband.enable/.powerMode/.power/.toBgRatio/.centerFreq/.bandwidth（可选）
-%        .sweep.enable/.powerMode/.power/.toBgRatio/.startFreq/.stopFreq/.periodSamples（可选）
+%        .singleTone.enable/.power/.normFreq（可选，normFreq单位: cycles/sample）
+%        .narrowband.enable/.power/.centerFreq/.bandwidth（可选）
+%        .sweep.enable/.power/.startFreq/.stopFreq/.periodSamples（可选）
 %        .syncImpairment.enable/.timingOffset/.phaseOffsetRad（可选，timingOffset单位: sample）
 %
 % 输出:
@@ -106,7 +106,7 @@ if isfield(ch, "singleTone") && isfield(ch.singleTone, "enable") && ch.singleTon
     if randomPhase
         phi0 = 2*pi*rand();
     end
-    tonePow = local_interference_power(ch.singleTone, N0, 10 * N0);
+    tonePow = local_interference_power(ch.singleTone, "singleTone");
     toneAmp = sqrt(tonePow);
     jammer = jammer + toneAmp * exp(1j * (2*pi*toneFreq*n + phi0));
 end
@@ -132,7 +132,7 @@ if isfield(ch, "narrowband") && isfield(ch.narrowband, "enable") && ch.narrowban
     nb = ifft(ifftshift(W));
     nb = nb .* exp(1j * 2*pi*nbFc*n);
 
-    targetPow = local_interference_power(ch.narrowband, N0, 8 * N0);
+    targetPow = local_interference_power(ch.narrowband, "narrowband");
     nowPow = mean(abs(nb).^2);
     if nowPow > 0
         nb = nb * sqrt(targetPow / nowPow);
@@ -173,7 +173,7 @@ if isfield(ch, "sweep") && isfield(ch.sweep, "enable") && ch.sweep.enable
     sweepPhase = phi0 + 2*pi*cumsum(instFreq);
     sweepJam = exp(1j * sweepPhase);
 
-    targetPow = local_interference_power(ch.sweep, N0, 8 * N0);
+    targetPow = local_interference_power(ch.sweep, "sweep");
     nowPow = mean(abs(sweepJam).^2);
     if nowPow > 0
         sweepJam = sweepJam * sqrt(targetPow / nowPow);
@@ -196,29 +196,12 @@ if nargout >= 3
 end
 end
 
-function targetPow = local_interference_power(cfg, N0, legacyDefault)
-targetPow = legacyDefault;
-
-if isfield(cfg, "powerMode") && strlength(string(cfg.powerMode)) > 0
-    switch lower(string(cfg.powerMode))
-        case "absolute"
-            if isfield(cfg, "power") && ~isempty(cfg.power)
-                targetPow = max(double(cfg.power), 0);
-                return;
-            end
-        case "relative_to_bg"
-            if isfield(cfg, "toBgRatio") && ~isempty(cfg.toBgRatio)
-                targetPow = max(double(cfg.toBgRatio), 0) * N0;
-                return;
-            end
-        otherwise
-            error("Unsupported interference powerMode: %s", string(cfg.powerMode));
-    end
+function targetPow = local_interference_power(cfg, cfgName)
+if ~(isfield(cfg, "power") && ~isempty(cfg.power))
+    error("%s.enable=true 时，%s.power 必须显式给出。", char(string(cfgName)), char(string(cfgName)));
 end
-
-if isfield(cfg, "power") && ~isempty(cfg.power)
-    targetPow = max(double(cfg.power), 0);
-elseif isfield(cfg, "toBgRatio") && ~isempty(cfg.toBgRatio)
-    targetPow = max(double(cfg.toBgRatio), 0) * N0;
+targetPow = double(cfg.power);
+if ~isscalar(targetPow) || ~isfinite(targetPow) || targetPow < 0
+    error("%s.power 必须是非负有限标量。", char(string(cfgName)));
 end
 end

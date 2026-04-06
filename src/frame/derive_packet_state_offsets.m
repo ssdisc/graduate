@@ -67,7 +67,7 @@ if ~session_header_enabled(frameCfg)
     nBits = 0;
     return;
 end
-nBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16;
+nBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16 + 16 + 16 + 16;
 end
 
 function tf = local_fh_enabled(p)
