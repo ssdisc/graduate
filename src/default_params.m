@@ -192,25 +192,25 @@ p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
 % AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/同步失配）
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
-p.channel.impulseProb = 0.01;    % 每个符号产生脉冲的概率
+p.channel.impulseProb = 0.1;    % 每个符号产生脉冲的概率
 p.channel.impulseToBgRatio = 50; % 脉冲形状参数：开启时通过JSR分配平均功率，再反解所需脉冲方差比
-p.channel.impulseWeight = 1;   % JSR总干扰功率分配权重；关闭脉冲时应为0
+p.channel.impulseWeight = 1;   % JSR总干扰功率分配权重；脉冲关闭逻辑仍由impulseProb/weight共同决定
 % 可选：单音干扰（窄带强干扰）
 p.channel.singleTone = struct();
-p.channel.singleTone.enable = true;
-p.channel.singleTone.weight = 1;      % JSR总干扰功率分配权重；关闭单音时应为0
+p.channel.singleTone.enable = false;
+p.channel.singleTone.weight = 1;      % JSR总干扰功率分配权重；singleTone.enable=false时忽略
 p.channel.singleTone.freqHz = 800;      % 单音频率（Hz）
 p.channel.singleTone.randomPhase = true;
 % 可选：窄带噪声干扰
 p.channel.narrowband = struct();
-p.channel.narrowband.enable = true;
-p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；关闭窄带时应为0
+p.channel.narrowband.enable = false;
+p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；narrowband.enable=false时忽略
 p.channel.narrowband.centerHz = 1200;   % 窄带噪声中心频率（Hz）
 p.channel.narrowband.bandwidthHz = 800; % 窄带噪声双边带宽（Hz）
 % 可选：扫频干扰（线性chirp）
 p.channel.sweep = struct();
-p.channel.sweep.enable = true;
-p.channel.sweep.weight = 1;            % JSR总干扰功率分配权重；关闭扫频时应为0
+p.channel.sweep.enable = false;
+p.channel.sweep.weight = 1;            % JSR总干扰功率分配权重；sweep.enable=false时忽略
 p.channel.sweep.startHz = -2000;        % 起始频率（Hz）
 p.channel.sweep.stopHz = 2000;          % 终止频率（Hz）
 p.channel.sweep.periodSymbols = 256;    % 单次扫频周期（符号数）

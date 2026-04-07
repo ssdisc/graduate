@@ -438,9 +438,6 @@ if channelCfg.singleToneEnable
             "channelSingleToneEnable=true 时，channelSingleToneWeight 必须为正。");
     end
     enabledTypes(end + 1) = "singleTone"; %#ok<AGROW>
-elseif channelCfg.singleToneWeight > 0
-    error("export_thesis_tables:InvalidChannelConfig", ...
-        "channelSingleToneWeight>0 时，channelSingleToneEnable 也必须为 true。");
 end
 
 if channelCfg.narrowbandEnable
@@ -449,9 +446,6 @@ if channelCfg.narrowbandEnable
             "channelNarrowbandEnable=true 时，channelNarrowbandWeight 必须为正。");
     end
     enabledTypes(end + 1) = "narrowband"; %#ok<AGROW>
-elseif channelCfg.narrowbandWeight > 0
-    error("export_thesis_tables:InvalidChannelConfig", ...
-        "channelNarrowbandWeight>0 时，channelNarrowbandEnable 也必须为 true。");
 end
 
 if channelCfg.sweepEnable
@@ -460,9 +454,6 @@ if channelCfg.sweepEnable
             "channelSweepEnable=true 时，channelSweepWeight 必须为正。");
     end
     enabledTypes(end + 1) = "sweep"; %#ok<AGROW>
-elseif channelCfg.sweepWeight > 0
-    error("export_thesis_tables:InvalidChannelConfig", ...
-        "channelSweepWeight>0 时，channelSweepEnable 也必须为 true。");
 end
 
 enabledCount = numel(enabledTypes);

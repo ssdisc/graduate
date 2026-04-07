@@ -3244,10 +3244,6 @@ for k = 1:numel(sourceNames)
         detail.(sourceName + "Active") = true;
         detail.(sourceName + "Weight") = weightNow;
         totalWeight = totalWeight + weightNow;
-        continue;
-    end
-    if weightNow > 0
-        error("%s.weight>0 时，%s.enable 也必须为 true。", sourceName, sourceName);
     end
 end
 end
