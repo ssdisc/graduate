@@ -72,7 +72,7 @@ function [dataSymTx, modInfo, intState, fecCfg] = local_encode_repeat_session_fr
 fecCfg = local_session_term_fec_cfg(p.fec);
 codedBits = local_term_fec_encode(sessionHeaderBits, fecCfg);
 [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
-[dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);
+[dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod, fecCfg);
 end
 
 function [dataSymTx, modInfo, fecCfg, bitRepeat] = local_encode_strong_session_frame(sessionHeaderBits, p)
@@ -80,11 +80,12 @@ fecCfg = local_session_term_fec_cfg(p.fec);
 bitRepeat = session_frame_strong_repeat(p.frame);
 codedBits = local_term_fec_encode(sessionHeaderBits, fecCfg);
 codedBitsStrong = repelem(codedBits(:), bitRepeat);
-[dataSymTx, modInfo] = modulate_bits(codedBitsStrong, struct("type", "BPSK"));
+[dataSymTx, modInfo] = modulate_bits(codedBitsStrong, struct("type", "BPSK"), fecCfg);
 end
 
 function fecCfg = local_session_term_fec_cfg(fecBase)
 fecCfg = fecBase;
+fecCfg.kind = "conv";
 fecCfg.opmode = 'term';
 fecCfg.tracebackDepth = max(double(fecBase.tracebackDepth), 5 * local_conv_memory_bits(fecBase.trellis));
 end

@@ -70,6 +70,7 @@ end
 
 function fecHdr = local_compact_fec_cfg(frameCfg, fec)
 fecHdr = fec;
+fecHdr.kind = "conv";
 fecHdr.opmode = 'term';
 fecHdr.tracebackDepth = max(double(fec.tracebackDepth), 5 * local_conv_memory_bits(fec.trellis));
 fecHdr.softBits = max(double(fec.softBits), local_compact_soft_bits(frameCfg));

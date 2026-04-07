@@ -49,7 +49,7 @@ if strcmpi(fec.decisionType, "hard")
     return;
 end
 
-ns = fec.softBits;%软判决量化位数
+ns = fec_payload_soft_bits(fec);%软判决量化位数
 maxv = 2^ns - 1; %最大软值（例如ns=3时为7），对应于强'1'，0对应于强'0'，中间值表示不确定/擦除
 midv = maxv / 2;  % 中间值 = 擦除/不确定
 A = softCfg.clipA;

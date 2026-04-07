@@ -137,7 +137,7 @@ for pktIdx = 1:nPackets
     dataBitsTxScr = scramble_bits(packetDataBits, scrambleCfgPkt);
     codedBits = fec_encode(dataBitsTxScr, p.fec);
     [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
-    [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod);
+    [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod, p.fec);
     modInfoRef = modInfo;
 
     if fhEnabled
@@ -215,7 +215,8 @@ end
 function nSym = n_symbols_for_info_bits_local(p, nInfoBits)
 bitsPerSym = bits_per_symbol_local(p.mod);
 codedBitsLen = coded_bits_length_local(nInfoBits, p.fec);
-nSym = ceil(codedBitsLen / bitsPerSym);
+[codedBitsInt, ~] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
+nSym = ceil(numel(codedBitsInt) / bitsPerSym);
 end
 
 function nHops = packet_stride_hops_local(p, nSym)
@@ -227,9 +228,7 @@ nHops = ceil(double(nSym) / double(p.fh.symbolsPerHop));
 end
 
 function nBits = coded_bits_length_local(nInfoBits, fec)
-numInputBits = log2(fec.trellis.numInputSymbols);
-numOutputBits = log2(fec.trellis.numOutputSymbols);
-nBits = round(double(nInfoBits) * numOutputBits / numInputBits);
+nBits = fec_coded_bits_length(nInfoBits, fec);
 end
 
 function bitsPerSym = bits_per_symbol_local(mod)

@@ -29,7 +29,7 @@ arguments
     opts.maxAdditionalImpairments (1,1) double {mustBeInteger, mustBeNonnegative} = 2
 end
 
-[~, modInfo] = modulate_bits(uint8([0; 1]), p.mod);
+[~, modInfo] = modulate_bits(uint8([0; 1]), p.mod, p.fec);
 codeRate = modInfo.codeRate;
 bitsPerSym = modInfo.bitsPerSymbol;
 Es = 1.0;

@@ -16,7 +16,7 @@ featureNames = ml_interference_selector_feature_names();
 waveform = resolve_waveform_cfg(p);
 [~, syncSym] = make_packet_sync(p.frame, 1);
 syncCfg = local_selector_sync_cfg(p.rxSync, p.channel, waveform);
-[~, modInfo] = modulate_bits(uint8(zeros(bits_per_symbol_local(p.mod), 1)), p.mod);
+[~, modInfo] = modulate_bits(uint8(zeros(bits_per_symbol_local(p.mod), 1)), p.mod, p.fec);
 bitsPerSym = modInfo.bitsPerSymbol;
 codeRate = modInfo.codeRate;
 

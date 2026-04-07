@@ -32,7 +32,8 @@ for prevIdx = 1:(pktIdx - 1)
 
     if fhEnabled
         codedBitsLen = local_coded_bits_length(prevPacketBits, p.fec);
-        nSymPrev = ceil(codedBitsLen / bitsPerSym);
+        [codedBitsInt, ~] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
+        nSymPrev = ceil(numel(codedBitsInt) / bitsPerSym);
         fhOffsetHops = fhOffsetHops + ceil(double(nSymPrev) / double(p.fh.symbolsPerHop));
     end
 end
@@ -75,9 +76,7 @@ tf = isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enabl
 end
 
 function nBits = local_coded_bits_length(nInfoBits, fec)
-numInputBits = log2(fec.trellis.numInputSymbols);
-numOutputBits = log2(fec.trellis.numOutputSymbols);
-nBits = round(double(nInfoBits) * numOutputBits / numInputBits);
+nBits = fec_coded_bits_length(nInfoBits, fec);
 end
 
 function bitsPerSym = local_bits_per_symbol(mod)

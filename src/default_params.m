@@ -32,7 +32,7 @@ p.linkBudget = struct();
 % 接收端背景噪声功率谱密度（线性值，纯仿真归一化口径）。
 p.linkBudget.noisePsdLin = 1.0;
 % 主扫描轴1：Bob端目标 Eb/N0（dB）
-p.linkBudget.ebN0dBList = 4:2:10;
+p.linkBudget.ebN0dBList = 0:2:10;
 % 主扫描轴2：目标 J/S（dB），在每个Eb/N0点下缩放已启用干扰的平均总功率
 p.linkBudget.jsrDbList = [-20 -15 -10 -5];
 
@@ -69,7 +69,7 @@ p.payload.dct.quantStep = 16;
 % 3.5) 分包传输（最小版本）
 p.packet = struct();
 p.packet.enable = true;                % 启用图像分包
-p.packet.payloadBitsPerPacket = 1024; % 每包载荷比特数（需为8的整数倍）
+p.packet.payloadBitsPerPacket = 7200; % 每包载荷比特数（需为8的整数倍）
 p.packet.concealLostPackets = true;    % 丢包后图像/块域补偿（仅影响重建图像）
 p.packet.concealMode = "blend";      % "nearest" | "blend"
 
@@ -120,13 +120,23 @@ p.scramble.enable = true;
 p.scramble.pnPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1]; % x^11 + x^2 + 1
 p.scramble.pnInit = [0 0 0 0 0 0 0 0 0 0 1];         % 非零初始值
 
-% 6) 信道编码（卷积码，码率1/2）
+% 6) 信道编码（payload默认卷积码，可切换LDPC；PHY头/会话帧仍使用卷积码）
 p.fec = struct();
+p.fec.kind = "ldpc";            % "conv" | "ldpc"
 p.fec.trellis = poly2trellis(7, [171 133]);
 p.fec.tracebackDepth = 34;
 p.fec.opmode = 'trunc'; % 'trunc'简化处理
 p.fec.decisionType = 'soft'; % 'hard' | 'soft'
 p.fec.softBits = 3; % vitdec中的nsdec(1..13)，decisionType='soft'时使用
+p.fec.ldpc = struct();
+p.fec.ldpc.rate = "1/2";        % DVB-S2/S2X LDPC名义码率
+p.fec.ldpc.frameType = "short"; % "short" | "normal" | "medium"
+p.fec.ldpc.softBits = 6;        % payload-LDPC软判决量化位数
+p.fec.ldpc.maxIterations = 20;
+p.fec.ldpc.minSumScalingFactor = 0.75;
+p.fec.ldpc.minSumOffset = 0.5;
+p.fec.ldpc.termination = "early"; % "early" | "max"
+p.fec.ldpc.multithreaded = false;
 
 % 7) 交织（块交织器）
 p.interleaver = struct();

@@ -1,10 +1,11 @@
-function [sym, info] = modulate_bits(bits, mod)
+function [sym, info] = modulate_bits(bits, mod, fec)
 %MODULATE_BITS  将比特映射到复基带符号。
 %
 % 输入:
 %   bits - 输入比特流
 %   mod  - 调制参数结构体
 %          .type - 调制类型（支持"BPSK"/"QPSK"/"MSK"）
+%   fec  - （可选）payload FEC配置，用于回传真实码率
 %
 % 输出:
 %   sym  - 调制后的符号序列
@@ -36,6 +37,11 @@ switch upper(string(mod.type))
         error("不支持的调制方式: %s", mod.type);
 end
 
-info.codeRate = 1/2;
+if nargin >= 3 && ~isempty(fec)
+    fecInfo = fec_get_info(fec);
+    info.codeRate = fecInfo.codeRate;
+else
+    info.codeRate = 1.0;
+end
 end
 

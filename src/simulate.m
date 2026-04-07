@@ -1870,7 +1870,7 @@ packetDataBits = uint8(packetDataBits(:) ~= 0);
 bitsScr = scramble_bits(packetDataBits, scrambleCfg);
 codedBits = fec_encode(bitsScr, p.fec);
 [codedBitsInt, ~] = interleave_bits(codedBits, p.interleaver);
-[refSym, ~] = modulate_bits(codedBitsInt, p.mod);
+[refSym, ~] = modulate_bits(codedBitsInt, p.mod, p.fec);
 refSym = fit_complex_length_local(refSym, rxState.nDataSym);
 end
 
@@ -2672,16 +2672,17 @@ if nargin < 3 || isempty(packetDataBitsLen) || ~isfinite(packetDataBitsLen)
 end
 packetDataBitsLen = max(0, round(double(packetDataBitsLen)));
 bitsPerSym = bits_per_symbol_local(p.mod);
-codedBitsLen = coded_bits_length_local(packetDataBitsLen, p.fec);
-[~, intState] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
-nDataSym = ceil(codedBitsLen / bitsPerSym);
+fecCodedBitsLen = coded_bits_length_local(packetDataBitsLen, p.fec);
+[codedBitsInt, intState] = interleave_bits(zeros(fecCodedBitsLen, 1, "uint8"), p.interleaver);
+nDataSym = ceil(numel(codedBitsInt) / bitsPerSym);
 offsets = derive_packet_state_offsets(p, pktIdx);
 
 state = struct();
 state.packetIndex = pktIdx;
 state.packetDataBitsLen = packetDataBitsLen;
 state.packetDataBytes = ceil(packetDataBitsLen / 8);
-state.codedBitsLen = codedBitsLen;
+state.fecCodedBitsLen = fecCodedBitsLen;
+state.codedBitsLen = numel(codedBitsInt);
 state.nDataSym = nDataSym;
 state.intState = intState;
 state.stateOffsets = offsets;
@@ -3087,9 +3088,7 @@ end
 end
 
 function nBits = coded_bits_length_local(nInfoBits, fec)
-numInputBits = log2(fec.trellis.numInputSymbols);
-numOutputBits = log2(fec.trellis.numOutputSymbols);
-nBits = round(double(nInfoBits) * numOutputBits / numInputBits);
+nBits = fec_coded_bits_length(nInfoBits, fec);
 end
 
 function bitsPerSym = bits_per_symbol_local(mod)
