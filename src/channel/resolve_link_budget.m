@@ -1,10 +1,11 @@
-function budget = resolve_link_budget(linkBudgetCfg, modInfo, txBaseAveragePowerLin)
-%RESOLVE_LINK_BUDGET  Build a flattened Eb/N0-by-JSR simulation grid.
+function budget = resolve_link_budget(linkBudgetCfg, modInfo, txBaseAveragePowerLin, jsrEnabled)
+%RESOLVE_LINK_BUDGET  Build a flattened Eb/N0 scan with an optional JSR axis.
 
 arguments
     linkBudgetCfg (1,1) struct
     modInfo (1,1) struct
     txBaseAveragePowerLin (1,1) double
+    jsrEnabled (1,1) logical = true
 end
 
 requiredFields = ["noisePsdLin" "ebN0dBList" "jsrDbList"];
@@ -28,7 +29,13 @@ bitsPerSymbol = local_positive_scalar(modInfo.bitsPerSymbol, "modInfo.bitsPerSym
 bitLoad = codeRate * bitsPerSymbol;
 
 ebN0dBList = local_finite_vector(linkBudgetCfg.ebN0dBList, "linkBudget.ebN0dBList");
-jsrDbList = local_finite_vector(linkBudgetCfg.jsrDbList, "linkBudget.jsrDbList");
+if jsrEnabled
+    jsrDbList = local_finite_vector(linkBudgetCfg.jsrDbList, "linkBudget.jsrDbList");
+    scanType = "ebn0_jsr_grid";
+else
+    jsrDbList = 0;
+    scanType = "ebn0_only";
+end
 
 nSnr = numel(ebN0dBList);
 nJsr = numel(jsrDbList);
@@ -65,7 +72,7 @@ bob = struct( ...
     "jsrIndex", jsrIndex);
 
 budget = struct( ...
-    "scanType", "ebn0_jsr_grid", ...
+    "scanType", scanType, ...
     "nSnr", nSnr, ...
     "nJsr", nJsr, ...
     "nPoints", nPoints, ...

@@ -97,7 +97,9 @@ packetConcealActive = packetConcealEnable && nDataPackets > 1;
 txSymForChannel = txPlan.txBurstForChannel;
 modInfo = txPlan.modInfo;
 txBaseReport = measure_tx_burst(txSymForChannel, waveform);
-linkBudget = resolve_link_budget(p.linkBudget, modInfo, txBaseReport.averagePowerLin);
+jsrScanEnabled = local_channel_has_enabled_jammer_local(p.channel);
+linkBudget = resolve_link_budget(p.linkBudget, modInfo, txBaseReport.averagePowerLin, jsrScanEnabled);
+jsrScanIsGrid = string(linkBudget.scanType) == "ebn0_jsr_grid";
 powerScaleLinList = linkBudget.bob.txPowerLin ./ txBaseReport.averagePowerLin;
 txReport = struct( ...
     "burstDurationSec", txBaseReport.burstDurationSec, ...
@@ -114,8 +116,13 @@ txReport = struct( ...
     "peakPowerDb", 10 * log10(max(txBaseReport.peakPowerLin .* powerScaleLinList, realmin('double'))), ...
     "powerErrorLin", txBaseReport.averagePowerLin .* powerScaleLinList - linkBudget.bob.txPowerLin, ...
     "powerErrorDb", 10 * log10(max(txBaseReport.averagePowerLin .* powerScaleLinList, realmin('double'))) - linkBudget.bob.txPowerDb);
-fprintf('[SIM] Tx记录: burst %.3fs, Eb/N0点=%s dB, JSR点=%s dB, base avg %.4f (1 sps等效)\n', ...
-    txReport.burstDurationSec, mat2str(double(linkBudget.snrDbList)), mat2str(double(linkBudget.jsrDbList)), txBaseReport.averagePowerLin);
+if jsrScanIsGrid
+    fprintf('[SIM] Tx记录: burst %.3fs, Eb/N0点=%s dB, JSR点=%s dB, base avg %.4f (1 sps等效)\n', ...
+        txReport.burstDurationSec, mat2str(double(linkBudget.snrDbList)), mat2str(double(linkBudget.jsrDbList)), txBaseReport.averagePowerLin);
+else
+    fprintf('[SIM] Tx记录: burst %.3fs, Eb/N0点=%s dB, JSR扫描=OFF, base avg %.4f (1 sps等效)\n', ...
+        txReport.burstDurationSec, mat2str(double(linkBudget.snrDbList)), txBaseReport.averagePowerLin);
+end
 
 %% 仿真参数初始化与配置
 
@@ -294,19 +301,22 @@ simTic = tic;
 
 fprintf('\n========================================\n');
 fprintf('[SIM] 链路仿真开始\n');
-fprintf('[SIM] 仿真点数=%d (Eb/N0=%d × JSR=%d), 每点帧数=%d, 总帧数=%d\n', ...
-    totalPointCount, double(linkBudget.nSnr), double(linkBudget.nJsr), p.sim.nFramesPerPoint, totalFrames);
+if jsrScanIsGrid
+    fprintf('[SIM] 仿真点数=%d (Eb/N0=%d × JSR=%d), 每点帧数=%d, 总帧数=%d\n', ...
+        totalPointCount, double(linkBudget.nSnr), double(linkBudget.nJsr), p.sim.nFramesPerPoint, totalFrames);
+else
+    fprintf('[SIM] 仿真点数=%d (Eb/N0=%d), 每点帧数=%d, 总帧数=%d\n', ...
+        totalPointCount, double(linkBudget.nSnr), p.sim.nFramesPerPoint, totalFrames);
+end
 fprintf('[SIM] Eb/N0点=%s dB\n', mat2str(double(linkBudget.snrDbList)));
-fprintf('[SIM] JSR点=%s dB\n', mat2str(double(linkBudget.jsrDbList)));
+if jsrScanIsGrid
+    fprintf('[SIM] JSR点=%s dB\n', mat2str(double(linkBudget.jsrDbList)));
+else
+    fprintf('[SIM] JSR扫描: OFF (all configured interference sources disabled)\n');
+end
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
-if numel(methods) > 1
-    hasImpulse = isfield(p, "channel") && isfield(p.channel, "impulseProb") && double(p.channel.impulseProb) > 0;
-    hasTone = isfield(p, "channel") && isfield(p.channel, "singleTone") && isfield(p.channel.singleTone, "enable") && p.channel.singleTone.enable;
-    hasNb = isfield(p, "channel") && isfield(p.channel, "narrowband") && isfield(p.channel.narrowband, "enable") && p.channel.narrowband.enable;
-    hasSweep = isfield(p, "channel") && isfield(p.channel, "sweep") && isfield(p.channel.sweep, "enable") && p.channel.sweep.enable;
-    if ~hasImpulse && ~hasTone && ~hasNb && ~hasSweep
-        fprintf('[SIM] NOTE: impulse/tone/narrowband/sweep all disabled. Most mitigation methods will behave like \"none\".\n');
-    end
+if numel(methods) > 1 && ~jsrScanIsGrid
+    fprintf('[SIM] NOTE: impulse/tone/narrowband/sweep all disabled. Most mitigation methods will behave like \"none\".\n');
 end
 syncEnabledBob = local_sync_enabled_local(bobRxSync);
 syncEnabledEve = false;
@@ -352,12 +362,20 @@ for ie = 1:numel(EbN0dBList)
     JsrDb = JsrDbList(ie);
     N0 = linkBudget.bob.noisePsdLin(ie);
     txBurstBobForPoint = linkBudget.bob.rxAmplitudeScale(ie) * txSymForChannel;
-    channelPoint = local_scale_channel_for_jsr_local(p.channel, linkBudget.bob.rxPowerLin(ie), N0, JsrDb);
+    channelPoint = p.channel;
+    if jsrScanIsGrid
+        channelPoint = local_scale_channel_for_jsr_local(p.channel, linkBudget.bob.rxPowerLin(ie), N0, JsrDb);
+    end
     channelSample = adapt_channel_for_sps(channelPoint, waveform);
     [klSigVsNoise(ie), klNoiseVsSig(ie), klSym(ie)] = signal_noise_kl(txBurstBobForPoint, N0, 128);
 
-    fprintf('[SIM] >>> 仿真点 %d/%d: Eb/N0 %.2f dB, JSR %.2f dB, txPower %.2f dB\n', ...
-        ie, totalPointCount, EbN0dB, JsrDb, linkBudget.bob.txPowerDb(ie));
+    if jsrScanIsGrid
+        fprintf('[SIM] >>> 仿真点 %d/%d: Eb/N0 %.2f dB, JSR %.2f dB, txPower %.2f dB\n', ...
+            ie, totalPointCount, EbN0dB, JsrDb, linkBudget.bob.txPowerDb(ie));
+    else
+        fprintf('[SIM] >>> 仿真点 %d/%d: Eb/N0 %.2f dB, txPower %.2f dB\n', ...
+            ie, totalPointCount, EbN0dB, linkBudget.bob.txPowerDb(ie));
+    end
 
     if eveEnabled
         EbN0dBEve = eveBudget.ebN0dB(ie);
@@ -598,8 +616,13 @@ for ie = 1:numel(EbN0dBList)
             packetConcealActive, "Eve");
     end
 
-    fprintf('[SIM] <<< 仿真点完成: Eb/N0 %.2f dB, JSR %.2f dB, txPower %.2f dB, 用时 %.2fs\n', ...
-        EbN0dB, JsrDb, linkBudget.bob.txPowerDb(ie), toc(pointTic));
+    if jsrScanIsGrid
+        fprintf('[SIM] <<< 仿真点完成: Eb/N0 %.2f dB, JSR %.2f dB, txPower %.2f dB, 用时 %.2fs\n', ...
+            EbN0dB, JsrDb, linkBudget.bob.txPowerDb(ie), toc(pointTic));
+    else
+        fprintf('[SIM] <<< 仿真点完成: Eb/N0 %.2f dB, txPower %.2f dB, 用时 %.2fs\n', ...
+            EbN0dB, linkBudget.bob.txPowerDb(ie), toc(pointTic));
+    end
     fprintf('[SIM]     Bob BER: %s\n', format_metric_pairs(methods, ber(:, ie)));
     if eveEnabled
         fprintf('[SIM]     Eve BER: %s\n', format_metric_pairs(methods, berEve(:, ie)));
@@ -3102,6 +3125,14 @@ budgetOut = struct( ...
     "jsrDb", baseBudget.jsrDb, ...
     "snrIndex", baseBudget.snrIndex, ...
     "jsrIndex", baseBudget.jsrIndex);
+end
+
+function tf = local_channel_has_enabled_jammer_local(channelCfg)
+if ~isstruct(channelCfg)
+    error("channel 配置必须是标量struct。");
+end
+[totalWeight, ~] = local_channel_weight_budget_local(channelCfg);
+tf = totalWeight > 0;
 end
 
 function channelOut = local_scale_channel_for_jsr_local(channelCfg, signalPowerLin, N0, jsrDb)

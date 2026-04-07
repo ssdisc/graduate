@@ -21,7 +21,7 @@ p.sim.resultsDir = fullfile(pwd, "results");
 % 并行加速（主链路）：需要 Parallel Computing Toolbox
 p.sim.useParallel = true;
 p.sim.nWorkers = 16;
-p.sim.parallelMode = "methods"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
+p.sim.parallelMode = "frames"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
 
 % 发射端记录/评估口径
 p.tx = struct();
@@ -75,7 +75,7 @@ p.packet.concealMode = "blend";      % "nearest" | "blend"
 
 % 3.6) 跨包Reed-Solomon外码（按包做系统码，面向整包丢失/擦除恢复）
 p.outerRs = struct();
-p.outerRs.enable = false;
+p.outerRs.enable = true;
 p.outerRs.dataPacketsPerBlock = 12;    % 每个RS块保护的数据包数 K
 p.outerRs.parityPacketsPerBlock = 4;   % 每个RS块附加的校验包数 P
 
@@ -174,9 +174,9 @@ p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
 % AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/同步失配）
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
-p.channel.impulseProb = 0.01;    % 每个符号产生脉冲的概率
+p.channel.impulseProb = 0;    % 每个符号产生脉冲的概率
 p.channel.impulseToBgRatio = 50; % 脉冲形状参数：开启时通过JSR分配平均功率，再反解所需脉冲方差比
-p.channel.impulseWeight = 1;   % JSR总干扰功率分配权重；关闭脉冲时应为0
+p.channel.impulseWeight = 0;   % JSR总干扰功率分配权重；关闭脉冲时应为0
 % 可选：单音干扰（窄带强干扰）
 p.channel.singleTone = struct();
 p.channel.singleTone.enable = false;
@@ -212,8 +212,9 @@ p.channel.multipath.rayleigh = false;        % 启用瑞利衰落（各径独立
 %% 接收端（RX）
 % 10) 脉冲抑制
 p.mitigation = struct();
-p.mitigation.methods = ["none" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" ...
-    "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "adaptive_ml_frontend"]; % 运行并比较
+% p.mitigation.methods = ["none" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" ...
+%     "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "adaptive_ml_frontend"]; % 运行并比较
+p.mitigation.methods = ["none"]; % 运行并比较
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
 p.mitigation.thresholdAlpha = 4.0; % T = alpha * median(abs(r))
 p.mitigation.thresholdFixed = 3.0; % thresholdStrategy="fixed"时使用
