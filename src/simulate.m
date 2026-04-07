@@ -81,6 +81,7 @@ hasDedicatedSessionFrames = ~isempty(sessionFrames);
 txPktIndex = (1:nTxPackets).';
 txPayloadBits = {txPackets.payloadBitsPlain}.';
 fhEnabled = txPlan.fhEnabled;
+dsssEnabled = isfield(txPlan, "dsssEnable") && txPlan.dsssEnable;
 packetConcealEnable = false;
 packetConcealMode = "nearest";
 if isfield(p, "packet") && isstruct(p.packet)
@@ -329,9 +330,14 @@ if waveform.enable
 else
     pulseTxt = 'OFF';
 end
-fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, Chaos=%s, Pulse=%s, RxSync(B/E)=%s/%s, MP=%s\n', ...
+if dsssEnabled
+    dsssTxt = sprintf('ON(sf=%d)', dsss_effective_spread_factor(p.dsss));
+else
+    dsssTxt = 'OFF';
+end
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, DSSS=%s, Chaos=%s, Pulse=%s, RxSync(B/E)=%s/%s, MP=%s\n', ...
     on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
-    on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabledBob), on_off_text(syncEnabledEve), on_off_text(mpEnabled));
+    dsssTxt, on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabledBob), on_off_text(syncEnabledEve), on_off_text(mpEnabled));
 if simUseParallel || wardenUseParallel
     fprintf('[SIM] Parallel requested: MainLink=%s(mode=%s, workers=%d), Warden=%s(workers=%d)\n', ...
         on_off_text(simUseParallel), char(simParallelMode), simNWorkers, ...
@@ -1380,11 +1386,11 @@ for pktIdx = 1:nPackets
             rxState = derive_rx_packet_state_local( ...
                 p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
         end
-        rData = fit_complex_length_local(bobNom.rDataPrepared{pktIdx}, rxState.nDataSym);
+        rData = fit_complex_length_local(bobNom.rDataPrepared{pktIdx}, local_rx_demod_symbol_count_local(rxState));
         reliability = [];
         if isfield(bobNom, "rDataReliability") && numel(bobNom.rDataReliability) >= pktIdx ...
                 && ~isempty(bobNom.rDataReliability{pktIdx})
-            reliability = local_fit_reliability_length_local(bobNom.rDataReliability{pktIdx}, rxState.nDataSym);
+            reliability = local_fit_reliability_length_local(bobNom.rDataReliability{pktIdx}, local_rx_demod_symbol_count_local(rxState));
         end
 
         demodSoft = demodulate_to_softbits(rData, p.mod, p.fec, p.softMetric, reliability);
@@ -1510,11 +1516,11 @@ for pktIdx = 1:nPackets
             rxState = derive_rx_packet_state_local( ...
                 p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
         end
-        rData = fit_complex_length_local(eveNom.rDataPrepared{pktIdx}, rxState.nDataSym);
+        rData = fit_complex_length_local(eveNom.rDataPrepared{pktIdx}, local_rx_demod_symbol_count_local(rxState));
         reliabilityEve = [];
         if isfield(eveNom, "rDataReliability") && numel(eveNom.rDataReliability) >= pktIdx ...
                 && ~isempty(eveNom.rDataReliability{pktIdx})
-            reliabilityEve = local_fit_reliability_length_local(eveNom.rDataReliability{pktIdx}, rxState.nDataSym);
+            reliabilityEve = local_fit_reliability_length_local(eveNom.rDataReliability{pktIdx}, local_rx_demod_symbol_count_local(rxState));
         end
         scrambleCfgEve = eve_scramble_cfg_local(rxState.scrambleCfg, scrambleAssumptionEve);
 
@@ -1871,7 +1877,7 @@ bitsScr = scramble_bits(packetDataBits, scrambleCfg);
 codedBits = fec_encode(bitsScr, p.fec);
 [codedBitsInt, ~] = interleave_bits(codedBits, p.interleaver);
 [refSym, ~] = modulate_bits(codedBitsInt, p.mod, p.fec);
-refSym = fit_complex_length_local(refSym, rxState.nDataSym);
+refSym = fit_complex_length_local(refSym, local_rx_demod_symbol_count_local(rxState));
 end
 
 function value = local_scalar_threshold_local(rawValue)
@@ -2007,18 +2013,29 @@ end
 yEq = z(d+1:d+N);
 end
 
-function [yPrep, relPrep] = local_prepare_data_symbols_local(rData, rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation)
+function [yPrep, relPrep] = local_prepare_data_symbols_local(rData, rawReliability, rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation)
 % Prepare per-packet data symbols (dehop -> targeted mitigation -> carrier PLL).
 %
 % Multipath equalization has already been applied on the full [preamble; PHY; data]
 % block. Here we only process the payload region.
 r = fit_complex_length_local(rData, rxState.nDataSym);
+rawReliability = local_fit_reliability_length_local(rawReliability, rxState.nDataSym);
 
 if fhEnabled
     r = fh_demodulate(r, hopInfoUsed);
 end
 
 [r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled);
+relPrep = local_fit_reliability_length_local(relPrep, rxState.nDataSym);
+if all(relPrep >= 0.999999)
+    relPrep = rawReliability;
+else
+    relPrep = min(relPrep, rawReliability);
+end
+
+if isfield(rxState, "dsssCfg") && isstruct(rxState.dsssCfg)
+    [r, relPrep] = dsss_despread(r, rxState.dsssCfg, relPrep);
+end
 
 if isfield(rxSyncCfg, "carrierPll") && isfield(rxSyncCfg.carrierPll, "enable") ...
         && rxSyncCfg.carrierPll.enable
@@ -2026,7 +2043,7 @@ if isfield(rxSyncCfg, "carrierPll") && isfield(rxSyncCfg.carrierPll, "enable") .
 end
 
 yPrep = r;
-relPrep = local_fit_reliability_length_local(relPrep, rxState.nDataSym);
+relPrep = local_fit_reliability_length_local(relPrep, local_rx_demod_symbol_count_local(rxState));
 end
 
 function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled)
@@ -2331,10 +2348,7 @@ for pktIdx = 1:nPackets
     nom.phy(pktIdx) = phy;
     nom.rxState{pktIdx} = rxState;
     [nom.rDataPrepared{pktIdx}, nom.rDataReliability{pktIdx}] = local_prepare_data_symbols_local( ...
-        rData, rxState, hopInfoUsed, p.mod, rxSyncCfg, fhEnabled, actionName, mitigation);
-    if all(nom.rDataReliability{pktIdx} >= 0.999999)
-        nom.rDataReliability{pktIdx} = local_fit_reliability_length_local(rDataRel, rxState.nDataSym);
-    end
+        rData, rDataRel, rxState, hopInfoUsed, p.mod, rxSyncCfg, fhEnabled, actionName, mitigation);
     nom.ok(pktIdx) = true;
 end
 end
@@ -2383,11 +2397,7 @@ for frameIdx = 1:numel(sessionFrames)
     nom.preambleRef{frameIdx} = sessionFrame.syncSym(:);
     actionName = string(decision.selectedAction);
     [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = local_prepare_data_symbols_local( ...
-        rFull(preLen+1:end), rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false, actionName, mitigation);
-    if all(nom.rDataReliability{frameIdx} >= 0.999999)
-        nom.rDataReliability{frameIdx} = local_fit_reliability_length_local( ...
-            reliabilityFull(preLen+1:end), sessionFrame.nDataSym);
-    end
+        rFull(preLen+1:end), reliabilityFull(preLen+1:end), rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false, actionName, mitigation);
     nom.ok(frameIdx) = true;
 end
 end
@@ -2674,8 +2684,10 @@ packetDataBitsLen = max(0, round(double(packetDataBitsLen)));
 bitsPerSym = bits_per_symbol_local(p.mod);
 fecCodedBitsLen = coded_bits_length_local(packetDataBitsLen, p.fec);
 [codedBitsInt, intState] = interleave_bits(zeros(fecCodedBitsLen, 1, "uint8"), p.interleaver);
-nDataSym = ceil(numel(codedBitsInt) / bitsPerSym);
+nDemodSym = ceil(numel(codedBitsInt) / bitsPerSym);
 offsets = derive_packet_state_offsets(p, pktIdx);
+dsssCfg = derive_packet_dsss_cfg(p.dsss, pktIdx, offsets.dsssOffsetChips, nDemodSym);
+nDataSym = dsss_symbol_count(nDemodSym, dsssCfg);
 
 state = struct();
 state.packetIndex = pktIdx;
@@ -2683,10 +2695,12 @@ state.packetDataBitsLen = packetDataBitsLen;
 state.packetDataBytes = ceil(packetDataBitsLen / 8);
 state.fecCodedBitsLen = fecCodedBitsLen;
 state.codedBitsLen = numel(codedBitsInt);
+state.nDemodSym = nDemodSym;
 state.nDataSym = nDataSym;
 state.intState = intState;
 state.stateOffsets = offsets;
 state.scrambleCfg = derive_packet_scramble_cfg(p.scramble, pktIdx, offsets.scrambleOffsetBits);
+state.dsssCfg = dsssCfg;
 state.fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, offsets.fhOffsetHops, nDataSym);
 state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nDataSym);
 end
@@ -3089,6 +3103,14 @@ end
 
 function nBits = coded_bits_length_local(nInfoBits, fec)
 nBits = fec_coded_bits_length(nInfoBits, fec);
+end
+
+function nSym = local_rx_demod_symbol_count_local(rxState)
+nSym = double(rxState.nDataSym);
+if isfield(rxState, "nDemodSym") && ~isempty(rxState.nDemodSym)
+    nSym = double(rxState.nDemodSym);
+end
+nSym = max(0, round(nSym));
 end
 
 function bitsPerSym = bits_per_symbol_local(mod)

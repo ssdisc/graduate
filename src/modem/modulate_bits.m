@@ -43,5 +43,7 @@ if nargin >= 3 && ~isempty(fec)
 else
     info.codeRate = 1.0;
 end
+info.spreadFactor = 1;
+info.bitLoad = info.bitsPerSymbol * info.codeRate;
 end
 

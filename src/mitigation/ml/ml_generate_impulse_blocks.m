@@ -30,7 +30,8 @@ arguments
 end
 
 [~, modInfo] = modulate_bits(uint8([0; 1]), p.mod, p.fec);
-codeRate = modInfo.codeRate;
+modInfo.spreadFactor = dsss_effective_spread_factor(p.dsss);
+codeRate = modInfo.codeRate / modInfo.spreadFactor;
 bitsPerSym = modInfo.bitsPerSymbol;
 Es = 1.0;
 waveform = resolve_waveform_cfg(p);

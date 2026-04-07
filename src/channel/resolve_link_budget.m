@@ -26,7 +26,11 @@ txBaseAveragePowerLin = local_positive_scalar(txBaseAveragePowerLin, "txBaseAver
 noisePsdLin = local_positive_scalar(linkBudgetCfg.noisePsdLin, "linkBudget.noisePsdLin");
 codeRate = local_positive_scalar(modInfo.codeRate, "modInfo.codeRate");
 bitsPerSymbol = local_positive_scalar(modInfo.bitsPerSymbol, "modInfo.bitsPerSymbol");
-bitLoad = codeRate * bitsPerSymbol;
+spreadFactor = 1;
+if isfield(modInfo, "spreadFactor") && ~isempty(modInfo.spreadFactor)
+    spreadFactor = local_positive_scalar(modInfo.spreadFactor, "modInfo.spreadFactor");
+end
+bitLoad = codeRate * bitsPerSymbol / spreadFactor;
 
 ebN0dBList = local_finite_vector(linkBudgetCfg.ebN0dBList, "linkBudget.ebN0dBList");
 if jsrEnabled
@@ -85,6 +89,7 @@ budget = struct( ...
     "baseTxAveragePowerLin", txBaseAveragePowerLin, ...
     "bitsPerSymbol", bitsPerSymbol, ...
     "codeRate", codeRate, ...
+    "spreadFactor", spreadFactor, ...
     "bitLoad", bitLoad, ...
     "bob", bob);
 end

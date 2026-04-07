@@ -53,7 +53,14 @@ catch
 end
 
 burstDurationSec = numel(txWave) / max(Fs, eps);
-grossInfoBitRateBps = Rs * modInfo.bitsPerSymbol * modInfo.codeRate;
+spreadFactor = 1;
+if isfield(modInfo, "spreadFactor") && ~isempty(modInfo.spreadFactor)
+    spreadFactor = double(modInfo.spreadFactor);
+    if ~isscalar(spreadFactor) || ~isfinite(spreadFactor) || spreadFactor <= 0
+        error("modInfo.spreadFactor must be a positive finite scalar.");
+    end
+end
+grossInfoBitRateBps = Rs * modInfo.bitsPerSymbol * modInfo.codeRate / spreadFactor;
 payloadBitRateBps = NaN;
 if isfield(opts, "payloadBits") && ~isempty(opts.payloadBits)
     payloadBitRateBps = double(opts.payloadBits) / max(burstDurationSec, eps);

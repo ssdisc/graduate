@@ -66,6 +66,8 @@ phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
 [~, shortSyncSym] = make_packet_sync(p.frame, 2);
 
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
+dsssEnable = isfield(p, 'dsss') && isfield(p.dsss, 'enable') && p.dsss.enable ...
+    && dsss_effective_spread_factor(p.dsss) > 1;
 packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...
     && isfield(p.chaosEncrypt, "enable") && p.chaosEncrypt.enable;
 
@@ -137,7 +139,11 @@ for pktIdx = 1:nPackets
     dataBitsTxScr = scramble_bits(packetDataBits, scrambleCfgPkt);
     codedBits = fec_encode(dataBitsTxScr, p.fec);
     [codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
-    [dataSymTx, modInfo] = modulate_bits(codedBitsInt, p.mod, p.fec);
+    [dataSymTxBase, modInfo] = modulate_bits(codedBitsInt, p.mod, p.fec);
+    dsssCfgPkt = derive_packet_dsss_cfg(p.dsss, pktIdx, offsetsPkt.dsssOffsetChips, numel(dataSymTxBase));
+    [dataSymTx, dsssInfo] = dsss_spread(dataSymTxBase, dsssCfgPkt);
+    modInfo.spreadFactor = dsssInfo.spreadFactor;
+    modInfo.bitLoad = modInfo.bitsPerSymbol * modInfo.codeRate / dsssInfo.spreadFactor;
     modInfoRef = modInfo;
 
     if fhEnabled
@@ -181,6 +187,9 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).phyHeaderSym = phyHeaderSym;
     txPackets(pktIdx).stateOffsets = offsetsPkt;
     txPackets(pktIdx).scrambleCfg = scrambleCfgPkt;
+    txPackets(pktIdx).dsssCfg = dsssCfgPkt;
+    txPackets(pktIdx).dsssInfo = dsssInfo;
+    txPackets(pktIdx).dataSymBaseTx = dataSymTxBase;
     txPackets(pktIdx).dataSymTx = dataSymTx;
     txPackets(pktIdx).fhCfg = fhCfgPkt;
     txPackets(pktIdx).hopInfo = hopInfo;
@@ -202,6 +211,7 @@ plan.shortSyncSymLen = numel(shortSyncSym);
 plan.packetStrideBits = packetStrideBits;
 plan.packetStrideHops = packetStrideHops;
 plan.fhEnabled = fhEnabled;
+plan.dsssEnable = dsssEnable;
 plan.packetChaosEnable = packetChaosEnable;
 plan.waveform = waveform;
 plan.modInfo = modInfoRef;
@@ -216,7 +226,8 @@ function nSym = n_symbols_for_info_bits_local(p, nInfoBits)
 bitsPerSym = bits_per_symbol_local(p.mod);
 codedBitsLen = coded_bits_length_local(nInfoBits, p.fec);
 [codedBitsInt, ~] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
-nSym = ceil(numel(codedBitsInt) / bitsPerSym);
+nBaseSym = ceil(numel(codedBitsInt) / bitsPerSym);
+nSym = dsss_symbol_count(nBaseSym, p.dsss);
 end
 
 function nHops = packet_stride_hops_local(p, nSym)

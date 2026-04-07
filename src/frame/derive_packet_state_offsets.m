@@ -21,6 +21,7 @@ bitsPerSym = local_bits_per_symbol(p.mod);
 fhEnabled = local_fh_enabled(p);
 
 scrambleOffsetBits = 0;
+dsssOffsetChips = 0;
 fhOffsetHops = 0;
 
 for prevIdx = 1:(pktIdx - 1)
@@ -33,8 +34,15 @@ for prevIdx = 1:(pktIdx - 1)
     if fhEnabled
         codedBitsLen = local_coded_bits_length(prevPacketBits, p.fec);
         [codedBitsInt, ~] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
-        nSymPrev = ceil(numel(codedBitsInt) / bitsPerSym);
+        nBaseSymPrev = ceil(numel(codedBitsInt) / bitsPerSym);
+        nSymPrev = dsss_symbol_count(nBaseSymPrev, p.dsss);
         fhOffsetHops = fhOffsetHops + ceil(double(nSymPrev) / double(p.fh.symbolsPerHop));
+        dsssOffsetChips = dsssOffsetChips + nSymPrev;
+    elseif isfield(p, "dsss") && isstruct(p.dsss)
+        codedBitsLen = local_coded_bits_length(prevPacketBits, p.fec);
+        [codedBitsInt, ~] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
+        nBaseSymPrev = ceil(numel(codedBitsInt) / bitsPerSym);
+        dsssOffsetChips = dsssOffsetChips + dsss_symbol_count(nBaseSymPrev, p.dsss);
     end
 end
 
@@ -44,6 +52,7 @@ offsets.nominalPayloadBits = nominalPayloadBits;
 offsets.sessionHeaderLenBits = sessionHeaderLenBits;
 offsets.hasSessionHeader = local_has_session_header(p.frame, pktIdx);
 offsets.scrambleOffsetBits = scrambleOffsetBits;
+offsets.dsssOffsetChips = dsssOffsetChips;
 offsets.fhOffsetHops = fhOffsetHops;
 end
 

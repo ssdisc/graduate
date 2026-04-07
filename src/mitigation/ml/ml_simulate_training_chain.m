@@ -19,6 +19,8 @@ waveform = resolve_waveform_cfg(p);
 channelSample = adapt_channel_for_sps(p.channel, waveform);
 
 txChannelSym = txSym;
+dsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, nSym);
+[txChannelSym, dsssInfo] = dsss_spread(txChannelSym, dsssCfg);
 hopInfo = struct('enable', false);
 if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable
     [txChannelSym, hopInfo] = fh_modulate(txChannelSym, p.fh);
@@ -28,15 +30,25 @@ txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
 [rxSample, impMaskSample] = channel_bg_impulsive(txSample, N0, channelSample);
 
 rxSym = pulse_rx_to_symbol_rate(rxSample, waveform);
-rxSym = local_fit_length(rxSym, nSym);
+rxSym = local_fit_length(rxSym, numel(txChannelSym));
 
 impScoreSym = abs(pulse_rx_to_symbol_rate(double(impMaskSample(:)), waveform));
-impScoreSym = local_fit_length(impScoreSym, nSym);
+impScoreSym = local_fit_length(impScoreSym, numel(txChannelSym));
 impSymMask = abs(impScoreSym) > 1e-9;
 
 if isfield(hopInfo, "enable") && hopInfo.enable
     rxSym = fh_demodulate(rxSym, hopInfo);
 end
+
+if dsssInfo.enable
+    [rxSym, ~] = dsss_despread(rxSym, dsssCfg);
+    impScoreSym = local_group_mean(impScoreSym, dsssInfo.spreadFactor);
+    impSymMask = local_group_any(impSymMask, dsssInfo.spreadFactor);
+end
+
+rxSym = local_fit_length(rxSym, nSym);
+impScoreSym = local_fit_length(impScoreSym, nSym);
+impSymMask = local_fit_length(double(impSymMask), nSym) > 1e-9;
 
 if isfield(p, "rxSync") && isstruct(p.rxSync) ...
         && isfield(p.rxSync, "carrierPll") && isstruct(p.rxSync.carrierPll) ...
@@ -53,4 +65,22 @@ if numel(x) >= targetLen
 else
     y = [x; complex(zeros(targetLen - numel(x), 1))];
 end
+end
+
+function y = local_group_mean(x, groupLen)
+x = double(x(:));
+groupLen = max(1, round(double(groupLen)));
+if rem(numel(x), groupLen) ~= 0
+    error("groupLen=%d does not divide input length %d.", groupLen, numel(x));
+end
+y = mean(reshape(x, groupLen, []), 1).';
+end
+
+function y = local_group_any(x, groupLen)
+x = logical(x(:));
+groupLen = max(1, round(double(groupLen)));
+if rem(numel(x), groupLen) ~= 0
+    error("groupLen=%d does not divide input length %d.", groupLen, numel(x));
+end
+y = any(reshape(x, groupLen, []), 1).';
 end

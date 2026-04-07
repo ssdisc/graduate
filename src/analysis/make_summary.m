@@ -22,6 +22,9 @@ end
 if isfield(results, "params") && isfield(results.params, "outerRs")
     s.outerRs = results.params.outerRs;
 end
+if isfield(results, "params") && isfield(results.params, "dsss")
+    s.dsss = results.params.dsss;
+end
 [commMetrics, compMetrics] = local_get_image_metrics(results);
 s.berAtMaxEbN0 = results.ber(:, end);
 s.perAtMaxEbN0 = results.per(:, end);

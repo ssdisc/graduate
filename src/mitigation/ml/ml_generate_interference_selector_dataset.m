@@ -17,8 +17,9 @@ waveform = resolve_waveform_cfg(p);
 [~, syncSym] = make_packet_sync(p.frame, 1);
 syncCfg = local_selector_sync_cfg(p.rxSync, p.channel, waveform);
 [~, modInfo] = modulate_bits(uint8(zeros(bits_per_symbol_local(p.mod), 1)), p.mod, p.fec);
+modInfo.spreadFactor = dsss_effective_spread_factor(p.dsss);
 bitsPerSym = modInfo.bitsPerSymbol;
-codeRate = modInfo.codeRate;
+codeRate = modInfo.codeRate / modInfo.spreadFactor;
 
 labelSchedule = repmat(classNames, 1, ceil(nBlocks / numel(classNames)));
 labelSchedule = labelSchedule(1:nBlocks);
@@ -159,6 +160,8 @@ syncSym = syncSym(:);
 bitsPerSym = bits_per_symbol_local(p.mod);
 dataBits = randi([0 1], dataSymbolsPerBlock * bitsPerSym, 1, "uint8");
 [dataSym, ~] = modulate_bits(dataBits, p.mod);
+dataDsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, numel(dataSym));
+[dataSym, ~] = dsss_spread(dataSym, dataDsssCfg);
 if isfield(p, "fh") && isfield(p.fh, "enable") && p.fh.enable
     [dataSym, ~] = fh_modulate(dataSym, p.fh);
 end

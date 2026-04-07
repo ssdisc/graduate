@@ -32,7 +32,7 @@ p.linkBudget = struct();
 % 接收端背景噪声功率谱密度（线性值，纯仿真归一化口径）。
 p.linkBudget.noisePsdLin = 1.0;
 % 主扫描轴1：Bob端目标 Eb/N0（dB）
-p.linkBudget.ebN0dBList = 0:2:10;
+p.linkBudget.ebN0dBList = 4:2:10;
 % 主扫描轴2：目标 J/S（dB），在每个Eb/N0点下缩放已启用干扰的平均总功率
 p.linkBudget.jsrDbList = [-20 -15 -10 -5];
 
@@ -147,6 +147,14 @@ p.interleaver.nRows = 64;
 p.mod = struct();
 p.mod.type = 'QPSK'; % 'BPSK' | 'QPSK' | 'MSK'（默认QPSK）
 
+% 8.5) 直扩（DSSS，仅作用于payload数据段；PHY头/会话帧保持原样）
+p.dsss = struct();
+p.dsss.enable = false;
+p.dsss.spreadFactor = 4;        % 每个调制符号展开为多少个chip
+p.dsss.sequenceType = 'pn';     % 当前仅支持 'pn'
+p.dsss.pnPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1]; % x^11 + x^2 + 1
+p.dsss.pnInit = [0 0 0 0 0 0 0 0 0 1 1];         % 非零初始状态
+
 % 9) 跳频（Frequency Hopping，默认采用混沌跳频）
 p.fh = struct();
 p.fh.enable = true;              % 是否启用跳频
@@ -184,25 +192,25 @@ p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
 % AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/同步失配）
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
-p.channel.impulseProb = 0;    % 每个符号产生脉冲的概率
+p.channel.impulseProb = 0.01;    % 每个符号产生脉冲的概率
 p.channel.impulseToBgRatio = 50; % 脉冲形状参数：开启时通过JSR分配平均功率，再反解所需脉冲方差比
-p.channel.impulseWeight = 0;   % JSR总干扰功率分配权重；关闭脉冲时应为0
+p.channel.impulseWeight = 1;   % JSR总干扰功率分配权重；关闭脉冲时应为0
 % 可选：单音干扰（窄带强干扰）
 p.channel.singleTone = struct();
-p.channel.singleTone.enable = false;
-p.channel.singleTone.weight = 0.0;      % JSR总干扰功率分配权重；关闭单音时应为0
+p.channel.singleTone.enable = true;
+p.channel.singleTone.weight = 1;      % JSR总干扰功率分配权重；关闭单音时应为0
 p.channel.singleTone.freqHz = 800;      % 单音频率（Hz）
 p.channel.singleTone.randomPhase = true;
 % 可选：窄带噪声干扰
 p.channel.narrowband = struct();
-p.channel.narrowband.enable = false;
-p.channel.narrowband.weight = 0.0;      % JSR总干扰功率分配权重；关闭窄带时应为0
+p.channel.narrowband.enable = true;
+p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；关闭窄带时应为0
 p.channel.narrowband.centerHz = 1200;   % 窄带噪声中心频率（Hz）
 p.channel.narrowband.bandwidthHz = 800; % 窄带噪声双边带宽（Hz）
 % 可选：扫频干扰（线性chirp）
 p.channel.sweep = struct();
-p.channel.sweep.enable = false;
-p.channel.sweep.weight = 0.0;            % JSR总干扰功率分配权重；关闭扫频时应为0
+p.channel.sweep.enable = true;
+p.channel.sweep.weight = 1;            % JSR总干扰功率分配权重；关闭扫频时应为0
 p.channel.sweep.startHz = -2000;        % 起始频率（Hz）
 p.channel.sweep.stopHz = 2000;          % 终止频率（Hz）
 p.channel.sweep.periodSymbols = 256;    % 单次扫频周期（符号数）
@@ -222,9 +230,9 @@ p.channel.multipath.rayleigh = false;        % 启用瑞利衰落（各径独立
 %% 接收端（RX）
 % 10) 脉冲抑制
 p.mitigation = struct();
-% p.mitigation.methods = ["none" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" ...
-%     "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "adaptive_ml_frontend"]; % 运行并比较
-p.mitigation.methods = ["none"]; % 运行并比较
+p.mitigation.methods = ["none" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" ...
+    "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "adaptive_ml_frontend"]; % 运行并比较
+% p.mitigation.methods = ["none"]; % 运行并比较
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
 p.mitigation.thresholdAlpha = 4.0; % T = alpha * median(abs(r))
 p.mitigation.thresholdFixed = 3.0; % thresholdStrategy="fixed"时使用
@@ -404,7 +412,7 @@ p.eve.rxSync = p.rxSync;
 p.eve.mitigation = p.mitigation;
 % 隐蔽/低截获概率支持（监视者检测）
 p.covert = struct();
-p.covert.enable = false;
+p.covert.enable = true;
 p.covert.warden = struct();
 p.covert.warden.enable = true;
 % 敌方的能量检测器（辐射计）设置
