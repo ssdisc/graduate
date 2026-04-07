@@ -34,6 +34,9 @@ bobRxSync = p.rxSync;
 bobMitigation = p.mitigation;
 waveform = resolve_waveform_cfg(p);
 local_require_presync_mitigation_cfg_local(bobMitigation, "p.mitigation");
+[methods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(bobMitigation, p.channel);
+bobMitigation.methods = methods;
+p.mitigation.methods = methods;
 
 %% 发送端（TRANSMITTER）
 
@@ -131,7 +134,6 @@ EbN0dBList = linkBudget.bob.ebN0dB(:).'; % 按点展开后的Bob接收端Eb/N0
 JsrDbList = linkBudget.bob.jsrDb(:).';
 pointSnrIndex = double(linkBudget.bob.snrIndex(:).');
 pointJsrIndex = double(linkBudget.bob.jsrIndex(:).');
-methods = string(bobMitigation.methods(:).');%仿真不同脉冲噪声抑制方法，列向量
 
 ber = nan(numel(methods), numel(EbN0dBList)); %比特错误率（BER）统计
 packetFrontEndBobVals = nan(1, numel(EbN0dBList));
@@ -168,7 +170,7 @@ eveRxSync = struct();
 eveMitigation = struct();
 eveBudget = struct();
 if eveEnabled
-    eveCfg = local_validate_eve_config_local(p.eve, methods);
+    eveCfg = local_validate_eve_config_local(p.eve, methods, p.channel);
     eveRxSync = eveCfg.rxSync;
     eveMitigation = eveCfg.mitigation;
     chaosApproxDeltaEve = double(eveCfg.chaosApproxDelta);
@@ -315,6 +317,13 @@ if jsrScanIsGrid
 else
     fprintf('[SIM] JSR扫描: OFF (all configured interference sources disabled)\n');
 end
+if isempty(activeInterferenceTypes)
+    activeTxt = "none";
+else
+    activeTxt = strjoin(cellstr(activeInterferenceTypes), ", ");
+end
+fprintf('[SIM] 启用干扰类型: %s\n', activeTxt);
+fprintf('[SIM] 允许方法: %s\n', strjoin(cellstr(allowedMethods), ', '));
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
 if numel(methods) > 1 && ~jsrScanIsGrid
     fprintf('[SIM] NOTE: impulse/tone/narrowband/sweep all disabled. Most mitigation methods will behave like \"none\".\n');
@@ -3379,7 +3388,7 @@ tf = rxSyncCfg.compensateCarrier || rxSyncCfg.fineSearchRadius > 0 || ...
     rxSyncCfg.enableFractionalTiming || rxSyncCfg.carrierPll.enable || dllEnabled;
 end
 
-function eveCfg = local_validate_eve_config_local(eveCfg, methodsMain)
+function eveCfg = local_validate_eve_config_local(eveCfg, methodsMain, channelCfg)
 local_require_struct_field_local(eveCfg, "linkGainOffsetDb", "eve");
 local_require_struct_field_local(eveCfg, "scrambleAssumption", "eve");
 local_require_struct_field_local(eveCfg, "fhAssumption", "eve");
@@ -3420,7 +3429,7 @@ local_require_struct_fields_local(eveCfg.rxSync.timingDll, ...
 local_require_struct_fields_local(eveCfg.mitigation, [ ...
     "methods", "thresholdStrategy", "thresholdAlpha", "thresholdFixed", ...
     "fftNotch", "fftBandstop", "adaptiveNotch", "stftNotch", ...
-    "adaptiveFrontend", "thresholdCalibration", "selector", ...
+    "adaptiveFrontend", "binding", "thresholdCalibration", "selector", ...
     "strictModelLoad", "requireTrainedModels", "ml", "mlCnn", "mlGru"], "eve.mitigation");
 local_require_struct_fields_local(eveCfg.mitigation.thresholdCalibration, [ ...
     "enable", "methods", "targetCleanPfa", "thresholdMinScale", ...
@@ -3432,10 +3441,11 @@ local_require_struct_fields_local(eveCfg.mitigation.adaptiveFrontend, [ ...
     "bootstrapSyncChain", "classNames", "classToAction", "diagnostics"], ...
     "eve.mitigation.adaptiveFrontend");
 
-methodsEve = string(eveCfg.mitigation.methods(:).');
+methodsEve = resolve_mitigation_methods(eveCfg.mitigation, channelCfg);
 if ~isequal(methodsEve, methodsMain)
     error("eve.mitigation.methods 必须与 p.mitigation.methods 完全一致。");
 end
+eveCfg.mitigation.methods = methodsEve;
 end
 
 function local_require_presync_mitigation_cfg_local(mitigationCfg, ownerName)

@@ -192,7 +192,7 @@ p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
 % AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/同步失配）
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
-p.channel.impulseProb = 0.1;    % 每个符号产生脉冲的概率
+p.channel.impulseProb = 0.05;    % 每个符号产生脉冲的概率
 p.channel.impulseToBgRatio = 50; % 脉冲形状参数：开启时通过JSR分配平均功率，再反解所需脉冲方差比
 p.channel.impulseWeight = 1;   % JSR总干扰功率分配权重；脉冲关闭逻辑仍由impulseProb/weight共同决定
 % 可选：单音干扰（窄带强干扰）
@@ -231,7 +231,7 @@ p.channel.multipath.rayleigh = false;        % 启用瑞利衰落（各径独立
 % 10) 脉冲抑制
 p.mitigation = struct();
 p.mitigation.methods = ["none" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" ...
-    "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "adaptive_ml_frontend"]; % 运行并比较
+    "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard" "adaptive_ml_frontend"]; % 运行并比较
 % p.mitigation.methods = ["none"]; % 运行并比较
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
 p.mitigation.thresholdAlpha = 4.0; % T = alpha * median(abs(r))
@@ -270,6 +270,13 @@ p.mitigation.adaptiveFrontend.classToAction = struct( ...
     "sweep", "stft_notch", ...
     "multipath", "none");
 p.mitigation.adaptiveFrontend.diagnostics = true;
+p.mitigation.binding = struct();
+p.mitigation.binding.enable = true;
+p.mitigation.binding.impulseMethods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard" "adaptive_ml_frontend"];
+p.mitigation.binding.singleToneMethods = ["none" "fft_notch" "adaptive_notch" "adaptive_ml_frontend"];
+p.mitigation.binding.narrowbandMethods = ["none" "fft_bandstop" "adaptive_notch" "adaptive_ml_frontend"];
+p.mitigation.binding.sweepMethods = ["none" "stft_notch" "adaptive_ml_frontend"];
+p.mitigation.binding.mixedMethods = ["none" "adaptive_ml_frontend"];
 p.mitigation.thresholdCalibration = struct();
 p.mitigation.thresholdCalibration.enable = false;
 p.mitigation.thresholdCalibration.methods = ["ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard"];
