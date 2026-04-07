@@ -1,5 +1,5 @@
 function dataset = ml_generate_impulse_blocks(p, nBlocks, blockLen, ebN0dBRange, opts)
-%ML_GENERATE_IMPULSE_BLOCKS  生成脉冲抑制训练/验证/测试所需的数据块。
+%ML_GENERATE_IMPULSE_BLOCKS  生成面向采样级脉冲抑制的训练/验证/测试窗口。
 arguments
     p (1,1) struct
     nBlocks (1,1) double {mustBeInteger, mustBePositive}
@@ -39,14 +39,16 @@ sampleRateHz = waveform.sampleRateHz;
 sampler = local_build_channel_sampler(p, sampleRateHz, opts);
 
 dataset = struct();
+dataset.domain = "raw_samples";
 dataset.nBlocks = nBlocks;
 dataset.blockLen = blockLen;
+dataset.sampleWindowLen = blockLen;
 dataset.ebN0dBRange = ebN0dBRange;
 dataset.ebN0dBPerBlock = zeros(nBlocks, 1);
 dataset.impulseProbPerBlock = zeros(nBlocks, 1);
 dataset.impulseToBgRatioPerBlock = zeros(nBlocks, 1);
-dataset.txSym = cell(nBlocks, 1);
-dataset.rxSym = cell(nBlocks, 1);
+dataset.txClean = cell(nBlocks, 1);
+dataset.rxInput = cell(nBlocks, 1);
 dataset.impulseScore = cell(nBlocks, 1);
 dataset.impMask = cell(nBlocks, 1);
 dataset.labelPositiveRate = zeros(nBlocks, 1);
@@ -67,18 +69,41 @@ for b = 1:nBlocks
     dataset.impulseToBgRatioPerBlock(b) = pBlock.channel.impulseToBgRatio;
     dataset.channelProfile = local_store_channel_profile(dataset.channelProfile, b, blockProfile);
 
-    bits = randi([0 1], blockLen * bitsPerSym, 1, 'uint8');
+    nTrainSymbols = local_training_symbol_count_for_sample_window(pBlock, blockLen, waveform);
+    bits = randi([0 1], nTrainSymbols * bitsPerSym, 1, 'uint8');
     txSym = modulate_bits(bits, p.mod);
-    [txSym, rxSym, ~, impScore] = ml_simulate_training_chain(txSym, pBlock, N0);
+    [txClean, rxInput, ~, impScore] = ml_simulate_training_chain(txSym, pBlock, N0, blockLen);
     impMask = impScore >= opts.labelScoreThreshold;
 
-    dataset.txSym{b} = txSym;
-    dataset.rxSym{b} = rxSym;
+    dataset.txClean{b} = txClean;
+    dataset.rxInput{b} = rxInput;
     dataset.impulseScore{b} = impScore;
     dataset.impMask{b} = logical(impMask ~= 0);
     dataset.labelPositiveRate(b) = mean(double(dataset.impMask{b}));
 end
 dataset.channelProfileSummary = local_summarize_channel_profile(dataset.channelProfile);
+end
+
+function nTrainSymbols = local_training_symbol_count_for_sample_window(p, sampleWindowLen, waveform)
+sampleWindowLen = round(double(sampleWindowLen));
+if ~(sampleWindowLen > 0)
+    error("sampleWindowLen 必须为正整数。");
+end
+
+sps = double(waveform.sps);
+if ~(isfinite(sps) && sps >= 1)
+    error("waveform.sps 无效，无法按采样窗口长度生成训练符号。");
+end
+
+groupDelay = 0;
+if isfield(waveform, "groupDelaySamples") && ~isempty(waveform.groupDelaySamples)
+    groupDelay = max(0, round(double(waveform.groupDelaySamples)));
+end
+
+spreadFactor = dsss_effective_spread_factor(p.dsss);
+channelSymbolsNeeded = ceil((sampleWindowLen + 2 * groupDelay + 8 * sps) / sps);
+nTrainSymbols = ceil(channelSymbolsNeeded / max(spreadFactor, 1));
+nTrainSymbols = max(nTrainSymbols, 64);
 end
 
 function sampler = local_build_channel_sampler(p, sampleRateHz, opts)

@@ -1,5 +1,5 @@
 function dataset = ml_generate_interference_selector_dataset(p, nBlocks, dataSymbolsPerBlock, ebN0dBRange, opts)
-%ML_GENERATE_INTERFERENCE_SELECTOR_DATASET  Generate balanced frame-level features for interference selection.
+%ML_GENERATE_INTERFERENCE_SELECTOR_DATASET  Generate balanced frame-level features on the layered RX chain.
 
 arguments
     p (1,1) struct
@@ -46,22 +46,22 @@ for b = 1:nBlocks
         N0 = ebn0_to_n0(EbN0, codeRate, bitsPerSym, 1.0);
 
         pBlock = local_selector_channel_for_class(p, labelNow);
-        txFrame = local_build_training_frame(pBlock, syncSym, dataSymbolsPerBlock);
+        txFrame = local_build_training_packet(pBlock, dataSymbolsPerBlock);
         frameDelaySym = randi([0, max(0, round(double(pBlock.channel.maxDelaySymbols)))], 1, 1);
         frameDelay = round(double(frameDelaySym) * waveform.sps);
         txSample = [zeros(frameDelay, 1); pulse_tx_from_symbol_rate(txFrame, waveform)];
         channelSample = adapt_channel_for_sps(pBlock.channel, waveform);
         rxSample = channel_bg_impulsive(txSample, N0, channelSample);
-        rxRaw = pulse_rx_to_symbol_rate(rxSample, waveform);
 
         totalLen = numel(txFrame);
-        capture = adaptive_frontend_bootstrap_capture(rxRaw, syncSym, totalLen, syncCfg, pBlock.mitigation, pBlock.mod);
-        if ~capture.ok
+        front = capture_synced_block_from_samples( ...
+            rxSample, syncSym, totalLen, syncCfg, pBlock.mitigation, pBlock.mod, waveform, "none");
+        if ~front.ok
             continue;
         end
 
         channelLenSymbols = local_selector_channel_len_symbols(pBlock.channel, waveform);
-        [featureRow, ~] = adaptive_frontend_extract_features(capture, syncSym, N0, ...
+        [featureRow, ~] = adaptive_frontend_extract_features(front, syncSym, N0, ...
             "channelLenSymbols", channelLenSymbols);
         if any(~isfinite(featureRow))
             continue;
@@ -71,7 +71,7 @@ for b = 1:nBlocks
         dataset.labels(b) = labelNow;
         dataset.labelIndex(b) = find(classNames == labelNow, 1, "first");
         dataset.ebN0dBPerBlock(b) = ebN0dB;
-        dataset.bootstrapPath(b) = string(capture.bootstrapPath);
+        dataset.bootstrapPath(b) = string(front.bootstrapPath);
         success = true;
         break;
     end
@@ -155,17 +155,53 @@ switch lower(string(labelName))
 end
 end
 
-function txFrame = local_build_training_frame(p, syncSym, dataSymbolsPerBlock)
-syncSym = syncSym(:);
+function txFrame = local_build_training_packet(p, dataSymbolsPerBlock)
+packetIdx = 1;
 bitsPerSym = bits_per_symbol_local(p.mod);
-dataBits = randi([0 1], dataSymbolsPerBlock * bitsPerSym, 1, "uint8");
-[dataSym, ~] = modulate_bits(dataBits, p.mod);
-dataDsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, numel(dataSym));
+packetDataBitsLen = local_training_packet_data_bits_len(p, dataSymbolsPerBlock, bitsPerSym);
+packetDataBits = randi([0 1], packetDataBitsLen, 1, "uint8");
+packetDataBytes = ceil(packetDataBitsLen / 8);
+
+phyMeta = struct();
+phyMeta.hasSessionHeader = false;
+phyMeta.packetIndex = uint16(packetIdx);
+phyMeta.packetDataBytes = uint16(packetDataBytes);
+phyMeta.packetDataCrc16 = crc16_ccitt_bits(packetDataBits);
+[phyHeaderBits, ~] = build_phy_header_bits(phyMeta, p.frame);
+phyHeaderSym = encode_phy_header_symbols(phyHeaderBits, p.frame, p.fec);
+
+scrambleCfg = derive_packet_scramble_cfg(p.scramble, packetIdx, 0);
+dataBitsScr = scramble_bits(packetDataBits, scrambleCfg);
+codedBits = fec_encode(dataBitsScr, p.fec);
+[codedBitsInt, ~] = interleave_bits(codedBits, p.interleaver);
+[dataSym, ~] = modulate_bits(codedBitsInt, p.mod, p.fec);
+dataDsssCfg = derive_packet_dsss_cfg(p.dsss, packetIdx, 0, numel(dataSym));
 [dataSym, ~] = dsss_spread(dataSym, dataDsssCfg);
 if isfield(p, "fh") && isfield(p.fh, "enable") && p.fh.enable
-    [dataSym, ~] = fh_modulate(dataSym, p.fh);
+    fhCfg = derive_packet_fh_cfg(p.fh, packetIdx, 0, numel(dataSym));
+    [dataSym, ~] = fh_modulate(dataSym, fhCfg);
 end
-txFrame = [syncSym; dataSym(:)];
+
+[~, syncSym] = make_packet_sync(p.frame, packetIdx);
+txFrame = [syncSym(:); phyHeaderSym(:); dataSym(:)];
+end
+
+function packetDataBitsLen = local_training_packet_data_bits_len(p, dataSymbolsPerBlock, bitsPerSym)
+dataSymbolsPerBlock = max(1, round(double(dataSymbolsPerBlock)));
+fecInfo = fec_get_info(p.fec);
+targetInfoBits = round(double(dataSymbolsPerBlock) * double(bitsPerSym) * double(fecInfo.codeRate));
+switch string(fecInfo.kind)
+    case "conv"
+        packetDataBitsLen = max(8, targetInfoBits);
+    case "ldpc"
+        packetDataBitsLen = max(8, min(double(fecInfo.numInfoBits), targetInfoBits));
+    otherwise
+        error("Unsupported selector payload FEC kind: %s", char(string(fecInfo.kind)));
+end
+packetDataBitsLen = 8 * floor(double(packetDataBitsLen) / 8);
+if packetDataBitsLen <= 0
+    packetDataBitsLen = 8;
+end
 end
 
 function Lh = local_selector_channel_len_symbols(channelCfg, waveform)

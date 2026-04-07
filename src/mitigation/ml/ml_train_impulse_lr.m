@@ -1,10 +1,10 @@
 function [model, report] = ml_train_impulse_lr(p, opts)
-%ML_TRAIN_IMPULSE_LR  训练带 train/val/test 划分的轻量级逻辑回归脉冲检测器。
+%ML_TRAIN_IMPULSE_LR  训练带 train/val/test 划分的采样级逻辑回归脉冲检测器。
 
 arguments
     p (1,1) struct
     opts.nBlocks (1,1) double {mustBePositive} = 200
-    opts.blockLen (1,1) double {mustBeInteger, mustBePositive} = 4096
+    opts.blockLen (1,1) double {mustBeInteger, mustBePositive} = 4096 % 采样窗口长度
     opts.ebN0dBRange (1,2) double = [0 10]
     opts.pfaTarget (1,1) double = 0.01
     opts.epochs (1,1) double {mustBeInteger, mustBePositive} = 25
@@ -100,9 +100,9 @@ if split.nVal < 1 || split.nTest < 1
     error("当前LR训练流程要求独立的验证集和测试集，请增大 nBlocks 或调整 val/test 占比。");
 end
 
-allFeat = cell(numel(dataset.rxSym), 1);
-for b = 1:numel(dataset.rxSym)
-    allFeat{b} = ml_impulse_features(dataset.rxSym{b});
+allFeat = cell(numel(dataset.rxInput), 1);
+for b = 1:numel(dataset.rxInput)
+    allFeat{b} = ml_impulse_features(dataset.rxInput{b});
 end
 
 XTrain = cell2mat(allFeat(split.trainIdx));
@@ -221,10 +221,8 @@ pTest = local_lr_predict(XnTest, w, b);
 valMetrics = ml_binary_metrics(pVal, yVal, threshold);
 testMetrics = ml_binary_metrics(pTest, yTest, threshold);
 
-model = struct();
-model.name = "impulse_lr_custom";
-model.features = ["abs_r" "absdiff_abs" "abs_over_median"];
-model.trainingLogicVersion = 3;
+model = ml_impulse_lr_model();
+model.trained = true;
 model.mu = mu(:);
 model.sigma = sigma(:);
 model.w = w(:);
@@ -232,8 +230,10 @@ model.b = b;
 model.threshold = threshold;
 
 report = struct();
+report.domain = dataset.domain;
 report.nBlocks = dataset.nBlocks;
 report.blockLen = dataset.blockLen;
+report.sampleWindowLen = dataset.sampleWindowLen;
 report.nSamples = dataset.nBlocks * dataset.blockLen;
 report.ebN0dBRange = dataset.ebN0dBRange;
 report.ebN0dBPerBlock = dataset.ebN0dBPerBlock;

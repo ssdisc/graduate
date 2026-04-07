@@ -1,86 +1,79 @@
-function [txSym, rxSym, impSymMask, impScoreSym] = ml_simulate_training_chain(txSym, p, N0)
-%ML_SIMULATE_TRAINING_CHAIN  生成与主仿真一致的训练符号链路样本。
-%
-% 输入:
-%   txSym      - 发端符号序列（列向量）
-%   p          - default_params 风格配置
-%   N0         - 背景噪声功率谱密度
+function [txClean, rxInput, impMask, impScore] = ml_simulate_training_chain(txSym, p, N0, targetLen)
+%ML_SIMULATE_TRAINING_CHAIN  Generate paired raw-sample training windows on the new RX architecture.
 %
 % 输出:
-%   txSym      - 对齐后的理想符号目标
-%   rxSym      - 经过 waveform/channel/rx 处理后的接收符号
-%   impSymMask - 对齐到符号率的脉冲影响掩码（宽松定义）
-%   impScoreSym- 对齐到符号率的脉冲影响连续得分
+%   txClean - 不含脉冲的“干净”复基带样本窗口（保留同一次随机噪声/干扰/信道实现）
+%   rxInput - 含脉冲的接收复基带样本窗口
+%   impMask - 样本级脉冲真值掩码
+%   impScore- 样本级连续得分（当前直接等于 double(impMask)）
+
+arguments
+    txSym (:,1)
+    p (1,1) struct
+    N0 (1,1) double {mustBeNonnegative}
+    targetLen (1,1) double {mustBeInteger, mustBePositive}
+end
 
 txSym = txSym(:);
-nSym = numel(txSym);
+targetLen = round(double(targetLen));
 
 waveform = resolve_waveform_cfg(p);
 channelSample = adapt_channel_for_sps(p.channel, waveform);
 
 txChannelSym = txSym;
-dsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, nSym);
-[txChannelSym, dsssInfo] = dsss_spread(txChannelSym, dsssCfg);
-hopInfo = struct('enable', false);
+dsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, numel(txSym));
+[txChannelSym, ~] = dsss_spread(txChannelSym, dsssCfg);
 if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable
-    [txChannelSym, hopInfo] = fh_modulate(txChannelSym, p.fh);
+    [txChannelSym, ~] = fh_modulate(txChannelSym, p.fh);
 end
 
 txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
-[rxSample, impMaskSample] = channel_bg_impulsive(txSample, N0, channelSample);
+cleanChannel = channelSample;
+cleanChannel.impulseProb = 0;
 
-rxSym = pulse_rx_to_symbol_rate(rxSample, waveform);
-rxSym = local_fit_length(rxSym, numel(txChannelSym));
+rngState = rng;
+[rxInputFull, impMaskFull] = channel_bg_impulsive(txSample, N0, channelSample);
+rng(rngState);
+[txCleanFull, ~] = channel_bg_impulsive(txSample, N0, cleanChannel);
+impScoreFull = abs(rxInputFull - txCleanFull) / sqrt(max(N0, eps));
 
-impScoreSym = abs(pulse_rx_to_symbol_rate(double(impMaskSample(:)), waveform));
-impScoreSym = local_fit_length(impScoreSym, numel(txChannelSym));
-impSymMask = abs(impScoreSym) > 1e-9;
-
-if isfield(hopInfo, "enable") && hopInfo.enable
-    rxSym = fh_demodulate(rxSym, hopInfo);
+[txClean, rxInput, impMask, impScore] = local_crop_training_window( ...
+    txCleanFull, rxInputFull, logical(impMaskFull(:)), impScoreFull(:), waveform, targetLen);
 end
 
-if dsssInfo.enable
-    [rxSym, ~] = dsss_despread(rxSym, dsssCfg);
-    impScoreSym = local_group_mean(impScoreSym, dsssInfo.spreadFactor);
-    impSymMask = local_group_any(impSymMask, dsssInfo.spreadFactor);
+function [txClean, rxInput, impMask, impScore] = local_crop_training_window(txCleanFull, rxInputFull, impMaskFull, impScoreFull, waveform, targetLen)
+txCleanFull = txCleanFull(:);
+rxInputFull = rxInputFull(:);
+impMaskFull = logical(impMaskFull(:));
+impScoreFull = double(impScoreFull(:));
+if ~(numel(txCleanFull) == numel(rxInputFull) ...
+        && numel(rxInputFull) == numel(impMaskFull) ...
+        && numel(impMaskFull) == numel(impScoreFull))
+    error("训练链输出长度不一致，无法裁剪统一窗口。");
 end
 
-rxSym = local_fit_length(rxSym, nSym);
-impScoreSym = local_fit_length(impScoreSym, nSym);
-impSymMask = local_fit_length(double(impSymMask), nSym) > 1e-9;
-
-if isfield(p, "rxSync") && isstruct(p.rxSync) ...
-        && isfield(p.rxSync, "carrierPll") && isstruct(p.rxSync.carrierPll) ...
-        && isfield(p.rxSync.carrierPll, "enable") && p.rxSync.carrierPll.enable
-    rxSym = carrier_pll_sync(rxSym, p.mod, p.rxSync.carrierPll);
-end
+guard = 0;
+if isstruct(waveform) && isfield(waveform, "enable") && waveform.enable ...
+        && isfield(waveform, "groupDelaySamples")
+    guard = max(0, round(double(waveform.groupDelaySamples)));
 end
 
-function y = local_fit_length(x, targetLen)
-x = x(:);
-targetLen = max(0, round(double(targetLen)));
-if numel(x) >= targetLen
-    y = x(1:targetLen);
+startMin = 1 + guard;
+startMax = numel(rxInputFull) - guard - targetLen + 1;
+if startMax < startMin
+    error("训练窗口长度 %d 超出可用采样长度 %d（guard=%d）。请增大训练符号数或减小 blockLen。", ...
+        targetLen, numel(rxInputFull), guard);
+end
+
+if startMax == startMin
+    startIdx = startMin;
 else
-    y = [x; complex(zeros(targetLen - numel(x), 1))];
+    startIdx = randi([startMin, startMax], 1, 1);
 end
-end
+stopIdx = startIdx + targetLen - 1;
 
-function y = local_group_mean(x, groupLen)
-x = double(x(:));
-groupLen = max(1, round(double(groupLen)));
-if rem(numel(x), groupLen) ~= 0
-    error("groupLen=%d does not divide input length %d.", groupLen, numel(x));
-end
-y = mean(reshape(x, groupLen, []), 1).';
-end
-
-function y = local_group_any(x, groupLen)
-x = logical(x(:));
-groupLen = max(1, round(double(groupLen)));
-if rem(numel(x), groupLen) ~= 0
-    error("groupLen=%d does not divide input length %d.", groupLen, numel(x));
-end
-y = any(reshape(x, groupLen, []), 1).';
+txClean = txCleanFull(startIdx:stopIdx);
+rxInput = rxInputFull(startIdx:stopIdx);
+impMask = impMaskFull(startIdx:stopIdx);
+impScore = impScoreFull(startIdx:stopIdx);
 end

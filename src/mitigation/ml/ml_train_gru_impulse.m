@@ -1,13 +1,13 @@
 function [model, report] = ml_train_gru_impulse(p, opts)
-%ML_TRAIN_GRU_IMPULSE  使用 Deep Learning Toolbox 训练 GRU 脉冲检测器。
+%ML_TRAIN_GRU_IMPULSE  使用 Deep Learning Toolbox 训练采样级 GRU 脉冲检测器。
 
 arguments
     p (1,1) struct
-    opts.nBlocks (1,1) double {mustBePositive} = 200
-    opts.blockLen (1,1) double {mustBeInteger, mustBePositive} = 512
+    opts.nBlocks (1,1) double {mustBePositive} = 300
+    opts.blockLen (1,1) double {mustBeInteger, mustBePositive} = 2048 % 采样窗口长度
     opts.ebN0dBRange (1,2) double = [0 12]
-    opts.epochs (1,1) double {mustBeInteger, mustBePositive} = 20
-    opts.batchSize (1,1) double {mustBeInteger, mustBePositive} = 32
+    opts.epochs (1,1) double {mustBeInteger, mustBePositive} = 30
+    opts.batchSize (1,1) double {mustBeInteger, mustBePositive} = 64
     opts.lr (1,1) double {mustBePositive} = 0.001
     opts.pfaTarget (1,1) double = 0.01
     opts.valFraction (1,1) double = 0.15
@@ -109,12 +109,12 @@ if split.nVal < 1 || split.nTest < 1
     error("当前GRU训练流程要求独立的验证集和测试集，请增大 nBlocks 或调整 val/test 占比。");
 end
 
-trainRx = dataset.rxSym(split.trainIdx);
-trainTx = dataset.txSym(split.trainIdx);
+trainRx = dataset.rxInput(split.trainIdx);
+trainTx = dataset.txClean(split.trainIdx);
 trainY = dataset.impMask(split.trainIdx);
-valRx = dataset.rxSym(split.valIdx);
+valRx = dataset.rxInput(split.valIdx);
 valY = dataset.impMask(split.valIdx);
-testRx = dataset.rxSym(split.testIdx);
+testRx = dataset.rxInput(split.testIdx);
 testY = dataset.impMask(split.testIdx);
 
 trainX = local_extract_features(trainRx);
@@ -159,8 +159,8 @@ TxRealTrain = local_to_real_imag_inputs(trainTx, "real");
 TxImagTrain = local_to_real_imag_inputs(trainTx, "imag");
 XVal = local_to_network_inputs(valX);
 YVal = local_to_label_inputs(valY);
-TxRealVal = local_to_real_imag_inputs(dataset.txSym(split.valIdx), "real");
-TxImagVal = local_to_real_imag_inputs(dataset.txSym(split.valIdx), "imag");
+TxRealVal = local_to_real_imag_inputs(dataset.txClean(split.valIdx), "real");
+TxImagVal = local_to_real_imag_inputs(dataset.txClean(split.valIdx), "imag");
 
 averageGrad = [];
 averageSqGrad = [];
@@ -258,8 +258,10 @@ testMetrics = ml_binary_metrics(testScores, testTruth, model.threshold);
 model.trained = true;
 
 report = struct();
+report.domain = dataset.domain;
 report.nBlocks = dataset.nBlocks;
 report.blockLen = dataset.blockLen;
+report.sampleWindowLen = dataset.sampleWindowLen;
 report.nSamples = dataset.nBlocks * dataset.blockLen;
 report.ebN0dBRange = dataset.ebN0dBRange;
 report.ebN0dBPerBlock = dataset.ebN0dBPerBlock;

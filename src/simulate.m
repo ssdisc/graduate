@@ -1099,13 +1099,11 @@ for pktIdx = 1:nPackets
 
     tx = [zeros(frameDelay, 1); frameCtx.linkBudgetBobRxAmplitudeScale * pkt.txSymForChannel];
     rx = channel_bg_impulsive(tx, frameCtx.N0, channelSampleBob);
-    rx = pulse_rx_to_symbol_rate(rx, waveform);
     bobRaw.rxPackets{pktIdx} = rx;
 
     if eveEnabled
         txEve = [zeros(frameDelay, 1); frameCtx.eveRxAmplitudeScale * pkt.txSymForChannel];
         rxEve = channel_bg_impulsive(txEve, frameCtx.N0Eve, channelSampleEve);
-        rxEve = pulse_rx_to_symbol_rate(rxEve, waveform);
         eveRaw.rxPackets{pktIdx} = rxEve;
     end
 end
@@ -2118,52 +2116,373 @@ relBlk(~isfinite(relBlk)) = 0;
 relBlk = max(min(relBlk, 1), 0);
 end
 
-function front = local_capture_synced_block_local(rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg)
-rxRaw = rxRaw(:);
+function front = local_capture_synced_block_local(rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain)
+if nargin < 9
+    bootstrapChain = strings(1, 0);
+end
+front = capture_synced_block_from_samples( ...
+    rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain);
+end
+
+function [rxStage, relStage] = local_sync_stage_observation_from_samples_local(rxSample, waveform, sampleAction, mitigation, stageSps)
+rxSample = rxSample(:);
+sampleAction = string(sampleAction);
+relSample = ones(numel(rxSample), 1);
+if sampleAction == "none"
+    rxPrep = rxSample;
+else
+    [rxPrep, relSample] = mitigate_impulses(rxSample, sampleAction, mitigation);
+end
+
+rxMf = local_matched_filter_samples_local(rxPrep, waveform);
+relMf = local_matched_filter_reliability_samples_local(relSample, waveform);
+[rxStage, relStage] = local_decimate_stage_branch_local(rxMf, relMf, waveform, stageSps);
+relStage = local_fit_reliability_length_local(relStage, numel(rxStage));
+end
+
+function yMf = local_matched_filter_samples_local(ySample, waveform)
+ySample = ySample(:);
+if ~waveform.enable
+    yMf = ySample;
+    return;
+end
+if waveform.rxMatchedFilter
+    yMf = filter(waveform.rrcTaps(:), 1, ySample);
+    totalGd = 2 * waveform.groupDelaySamples;
+    if numel(yMf) <= totalGd
+        yMf = complex(zeros(0, 1));
+        return;
+    end
+    yMf = yMf(totalGd+1:end);
+else
+    yMf = ySample;
+end
+end
+
+function relMf = local_matched_filter_reliability_samples_local(relSample, waveform)
+relSample = double(relSample(:));
+relSample(~isfinite(relSample)) = 0;
+relSample = max(min(relSample, 1), 0);
+if ~waveform.enable
+    relMf = relSample;
+    return;
+end
+
+if waveform.rxMatchedFilter
+    taps = abs(double(waveform.rrcTaps(:)));
+    if ~any(taps > 0)
+        taps = ones(size(taps));
+    end
+    taps = taps / sum(taps);
+    relMf = filter(taps, 1, relSample);
+    totalGd = 2 * waveform.groupDelaySamples;
+    if numel(relMf) <= totalGd
+        relMf = zeros(0, 1);
+        return;
+    end
+    relMf = relMf(totalGd+1:end);
+else
+    relMf = relSample;
+end
+relMf = max(min(relMf, 1), 0);
+end
+
+function [yStage, relStage] = local_decimate_stage_branch_local(yMf, relMf, waveform, stageSps)
+yMf = yMf(:);
+relMf = relMf(:);
+if ~waveform.enable
+    if stageSps ~= 1
+        error("未启用波形成型时，接收同步级采样率只能为1 sps。");
+    end
+    yStage = yMf;
+    relStage = relMf;
+    return;
+end
+
+stageSps = max(1, round(double(stageSps)));
+if mod(double(waveform.sps), double(stageSps)) ~= 0
+    error("waveform.sps=%d 不能整数降采样到 %d sps。", waveform.sps, stageSps);
+end
+decim = round(double(waveform.sps) / double(stageSps));
+yStage = yMf(1:decim:end);
+relStage = relMf(1:decim:end);
+relStage = max(min(relStage, 1), 0);
+end
+
+function stageSps = local_sync_stage_sps_local(waveform)
+stageSps = 1;
+if ~isstruct(waveform)
+    return;
+end
+if ~(isfield(waveform, "enable") && waveform.enable && isfield(waveform, "sps"))
+    return;
+end
+if double(waveform.sps) < 2
+    return;
+end
+if mod(double(waveform.sps), 2) ~= 0
+    error("接收链重构要求 waveform.sps 能够整数降采样到 2 sps，当前 waveform.sps=%d。", waveform.sps);
+end
+stageSps = 2;
+end
+
+function nStage = local_stage_symbol_sequence_length_local(nSym, stageSps)
+nSym = max(0, round(double(nSym)));
+stageSps = max(1, round(double(stageSps)));
+if nSym == 0
+    nStage = 0;
+    return;
+end
+if stageSps == 1
+    nStage = nSym;
+    return;
+end
+nStage = (nSym - 1) * stageSps + 1;
+end
+
+function syncRefStage = local_sync_reference_stage_local(syncSymRef, waveform, stageSps)
 syncSymRef = syncSymRef(:);
-front = struct( ...
-    "ok", false, ...
-    "bootstrapPath", "", ...
-    "bootstrapCapture", struct(), ...
-    "startIdx", NaN, ...
-    "syncInfo", struct(), ...
-    "rxSync", complex(zeros(0, 1)), ...
-    "rFull", complex(zeros(0, 1)), ...
-    "reliabilityFull", zeros(0, 1));
-
-capture = adaptive_frontend_bootstrap_capture(rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg);
-front.bootstrapCapture = capture;
-front.bootstrapPath = string(capture.bootstrapPath);
-if ~capture.ok
+stageSps = max(1, round(double(stageSps)));
+if stageSps == 1 || ~waveform.enable
+    syncRefStage = syncSymRef;
     return;
 end
 
-refineCfg = syncCfgUse;
-fineSearchRadius = 0;
-if isfield(syncCfgUse, "fineSearchRadius") && ~isempty(syncCfgUse.fineSearchRadius)
-    fineSearchRadius = round(double(syncCfgUse.fineSearchRadius));
+txSyncSample = pulse_tx_from_symbol_rate(syncSymRef, waveform);
+syncMf = local_matched_filter_samples_local(txSyncSample, waveform);
+[syncRefStage, ~] = local_decimate_stage_branch_local(syncMf, ones(numel(syncMf), 1), waveform, stageSps);
+syncRefStage = fit_complex_length_local(syncRefStage, local_stage_symbol_sequence_length_local(numel(syncSymRef), stageSps));
+syncRefPower = mean(abs(syncRefStage).^2);
+if syncRefPower > 0
+    syncRefStage = syncRefStage / sqrt(syncRefPower);
 end
-searchRadius = max([8, round(numel(syncSymRef) / 4), fineSearchRadius + 4]);
-maxCoarseIdx = max(1, numel(rxRaw) - numel(syncSymRef) + 1);
-refineCfg.minSearchIndex = max(1, floor(double(capture.startIdx) - searchRadius));
-refineCfg.maxSearchIndex = min(maxCoarseIdx, ceil(double(capture.startIdx) + searchRadius));
+end
 
-[startIdx, rxSync, syncInfo] = frame_sync(rxRaw, syncSymRef, refineCfg);
-if isempty(startIdx)
+function syncCfgStage = local_sync_cfg_for_stage_local(syncCfgUse, stageSps)
+syncCfgStage = syncCfgUse;
+stageSps = max(1, round(double(stageSps)));
+if stageSps <= 1
     return;
 end
 
-[rFull, okFull] = extract_fractional_block(rxSync, startIdx, totalLen, refineCfg, modCfg);
-if ~okFull
+if isfield(syncCfgStage, "fineSearchRadius") && ~isempty(syncCfgStage.fineSearchRadius)
+    syncCfgStage.fineSearchRadius = round(double(syncCfgStage.fineSearchRadius) * stageSps);
+end
+if isfield(syncCfgStage, "corrExclusionRadius") && ~isempty(syncCfgStage.corrExclusionRadius)
+    syncCfgStage.corrExclusionRadius = round(double(syncCfgStage.corrExclusionRadius) * stageSps);
+end
+if isfield(syncCfgStage, "minSearchIndex") && isfinite(double(syncCfgStage.minSearchIndex))
+    syncCfgStage.minSearchIndex = double(syncCfgStage.minSearchIndex) * stageSps;
+end
+if isfield(syncCfgStage, "maxSearchIndex") && isfinite(double(syncCfgStage.maxSearchIndex))
+    syncCfgStage.maxSearchIndex = double(syncCfgStage.maxSearchIndex) * stageSps;
+end
+syncCfgStage.enableFractionalTiming = false;
+syncCfgStage.compensateCarrier = false;
+syncCfgStage.equalizeAmplitude = false;
+syncCfgStage.estimateCfo = false;
+if isfield(syncCfgStage, "fractionalRange")
+    syncCfgStage.fractionalRange = 0;
+end
+if isfield(syncCfgStage, "fractionalStep")
+    syncCfgStage.fractionalStep = 0;
+end
+if isfield(syncCfgStage, "timingDll") && isstruct(syncCfgStage.timingDll) ...
+        && isfield(syncCfgStage.timingDll, "enable")
+    syncCfgStage.timingDll.enable = false;
+end
+end
+
+function cfgOut = local_symbol_extract_sync_cfg_local(syncCfgUse)
+cfgOut = syncCfgUse;
+cfgOut.enableFractionalTiming = false;
+if isfield(cfgOut, "fractionalRange")
+    cfgOut.fractionalRange = 0;
+end
+if isfield(cfgOut, "fractionalStep")
+    cfgOut.fractionalStep = 0;
+end
+end
+
+function [startIdxStage, syncInfo] = local_refine_stage_capture_local(rxStage, syncRefStage, startHintStage, syncCfgStage, searchRadiusStage)
+rxStage = rxStage(:);
+searchRadiusStage = max(0, round(double(searchRadiusStage)));
+syncInfo = struct();
+startIdxStage = [];
+if isempty(rxStage) || isempty(syncRefStage)
     return;
 end
 
-front.ok = true;
-front.startIdx = startIdx;
-front.syncInfo = syncInfo;
-front.rxSync = rxSync;
-front.rFull = rFull;
-front.reliabilityFull = ones(totalLen, 1);
+cfg = syncCfgStage;
+maxIdx = max(1, numel(rxStage) - numel(syncRefStage) + 1);
+cfg.minSearchIndex = max(1, floor(double(startHintStage) - searchRadiusStage));
+cfg.maxSearchIndex = min(maxIdx, ceil(double(startHintStage) + searchRadiusStage));
+[startIdxStage, ~, syncInfo] = frame_sync(rxStage, syncRefStage, cfg);
+end
+
+function [startIdxStage, timingInfo] = local_estimate_symbol_timing_from_stage_local(rxStage, startHintStage, syncSymRef, syncCfgUse, modCfg, stageSps)
+rxStage = rxStage(:);
+syncSymRef = syncSymRef(:);
+stageSps = max(1, round(double(stageSps)));
+timingInfo = struct( ...
+    "fractionalOffsetSymbols", 0, ...
+    "corrPeak", NaN, ...
+    "timingCompensated", false);
+startIdxStage = [];
+if isempty(rxStage) || isempty(syncSymRef)
+    return;
+end
+
+fracGrid = 0;
+if isfield(syncCfgUse, "enableFractionalTiming") && logical(syncCfgUse.enableFractionalTiming)
+    fracRange = 0.5;
+    fracStep = 0.05;
+    if isfield(syncCfgUse, "fractionalRange") && ~isempty(syncCfgUse.fractionalRange)
+        fracRange = abs(double(syncCfgUse.fractionalRange));
+    end
+    if isfield(syncCfgUse, "fractionalStep") && ~isempty(syncCfgUse.fractionalStep)
+        fracStep = abs(double(syncCfgUse.fractionalStep));
+    end
+    if fracRange > 0 && fracStep > 0
+        fracGrid = -fracRange:fracStep:fracRange;
+        if isempty(fracGrid) || ~any(abs(fracGrid) < 1e-12)
+            fracGrid = unique([fracGrid 0]);
+        end
+    end
+end
+
+bestScore = -inf;
+bestOffsetSym = 0;
+for offsetSym = fracGrid
+    startNow = double(startHintStage) + double(offsetSym) * double(stageSps);
+    [seg, okSeg] = extract_fractional_block(rxStage, startNow, numel(syncSymRef), ...
+        local_symbol_extract_sync_cfg_local(syncCfgUse), modCfg, stageSps);
+    if ~okSeg
+        continue;
+    end
+
+    if isfield(syncCfgUse, "estimateCfo") && logical(syncCfgUse.estimateCfo)
+        symAxis = (0:numel(syncSymRef)-1).';
+        [wTmp, phiTmp] = local_estimate_cfo_phase_local(seg, syncSymRef, symAxis);
+        segUse = seg .* exp(-1j * (wTmp * symAxis + phiTmp));
+    else
+        segUse = seg;
+    end
+    score = abs(sum(segUse .* conj(syncSymRef)));
+    if score <= bestScore
+        continue;
+    end
+
+    bestScore = score;
+    bestOffsetSym = double(offsetSym);
+end
+
+if ~isfinite(bestScore)
+    return;
+end
+
+startIdxStage = double(startHintStage) + bestOffsetSym * double(stageSps);
+timingInfo.fractionalOffsetSymbols = bestOffsetSym;
+timingInfo.corrPeak = bestScore;
+timingInfo.timingCompensated = abs(bestOffsetSym) > 1e-12;
+end
+
+function [rComp, compInfo] = local_apply_symbol_block_sync_compensation_local(rSym, syncSymRef, syncCfgUse)
+rSym = rSym(:);
+syncSymRef = syncSymRef(:);
+rComp = rSym;
+compInfo = struct( ...
+    "compensated", false, ...
+    "cfoRadPerSample", 0, ...
+    "chanGainEstimate", complex(NaN, NaN), ...
+    "phaseEstimateRad", NaN, ...
+    "amplitudeEstimate", NaN);
+if isempty(rSym) || isempty(syncSymRef)
+    return;
+end
+
+if ~isfield(syncCfgUse, "compensateCarrier") || ~logical(syncCfgUse.compensateCarrier)
+    return;
+end
+
+pre = rSym(1:min(numel(rSym), numel(syncSymRef)));
+syncRefUse = syncSymRef(1:numel(pre));
+if numel(pre) ~= numel(syncRefUse) || isempty(pre) || ~any(abs(pre) > 0)
+    return;
+end
+
+denom = sum(abs(syncRefUse).^2);
+if denom <= 0
+    return;
+end
+
+cfoRad = 0;
+phiHat = 0;
+if isfield(syncCfgUse, "estimateCfo") && logical(syncCfgUse.estimateCfo)
+    symAxis = (0:numel(pre)-1).';
+    [cfoRad, phiHat] = local_estimate_cfo_phase_local(pre, syncRefUse, symAxis);
+    rComp = rSym .* exp(-1j * (cfoRad * (0:numel(rSym)-1).' + phiHat));
+end
+
+preComp = rComp(1:numel(syncRefUse));
+hHat = sum(preComp .* conj(syncRefUse)) / denom;
+if abs(hHat) <= 1e-12
+    return;
+end
+
+if ~isfield(syncCfgUse, "equalizeAmplitude") || logical(syncCfgUse.equalizeAmplitude)
+    compGain = hHat;
+else
+    compGain = exp(1j * angle(hHat));
+end
+rComp = rComp ./ compGain;
+
+compInfo.compensated = true;
+compInfo.cfoRadPerSample = double(cfoRad);
+compInfo.chanGainEstimate = hHat;
+compInfo.phaseEstimateRad = angle(hHat);
+compInfo.amplitudeEstimate = abs(hHat);
+end
+
+function syncInfo = local_merge_stage_sync_info_local(syncInfoStage, timingInfo, compInfo, coarseStartIdxStage, symbolStartIdxStage, stageSps)
+syncInfo = syncInfoStage;
+syncInfo.coarseStageStartIdx = double(coarseStartIdxStage);
+syncInfo.stageStartIdx = double(symbolStartIdxStage);
+syncInfo.stageSps = double(stageSps);
+syncInfo.fineIdx = floor(double(symbolStartIdxStage));
+syncInfo.fineFrac = double(symbolStartIdxStage) - floor(double(symbolStartIdxStage));
+syncInfo.timingOffsetSymbols = double(timingInfo.fractionalOffsetSymbols);
+syncInfo.timingCorrPeak = double(timingInfo.corrPeak);
+syncInfo.timingCompensated = logical(timingInfo.timingCompensated);
+syncInfo.cfoRadPerSample = double(compInfo.cfoRadPerSample);
+syncInfo.chanGainEstimate = compInfo.chanGainEstimate;
+syncInfo.phaseEstimateRad = double(compInfo.phaseEstimateRad);
+syncInfo.amplitudeEstimate = double(compInfo.amplitudeEstimate);
+syncInfo.compensated = logical(compInfo.compensated);
+end
+
+function [wHat, phiHat] = local_estimate_cfo_phase_local(seg, pre, nAbs)
+z = seg(:) .* conj(pre(:));
+z(abs(z) < 1e-12) = 1e-12;
+phaseVec = unwrap(angle(z));
+coef = polyfit(nAbs(:), phaseVec, 1);
+wHat = coef(1);
+phiHat = coef(2);
+end
+
+function relOut = local_extract_reliability_from_sample_times_local(reliabilityTrack, sampleTimes)
+reliabilityTrack = double(reliabilityTrack(:));
+sampleTimes = double(sampleTimes(:));
+if isempty(reliabilityTrack) || isempty(sampleTimes)
+    relOut = zeros(0, 1);
+    return;
+end
+reliabilityTrack(~isfinite(reliabilityTrack)) = 0;
+reliabilityTrack = max(min(reliabilityTrack, 1), 0);
+idx = (1:numel(reliabilityTrack)).';
+relOut = interp1(idx, reliabilityTrack, sampleTimes, "linear", 0);
+relOut(~isfinite(relOut)) = 0;
+relOut = max(min(relOut, 1), 0);
 end
 
 function decision = local_select_frontend_action_local(methodName, adaptiveEnabled, rFull, syncSymRef, syncInfo, bootstrapPath, mitigation, channelCfg, waveform, N0)
@@ -2171,6 +2490,8 @@ featureCount = numel(ml_interference_selector_feature_names());
 decision = struct( ...
     "selectedClass", "", ...
     "selectedAction", "", ...
+    "sampleAction", "none", ...
+    "symbolAction", "none", ...
     "confidence", NaN, ...
     "classProbabilities", zeros(0, 1), ...
     "featureRow", zeros(1, featureCount), ...
@@ -2188,9 +2509,12 @@ if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnable
         "channelLenSymbols", channelLenSymbols);
     [className, confidence, classProbabilities] = ml_predict_interference_class(featureRow, selectorModel);
     actionName = local_map_class_to_action_local(mitigation, className);
+    [sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
 
     decision.selectedClass = string(className);
     decision.selectedAction = string(actionName);
+    decision.sampleAction = sampleAction;
+    decision.symbolAction = symbolAction;
     decision.confidence = double(confidence);
     decision.classProbabilities = classProbabilities;
     decision.featureRow = featureRow;
@@ -2198,6 +2522,47 @@ if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnable
 end
 
 decision.selectedAction = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
+[decision.sampleAction, decision.symbolAction] = local_split_mitigation_action_local(decision.selectedAction);
+end
+
+function sampleAction = local_initial_sample_action_hint_local(methodName, adaptiveEnabled)
+methodName = string(methodName);
+if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnabled)
+    sampleAction = "none";
+    return;
+end
+actionName = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
+[sampleAction, ~] = local_split_mitigation_action_local(actionName);
+end
+
+function bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled)
+methodName = string(methodName);
+if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnabled)
+    bootstrapChain = strings(1, 0);
+    return;
+end
+bootstrapChain = "raw";
+end
+
+function [sampleAction, symbolAction] = local_split_mitigation_action_local(actionName)
+actionName = lower(string(actionName));
+sampleAction = "none";
+symbolAction = "none";
+if any(actionName == ["none" "adaptive_ml_frontend"])
+    return;
+end
+
+sampleActions = ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard"];
+symbolActions = ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch"];
+if any(actionName == sampleActions)
+    sampleAction = actionName;
+    return;
+end
+if any(actionName == symbolActions)
+    symbolAction = actionName;
+    return;
+end
+error("接收链分层不支持方法: %s", char(actionName));
 end
 
 function model = local_require_selector_model_local(mitigation)
@@ -2286,7 +2651,6 @@ for frameIdx = 1:numel(sessionFrames)
     sessionFrame = sessionFrames(frameIdx);
     tx = [zeros(frameDelay, 1); rxAmplitudeScale * sessionFrame.txSymForChannel];
     rx = channel_bg_impulsive(tx, N0, channelSample);
-    rx = pulse_rx_to_symbol_rate(rx, waveform);
     sessionRx{frameIdx} = rx;
 end
 end
@@ -2307,7 +2671,10 @@ for pktIdx = 1:nPackets
     hdrLen = numel(txPackets(pktIdx).phyHeaderSym);
     dataLen = numel(txPackets(pktIdx).dataSymTx);
     totalLen = preLen + hdrLen + dataLen;
-    front = local_capture_synced_block_local(rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod);
+    sampleActionHint = local_initial_sample_action_hint_local(methodName, adaptiveEnabled);
+    bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
+    front = local_capture_synced_block_local( ...
+        rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, sampleActionHint, bootstrapChain);
     if ~front.ok
         continue;
     end
@@ -2317,6 +2684,16 @@ for pktIdx = 1:nPackets
     decision = local_select_frontend_action_local( ...
         methodName, adaptiveEnabled, rFull, syncSymRef, front.syncInfo, front.bootstrapPath, ...
         mitigation, p.channel, waveform, N0);
+    if local_is_adaptive_frontend_method_local(methodName) && string(decision.sampleAction) ~= sampleActionHint
+        front = local_capture_synced_block_local( ...
+            rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, ...
+            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled));
+        if ~front.ok
+            continue;
+        end
+        rFull = front.rFull;
+        reliabilityFull = front.reliabilityFull;
+    end
     nom.adaptiveClass(pktIdx) = string(decision.selectedClass);
     nom.adaptiveAction(pktIdx) = string(decision.selectedAction);
     nom.adaptiveBootstrapPath(pktIdx) = string(front.bootstrapPath);
@@ -2335,7 +2712,7 @@ for pktIdx = 1:nPackets
     nom.preambleRx{pktIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
     nom.preambleRef{pktIdx} = syncSymRef;
 
-    actionName = string(decision.selectedAction);
+    actionName = string(decision.symbolAction);
     hdrSym = local_prepare_header_symbols_local(rFull(preLen+1:preLen+hdrLen), actionName, mitigation);
     hdrBits = decode_phy_header_symbols(hdrSym, p.frame, p.fec, p.softMetric);
     [phy, headerOk] = parse_phy_header_bits(hdrBits, p.frame);
@@ -2376,8 +2753,10 @@ for frameIdx = 1:numel(sessionFrames)
     sessionFrame = sessionFrames(frameIdx);
     preLen = numel(sessionFrame.syncSym);
     totalLen = preLen + sessionFrame.nDataSym;
+    sampleActionHint = local_initial_sample_action_hint_local(methodName, adaptiveEnabled);
+    bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
     front = local_capture_synced_block_local( ...
-        sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg);
+        sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, sampleActionHint, bootstrapChain);
     if ~front.ok
         continue;
     end
@@ -2387,6 +2766,16 @@ for frameIdx = 1:numel(sessionFrames)
     decision = local_select_frontend_action_local( ...
         methodName, adaptiveEnabled, rFull, sessionFrame.syncSym(:), front.syncInfo, front.bootstrapPath, ...
         mitigation, p.channel, waveform, N0);
+    if local_is_adaptive_frontend_method_local(methodName) && string(decision.sampleAction) ~= sampleActionHint
+        front = local_capture_synced_block_local( ...
+            sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, ...
+            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled));
+        if ~front.ok
+            continue;
+        end
+        rFull = front.rFull;
+        reliabilityFull = front.reliabilityFull;
+    end
     nom.adaptiveClass(frameIdx) = string(decision.selectedClass);
     nom.adaptiveAction(frameIdx) = string(decision.selectedAction);
     nom.adaptiveBootstrapPath(frameIdx) = string(front.bootstrapPath);
@@ -2404,7 +2793,7 @@ for frameIdx = 1:numel(sessionFrames)
     rxStateSession = struct("nDataSym", sessionFrame.nDataSym);
     nom.preambleRx{frameIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
     nom.preambleRef{frameIdx} = sessionFrame.syncSym(:);
-    actionName = string(decision.selectedAction);
+    actionName = string(decision.symbolAction);
     [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = local_prepare_data_symbols_local( ...
         rFull(preLen+1:end), reliabilityFull(preLen+1:end), rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false, actionName, mitigation);
     nom.ok(frameIdx) = true;

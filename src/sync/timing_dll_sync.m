@@ -1,4 +1,4 @@
-function [ySym, ok, info] = timing_dll_sync(x, startPos, nSamp, modCfg, dllCfg)
+function [ySym, ok, info] = timing_dll_sync(x, startPos, nSamp, modCfg, dllCfg, samplesPerSymbol)
 %TIMING_DLL_SYNC  基于Early-Late门的符号级DLL定时跟踪。
 %
 % 输入:
@@ -8,11 +8,12 @@ function [ySym, ok, info] = timing_dll_sync(x, startPos, nSamp, modCfg, dllCfg)
 %   modCfg   - 调制配置（用于判决导向误差）
 %   dllCfg   - DLL参数
 %              .enable            - 是否启用
-%              .earlyLateSpacing  - Early/Late间隔（sample）
+%              .earlyLateSpacing  - Early/Late间隔（symbol）
 %              .alpha             - 一阶环增益
 %              .beta              - 二阶环增益
-%              .maxOffset         - 定时偏移限幅（sample）
+%              .maxOffset         - 定时偏移限幅（symbol）
 %              .decisionDirected  - true=判决导向，false=非数据辅助
+%   samplesPerSymbol - 输入序列每个符号对应的采样数
 %
 % 输出:
 %   ySym - 跟踪后的符号抽样
@@ -25,6 +26,7 @@ arguments
     nSamp (1,1) double {mustBeInteger, mustBeNonnegative}
     modCfg (1,1) struct
     dllCfg (1,1) struct
+    samplesPerSymbol (1,1) double {mustBePositive} = 1
 end
 
 if nSamp == 0 || isempty(x)
@@ -37,10 +39,10 @@ end
 if ~isfield(dllCfg, "enable"); dllCfg.enable = false; end
 if ~dllCfg.enable
     idx = (1:numel(x)).';
-    t = startPos + (0:nSamp-1).';
+    t = startPos + (0:nSamp-1).' * samplesPerSymbol;
     ySym = interp1(idx, x, t, "linear", 0);
     ok = all(isfinite(ySym)) && any(abs(ySym) > 0);
-    info = struct("enabled", false);
+    info = struct("enabled", false, "sampleTimes", t);
     return;
 end
 
@@ -50,11 +52,14 @@ if ~isfield(dllCfg, "beta"); dllCfg.beta = 5e-4; end
 if ~isfield(dllCfg, "maxOffset"); dllCfg.maxOffset = 0.75; end
 if ~isfield(dllCfg, "decisionDirected"); dllCfg.decisionDirected = true; end
 
-delta = max(0.05, min(0.95, abs(double(dllCfg.earlyLateSpacing))));
+deltaSym = max(0.05, min(0.95, abs(double(dllCfg.earlyLateSpacing))));
 alpha = abs(double(dllCfg.alpha));
 beta = abs(double(dllCfg.beta));
-maxOffset = max(0.1, abs(double(dllCfg.maxOffset)));
+maxOffsetSym = max(0.1, abs(double(dllCfg.maxOffset)));
 useDd = logical(dllCfg.decisionDirected);
+samplesPerSymbol = double(samplesPerSymbol);
+delta = deltaSym * samplesPerSymbol;
+maxOffset = maxOffsetSym * samplesPerSymbol;
 
 idxAxis = (1:numel(x)).';
 guard = 2;
@@ -70,7 +75,7 @@ omega = 0;
 ok = true;
 
 for k = 1:nSamp
-    tNow = startPos + (k-1) + tau;
+    tNow = startPos + (k-1) * samplesPerSymbol + tau;
     if tNow < 1 - guard || tNow > numel(x) + guard
         ok = false;
         break;
@@ -109,7 +114,7 @@ info.error = errHist;
 info.timingOffset = tauHist;
 info.timingRate = freqHist;
 info.sampleTimes = timeHist;
-info.finalOffset = tau;
+info.finalOffset = tau / samplesPerSymbol;
 info.finalRate = omega;
 end
 

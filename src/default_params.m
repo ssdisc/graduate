@@ -15,7 +15,7 @@ p.rngSeed = 1;
 
 %% 仿真控制
 p.sim = struct();
-p.sim.nFramesPerPoint = 5;
+p.sim.nFramesPerPoint = 10;
 p.sim.saveFigures = true;
 p.sim.resultsDir = fullfile(pwd, "results");
 % 并行加速（主链路）：需要 Parallel Computing Toolbox
@@ -34,7 +34,7 @@ p.linkBudget.noisePsdLin = 1.0;
 % 主扫描轴1：Bob端目标 Eb/N0（dB）
 p.linkBudget.ebN0dBList = 4:2:10;
 % 主扫描轴2：目标 J/S（dB），在每个Eb/N0点下缩放已启用干扰的平均总功率
-p.linkBudget.jsrDbList = [-20 -15 -10 -5];
+p.linkBudget.jsrDbList = [-10 -5 0];
 
 %% 发送端（TX）
 % 1) 图像源
@@ -192,28 +192,28 @@ p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
 % AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/同步失配）
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
-p.channel.impulseProb = 0.05;    % 每个符号产生脉冲的概率
-p.channel.impulseToBgRatio = 50; % 脉冲形状参数：开启时通过JSR分配平均功率，再反解所需脉冲方差比
-p.channel.impulseWeight = 1;   % JSR总干扰功率分配权重；脉冲关闭逻辑仍由impulseProb/weight共同决定
+p.channel.impulseProb = 0.03;    % 每个符号触发脉冲的概率；当前默认取中等稀疏度，进入采样级前会换算为每采样概率
+p.channel.impulseToBgRatio = 40; % 非JSR重标定时，单次脉冲噪声方差相对背景噪声方差的倍数
+p.channel.impulseWeight = 1;   % JSR总干扰功率分配权重；weight>0且impulseProb>0时纳入干扰预算
 % 可选：单音干扰（窄带强干扰）
 p.channel.singleTone = struct();
 p.channel.singleTone.enable = false;
-p.channel.singleTone.weight = 1;      % JSR总干扰功率分配权重；singleTone.enable=false时忽略
-p.channel.singleTone.freqHz = 800;      % 单音频率（Hz）
+p.channel.singleTone.weight = 1;      % JSR总干扰功率分配权重；enable=false时忽略
+p.channel.singleTone.freqHz = 1500;      % 单音频率（Hz），默认避开近DC区域并保持在当前训练覆盖范围内
 p.channel.singleTone.randomPhase = true;
 % 可选：窄带噪声干扰
 p.channel.narrowband = struct();
 p.channel.narrowband.enable = false;
-p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；narrowband.enable=false时忽略
-p.channel.narrowband.centerHz = 1200;   % 窄带噪声中心频率（Hz）
-p.channel.narrowband.bandwidthHz = 800; % 窄带噪声双边带宽（Hz）
+p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；enable=false时忽略
+p.channel.narrowband.centerHz = 1500;   % 窄带噪声中心频率（Hz）
+p.channel.narrowband.bandwidthHz = 1000; % 窄带噪声双边带宽（Hz）
 % 可选：扫频干扰（线性chirp）
 p.channel.sweep = struct();
 p.channel.sweep.enable = false;
-p.channel.sweep.weight = 1;            % JSR总干扰功率分配权重；sweep.enable=false时忽略
+p.channel.sweep.weight = 1;            % JSR总干扰功率分配权重；enable=false时忽略
 p.channel.sweep.startHz = -2000;        % 起始频率（Hz）
 p.channel.sweep.stopHz = 2000;          % 终止频率（Hz）
-p.channel.sweep.periodSymbols = 256;    % 单次扫频周期（符号数）
+p.channel.sweep.periodSymbols = 256;    % 单次扫频周期（符号数），默认取当前训练范围内的中等值
 p.channel.sweep.randomPhase = true;
 % 可选：同步失配（用于验证“完整同步链路”）
 p.channel.syncImpairment = struct();
@@ -361,9 +361,9 @@ p.rxSync = struct();
 p.rxSync.fineSearchRadius = 2;     % 整数符号级细搜索窗口半径
 p.rxSync.compensateCarrier = true; % 使用前导估计并补偿载波相位/复增益
 p.rxSync.equalizeAmplitude = true; % true: 复增益均衡；false: 仅相位补偿
-p.rxSync.enableFractionalTiming = true; % 分数符号定时估计
-p.rxSync.fractionalRange = 0.5;         % 分数搜索范围（sample）
-p.rxSync.fractionalStep = 0.05;         % 分数搜索步长（sample）
+p.rxSync.enableFractionalTiming = true; % 2 sps同步级上的分数符号定时估计
+p.rxSync.fractionalRange = 0.5;         % 分数搜索范围（symbol）
+p.rxSync.fractionalStep = 0.05;         % 分数搜索步长（symbol）
 p.rxSync.estimateCfo = true;            % 用前导估计残余CFO并前馈补偿
 p.rxSync.minCorrPeakToMedian = 0;       % 默认关闭；当前链路需先标定分布后再启用
 p.rxSync.minCorrPeakToSecond = 0;       % 默认关闭；当前链路需先标定分布后再启用
@@ -381,7 +381,7 @@ p.rxSync.carrierPll.enable = true;
 p.rxSync.carrierPll.alpha = 0.02;   % 相位环比例增益
 p.rxSync.carrierPll.beta = 3e-4;    % 频率环积分增益
 p.rxSync.carrierPll.maxFreq = 0.1;  % 归一化角频率上限（rad/sample）
-% 早迟门DLL（用于维持符号定时对齐）
+% 早迟门DLL（在2 sps -> 1 sps抽样后做细跟踪；默认关闭，需单独调参）
 p.rxSync.timingDll = struct();
 p.rxSync.timingDll.enable = false;
 p.rxSync.timingDll.earlyLateSpacing = 0.45;

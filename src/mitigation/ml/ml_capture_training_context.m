@@ -1,10 +1,12 @@
 function ctx = ml_capture_training_context(p)
-%ML_CAPTURE_TRAINING_CONTEXT  提取与符号级脉冲训练直接相关的链路上下文。
+%ML_CAPTURE_TRAINING_CONTEXT  提取与新分层接收架构训练直接相关的链路上下文。
 arguments
     p (1,1) struct
 end
 
 ctx = struct();
+ctx.domain = "raw_samples";
+ctx.rxArchitecture = "sample_mitigation_mf_2sps_sync_1sps_decode";
 ctx.rngSeed = local_get_numeric(p, "rngSeed", NaN);
 ctx.mod = struct("type", string(p.mod.type));
 ctx.waveform = struct( ...
@@ -27,10 +29,16 @@ ctx.fh = struct( ...
     "enable", local_get_logical(p.fh, "enable", false), ...
     "nFreqs", local_get_numeric(p.fh, "nFreqs", NaN), ...
     "symbolsPerHop", local_get_numeric(p.fh, "symbolsPerHop", NaN));
+ctx.dsss = struct( ...
+    "enable", local_get_nested_logical(p, "dsss", "enable", false), ...
+    "spreadFactor", local_get_nested_numeric(p, "dsss", "spreadFactor", NaN));
 ctx.rxSync = struct( ...
     "compensateCarrier", local_get_logical(p.rxSync, "compensateCarrier", false), ...
     "estimateCfo", local_get_logical(p.rxSync, "estimateCfo", false), ...
     "fractionalTiming", local_get_logical(p.rxSync, "enableFractionalTiming", false), ...
+    "fractionalRange", local_get_numeric(p.rxSync, "fractionalRange", NaN), ...
+    "fractionalStep", local_get_numeric(p.rxSync, "fractionalStep", NaN), ...
+    "timingDllEnable", local_get_nested_logical(p.rxSync, "timingDll", "enable", false), ...
     "carrierPllEnable", local_get_nested_logical(p.rxSync, "carrierPll", "enable", false));
 end
 
@@ -53,6 +61,14 @@ end
 function value = local_get_nested_logical(s, parentField, childField, defaultValue)
 if isfield(s, parentField) && isstruct(s.(parentField))
     value = local_get_logical(s.(parentField), childField, defaultValue);
+else
+    value = defaultValue;
+end
+end
+
+function value = local_get_nested_numeric(s, parentField, childField, defaultValue)
+if isfield(s, parentField) && isstruct(s.(parentField))
+    value = local_get_numeric(s.(parentField), childField, defaultValue);
 else
     value = defaultValue;
 end

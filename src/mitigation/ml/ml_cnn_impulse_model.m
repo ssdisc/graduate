@@ -13,7 +13,7 @@ model.name = "impulse_cnn_1d";
 model.type = "cnn_dl";
 model.trained = false;
 model.featureVersion = 2;
-model.trainingLogicVersion = 3;
+model.trainingLogicVersion = 4;
 model.featureNames = ["abs_r" "abs_over_median" "absdiff_abs" "phase_diff"];
 
 % 网络参数

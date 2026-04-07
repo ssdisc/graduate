@@ -87,6 +87,7 @@ switch lower(string(method))
         else
             model = ml_impulse_lr_model();
         end
+        local_require_trained_dl_model(model, "ml_blanking", mit);
         [mask, p] = ml_impulse_detect(r, model);
         rOut = r;
         rOut(mask) = 0;

@@ -13,9 +13,10 @@ if ~exist(modelDir, 'dir')
     mkdir(modelDir);
 end
 
-forceRetrain = false;
+forceRetrain = true;
 batchTag = string(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
 generalizedTrainArgs = local_generalized_training_args();
+impulseDlTrainArgs = local_impulse_dl_training_args();
 selectorTrainArgs = local_selector_training_args();
 requiredModels = local_required_ml_models(p.mitigation.methods);
 
@@ -37,7 +38,19 @@ fprintf('========================================\n\n');
 
 if requiredModels.lr
     lrModelPath = fullfile(modelDir, 'impulse_lr_model.mat');
-    if forceRetrain
+    if ~forceRetrain
+        [p.mitigation.ml, loadedLr, loadedLrPath] = load_pretrained_model(lrModelPath, @ml_impulse_lr_model);
+        loadedLr = loadedLr && isfield(p.mitigation.ml, 'trained') && logical(p.mitigation.ml.trained);
+        if ~loadedLr
+            loadedLrPath = "";
+        end
+    else
+        loadedLr = false;
+        loadedLrPath = "";
+    end
+    if loadedLr
+        fprintf('Loaded LR model: %s\n\n', char(loadedLrPath));
+    else
         fprintf('Training LR model...\n');
         [p.mitigation.ml, lrReport] = ml_train_impulse_lr(p, ...
             generalizedTrainArgs{:}, ...
@@ -46,13 +59,6 @@ if requiredModels.lr
             'saveTag', batchTag, 'savedBy', "run_demo");
         fprintf('LR model saved (latest): %s\n', char(lrReport.artifacts.latestPath));
         fprintf('LR model saved (batch): %s\n\n', char(lrReport.artifacts.batchPath));
-    else
-        [p.mitigation.ml, loadedLr, loadedLrPath] = load_pretrained_model(lrModelPath, @ml_impulse_lr_model);
-        if loadedLr
-            fprintf('Loaded LR model: %s\n\n', char(loadedLrPath));
-        else
-            fprintf('Using built-in LR model parameters.\n\n');
-        end
     end
 else
     fprintf('Skipping LR model load: current methods do not use ml_blanking.\n\n');
@@ -76,7 +82,7 @@ if requiredModels.cnn
         fprintf('Training CNN model...\n');
         [p.mitigation.mlCnn, cnnReport] = ml_train_cnn_impulse(p, ...
             generalizedTrainArgs{:}, ...
-            'nBlocks', 1000, 'blockLen', 1024, 'epochs', 100, ...
+            impulseDlTrainArgs{:}, ...
             'saveArtifacts', true, 'saveDir', string(modelDir), ...
             'saveTag', batchTag, 'savedBy', "run_demo");
         fprintf('CNN model saved (latest): %s\n', char(cnnReport.artifacts.latestPath));
@@ -104,7 +110,7 @@ if requiredModels.gru
         fprintf('Training GRU model...\n');
         [p.mitigation.mlGru, gruReport] = ml_train_gru_impulse(p, ...
             generalizedTrainArgs{:}, ...
-            'nBlocks', 1000, 'blockLen', 256, 'epochs', 100, ...
+            impulseDlTrainArgs{:}, ...
             'saveArtifacts', true, 'saveDir', string(modelDir), ...
             'saveTag', batchTag, 'savedBy', "run_demo");
         fprintf('GRU model saved (latest): %s\n', char(gruReport.artifacts.latestPath));
@@ -189,6 +195,15 @@ args = { ...
     'multipathRayleighProbability', 0.50, ...
     'maxAdditionalImpairments', 2, ...
     'verbose', true};
+end
+
+function args = local_impulse_dl_training_args()
+args = { ...
+    'nBlocks', 1000, ...
+    'blockLen', 1024, ...
+    'epochs', 100, ...
+    'batchSize', 64, ...
+    'lr', 1e-3};
 end
 
 function required = local_required_ml_models(methods)
