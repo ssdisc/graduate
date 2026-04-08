@@ -22,6 +22,7 @@ p.sim.resultsDir = fullfile(pwd, "results");
 p.sim.useParallel = true;
 p.sim.nWorkers = 16;
 p.sim.parallelMode = "frames"; % "methods"(按抑制方法并行) | "frames"(按帧并行)
+p.sim.commonRandomFramesAcrossPoints = true; % 同一frameIdx在全Eb/N0/JSR网格复用同一组随机实现，降低曲线抖动
 
 % 发射端记录/评估口径
 p.tx = struct();

@@ -13,7 +13,7 @@ if ~exist(modelDir, 'dir')
     mkdir(modelDir);
 end
 
-forceRetrain = true;
+forceRetrain = false;
 batchTag = string(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
 generalizedTrainArgs = local_generalized_training_args();
 impulseDlTrainArgs = local_impulse_dl_training_args();

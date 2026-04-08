@@ -30,6 +30,10 @@ if ~isfield(p.rxSync.carrierPll, "enable"); p.rxSync.carrierPll.enable = false; 
 if ~isfield(p.rxSync.carrierPll, "alpha"); p.rxSync.carrierPll.alpha = 0.02; end
 if ~isfield(p.rxSync.carrierPll, "beta"); p.rxSync.carrierPll.beta = 3e-4; end
 if ~isfield(p.rxSync.carrierPll, "maxFreq"); p.rxSync.carrierPll.maxFreq = 0.1; end
+commonRandomFramesAcrossPoints = false;
+if isfield(p, "sim") && isstruct(p.sim) && isfield(p.sim, "commonRandomFramesAcrossPoints")
+    commonRandomFramesAcrossPoints = logical(p.sim.commonRandomFramesAcrossPoints);
+end
 bobRxSync = p.rxSync;
 bobMitigation = p.mitigation;
 waveform = resolve_waveform_cfg(p);
@@ -416,7 +420,7 @@ for ie = 1:numel(EbN0dBList)
         end
 
         % 避免Warden评估消耗全局RNG，导致Bob/Eve结果随“是否开启Warden”而变化。
-        wardenRngScope = rng_scope(double(p.rngSeed) + 100000 + ie); %#ok<NASGU>
+        wardenRngScope = rng_scope(local_point_seed_base_local(double(p.rngSeed) + 100000, ie, commonRandomFramesAcrossPoints)); %#ok<NASGU>
         det = warden_energy_detector( ...
             wardenBudget.rxAmplitudeScale(ie) * txSymForChannel, N0Warden, channelSample, maxDelaySamples, wardenCfg);
         clear wardenRngScope
@@ -514,10 +518,7 @@ for ie = 1:numel(EbN0dBList)
     frameCtx.useParallelMethods = useParallelMethods;
     frameCtx.syncCfgUseBob = syncCfgUseBob;
     frameCtx.syncCfgUseEve = syncCfgUseEve;
-    frameCtx.frameSeedBase = NaN;
-    if useParallelFrames
-        frameCtx.frameSeedBase = local_point_frame_seed_base_local(p.rngSeed, ie);
-    end
+    frameCtx.frameSeedBase = local_point_seed_base_local(p.rngSeed, ie, commonRandomFramesAcrossPoints);
 
     frameOutputs = cell(p.sim.nFramesPerPoint, 1);
     if useParallelFrames
@@ -1047,10 +1048,15 @@ else
 end
 end
 
-function baseSeed = local_point_frame_seed_base_local(globalSeed, pointIdx)
+function baseSeed = local_point_seed_base_local(globalSeed, pointIdx, commonAcrossPoints)
 globalSeed = round(double(globalSeed));
 pointIdx = round(double(pointIdx));
-baseSeed = globalSeed + 1000000 * pointIdx;
+commonAcrossPoints = logical(commonAcrossPoints);
+pointSalt = 0;
+if ~commonAcrossPoints
+    pointSalt = 1000000 * pointIdx;
+end
+baseSeed = mod(globalSeed + pointSalt - 1, 2^32 - 1) + 1;
 end
 
 function seed = local_frame_seed_local(baseSeed, frameIdx)
