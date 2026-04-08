@@ -19,7 +19,7 @@ if ~isfolder(outDir)
         "Output directory does not exist: %s", outDir);
 end
 
-local_require_fields(results, ["methods" "ebN0dB" "jsrDb" "scan" "ber" "per" "packetDiagnostics" "linkBudget" "spectrum" "tx" "params"]);
+local_require_fields(results, ["methods" "ebN0dB" "jsrDb" "scan" "ber" "rawPer" "per" "packetDiagnostics" "linkBudget" "spectrum" "tx" "params"]);
 local_require_fields(results.packetDiagnostics, "bob", "results.packetDiagnostics");
 local_require_fields(results.linkBudget, "bob", "results.linkBudget");
 local_require_fields(results.params, ["sim" "mod" "payload" "frame" "fh" "channel" "fec" "dsss"], "results.params");
@@ -36,6 +36,7 @@ if numel(bobJsrDb) ~= nPoints
 end
 
 berBob = local_require_metric_matrix(results.ber, nMethods, nPoints, "results.ber");
+rawPerBob = local_require_metric_matrix(results.rawPer, nMethods, nPoints, "results.rawPer");
 perBob = local_require_metric_matrix(results.per, nMethods, nPoints, "results.per");
 [commMetricsBob, compMetricsBob] = local_get_image_metrics(results, nMethods, nPoints, "results");
 scan = local_require_scan_struct(results.scan, nPoints, "results.scan");
@@ -44,6 +45,7 @@ bobDiag = results.packetDiagnostics.bob;
 frontEndBob = local_require_point_vector(bobDiag, "frontEndSuccessRate", nPoints, "results.packetDiagnostics.bob");
 headerBob = local_require_point_vector(bobDiag, "headerSuccessRate", nPoints, "results.packetDiagnostics.bob");
 payloadBob = local_require_method_point_matrix(bobDiag, "payloadSuccessRate", nMethods, nPoints, "results.packetDiagnostics.bob");
+rawPayloadBob = local_require_method_point_matrix(bobDiag, "rawPayloadSuccessRate", nMethods, nPoints, "results.packetDiagnostics.bob");
 
 bobBudget = local_require_budget_struct(results.linkBudget.bob, nPoints, "results.linkBudget.bob");
 
@@ -51,7 +53,7 @@ runSummary = local_build_run_summary_table(results, methods, nMethods, nPoints, 
 pointOverview = local_build_point_overview_table( ...
     bobEbN0dB, bobJsrDb, bobBudget, scan, frontEndBob, headerBob, results, nPoints);
 metricsBob = local_build_metric_table( ...
-    methods, "bob", bobBudget.txPowerDb, bobEbN0dB, bobJsrDb, scan, berBob, perBob, payloadBob, ...
+    methods, "bob", bobBudget.txPowerDb, bobEbN0dB, bobJsrDb, scan, berBob, rawPerBob, perBob, rawPayloadBob, payloadBob, ...
     commMetricsBob, compMetricsBob, frontEndBob, headerBob);
 
 writetable(runSummary, fullfile(outDir, "run_summary.csv"));
@@ -59,7 +61,7 @@ writetable(pointOverview, fullfile(outDir, "points_overview.csv"));
 writetable(metricsBob, fullfile(outDir, "metrics_bob.csv"));
 
 if isfield(results, "eve")
-    local_require_fields(results.eve, ["ebN0dB" "ber" "per" "packetDiagnostics"], "results.eve");
+    local_require_fields(results.eve, ["ebN0dB" "ber" "rawPer" "per" "packetDiagnostics"], "results.eve");
     local_require_fields(results.packetDiagnostics, "bob", "results.packetDiagnostics");
     if ~isfield(results.linkBudget, "eve")
         error("export_thesis_tables:MissingEveBudget", ...
@@ -73,6 +75,7 @@ if isfield(results, "eve")
     end
 
     berEve = local_require_metric_matrix(results.eve.ber, nMethods, nPoints, "results.eve.ber");
+    rawPerEve = local_require_metric_matrix(results.eve.rawPer, nMethods, nPoints, "results.eve.rawPer");
     perEve = local_require_metric_matrix(results.eve.per, nMethods, nPoints, "results.eve.per");
     [commMetricsEve, compMetricsEve] = local_get_image_metrics(results.eve, nMethods, nPoints, "results.eve");
 
@@ -80,11 +83,12 @@ if isfield(results, "eve")
     frontEndEve = local_require_point_vector(eveDiag, "frontEndSuccessRate", nPoints, "results.eve.packetDiagnostics");
     headerEve = local_require_point_vector(eveDiag, "headerSuccessRate", nPoints, "results.eve.packetDiagnostics");
     payloadEve = local_require_method_point_matrix(eveDiag, "payloadSuccessRate", nMethods, nPoints, "results.eve.packetDiagnostics");
+    rawPayloadEve = local_require_method_point_matrix(eveDiag, "rawPayloadSuccessRate", nMethods, nPoints, "results.eve.packetDiagnostics");
 
     eveBudget = local_require_budget_struct(results.linkBudget.eve, nPoints, "results.linkBudget.eve");
 
     metricsEve = local_build_metric_table( ...
-        methods, "eve", eveBudget.txPowerDb, eveEbN0dB, bobJsrDb, scan, berEve, perEve, payloadEve, ...
+        methods, "eve", eveBudget.txPowerDb, eveEbN0dB, bobJsrDb, scan, berEve, rawPerEve, perEve, rawPayloadEve, payloadEve, ...
         commMetricsEve, compMetricsEve, frontEndEve, headerEve);
     writetable(metricsEve, fullfile(outDir, "metrics_eve.csv"));
 end
@@ -290,13 +294,15 @@ t = table( ...
         'wardenEbN0dB'});
 end
 
-function t = local_build_metric_table(methods, roleName, txPowerDb, ebN0dB, jsrDb, scan, ber, per, payloadSuccessRate, commMetrics, compMetrics, frontEndSuccessRate, headerSuccessRate)
+function t = local_build_metric_table(methods, roleName, txPowerDb, ebN0dB, jsrDb, scan, ber, rawPer, per, rawPayloadSuccessRate, payloadSuccessRate, commMetrics, compMetrics, frontEndSuccessRate, headerSuccessRate)
 nMethods = numel(methods);
 nPoints = numel(ebN0dB);
 pointIndex = repmat((1:nPoints).', nMethods, 1);
 methodIndex = repelem((1:nMethods).', nPoints, 1);
 berVec = reshape(ber.', [], 1);
+rawPerVec = reshape(rawPer.', [], 1);
 perVec = reshape(per.', [], 1);
+rawPayloadVec = reshape(rawPayloadSuccessRate.', [], 1);
 payloadVec = reshape(payloadSuccessRate.', [], 1);
 commMseVec = reshape(commMetrics.mse.', [], 1);
 commPsnrVec = reshape(commMetrics.psnr.', [], 1);
@@ -318,7 +324,9 @@ t = table( ...
     repmat(double(frontEndSuccessRate(:)), nMethods, 1), ...
     repmat(double(headerSuccessRate(:)), nMethods, 1), ...
     berVec, ...
+    rawPerVec, ...
     perVec, ...
+    rawPayloadVec, ...
     payloadVec, ...
     commMseVec, ...
     commPsnrVec, ...
@@ -328,7 +336,7 @@ t = table( ...
     compSsimVec, ...
     'VariableNames', { ...
         'role', 'methodIndex', 'method', 'pointIndex', 'snrIndex', 'jsrIndex', 'txPowerDb', 'ebN0dB', 'jsrDb', ...
-        'frontEndSuccessRate', 'headerSuccessRate', 'ber', 'per', 'payloadSuccessRate', ...
+        'frontEndSuccessRate', 'headerSuccessRate', 'ber', 'rawPer', 'per', 'rawPayloadSuccessRate', 'payloadSuccessRate', ...
         'mseComm', 'psnrComm', 'ssimComm', 'mseComp', 'psnrComp', 'ssimComp'});
 end
 

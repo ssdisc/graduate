@@ -145,6 +145,7 @@ packetHeaderBobVals = nan(1, numel(EbN0dBList));
 packetFrontEndBobMethodVals = nan(numel(methods), numel(EbN0dBList));
 packetHeaderBobMethodVals = nan(numel(methods), numel(EbN0dBList));
 packetSuccessBobVals = nan(numel(methods), numel(EbN0dBList));
+rawPacketSuccessBobVals = nan(numel(methods), numel(EbN0dBList));
 adaptiveDiagCfgGlobal = local_adaptive_frontend_catalog_local(bobMitigation);
 adaptiveClassBobVals = zeros(numel(adaptiveDiagCfgGlobal.classNames), numel(methods), numel(EbN0dBList));
 adaptiveActionBobVals = zeros(numel(adaptiveDiagCfgGlobal.actionNames), numel(methods), numel(EbN0dBList));
@@ -188,6 +189,7 @@ if eveEnabled
     packetFrontEndEveMethodVals = nan(numel(methods), numel(EbN0dBList));
     packetHeaderEveMethodVals = nan(numel(methods), numel(EbN0dBList));
     packetSuccessEveVals = nan(numel(methods), numel(EbN0dBList));
+    rawPacketSuccessEveVals = nan(numel(methods), numel(EbN0dBList));
     mseCommEveVals = nan(numel(methods), numel(EbN0dBList));
     psnrCommEveVals = nan(numel(methods), numel(EbN0dBList));
     ssimCommEveVals = nan(numel(methods), numel(EbN0dBList));
@@ -433,6 +435,7 @@ for ie = 1:numel(EbN0dBList)
     packetFrontEndBobAcc = zeros(numel(methods), 1);
     packetHeaderBobAcc = zeros(numel(methods), 1);
     packetSuccessBobAcc = zeros(numel(methods), 1);
+    rawPacketSuccessBobAcc = zeros(numel(methods), 1);
     adaptiveClassBobAcc = zeros(numel(adaptiveDiagCfgGlobal.classNames), numel(methods));
     adaptiveActionBobAcc = zeros(numel(adaptiveDiagCfgGlobal.actionNames), numel(methods));
     adaptivePathBobAcc = zeros(numel(adaptiveDiagCfgGlobal.bootstrapPaths), numel(methods));
@@ -449,6 +452,7 @@ for ie = 1:numel(EbN0dBList)
         packetFrontEndEveAcc = zeros(numel(methods), 1);
         packetHeaderEveAcc = zeros(numel(methods), 1);
         packetSuccessEveAcc = zeros(numel(methods), 1);
+        rawPacketSuccessEveAcc = zeros(numel(methods), 1);
         metricAccCommEve = init_image_metric_acc_local(numel(methods));
         metricAccCompEve = init_image_metric_acc_local(numel(methods));
         exampleCandidatesEve = init_example_candidate_bank_local(numel(methods), p.sim.nFramesPerPoint);
@@ -549,6 +553,7 @@ for ie = 1:numel(EbN0dBList)
         nErr = nErr + bobFrame.nErr;
         nTot = nTot + bobFrame.nTot;
         packetSuccessBobAcc = packetSuccessBobAcc + bobFrame.packetSuccessRate;
+        rawPacketSuccessBobAcc = rawPacketSuccessBobAcc + bobFrame.rawPacketSuccessRate;
         adaptiveClassBobAcc = adaptiveClassBobAcc + bobFrame.adaptiveFrontEnd.classCounts;
         adaptiveActionBobAcc = adaptiveActionBobAcc + bobFrame.adaptiveFrontEnd.actionCounts;
         adaptivePathBobAcc = adaptivePathBobAcc + bobFrame.adaptiveFrontEnd.pathCounts;
@@ -569,6 +574,7 @@ for ie = 1:numel(EbN0dBList)
             nErrEve = nErrEve + eveFrame.nErr;
             nTotEve = nTotEve + eveFrame.nTot;
             packetSuccessEveAcc = packetSuccessEveAcc + eveFrame.packetSuccessRate;
+            rawPacketSuccessEveAcc = rawPacketSuccessEveAcc + eveFrame.rawPacketSuccessRate;
             for im = 1:numel(methods)
                 metricAccCommEve = accumulate_image_metric_acc_local(metricAccCommEve, im, ...
                     eveFrame.metricsComm.mse(im), eveFrame.metricsComm.psnr(im), eveFrame.metricsComm.ssim(im));
@@ -585,6 +591,7 @@ for ie = 1:numel(EbN0dBList)
     packetFrontEndBobVals(ie) = mean(packetFrontEndBobMethodVals(:, ie));
     packetHeaderBobVals(ie) = mean(packetHeaderBobMethodVals(:, ie));
     packetSuccessBobVals(:, ie) = packetSuccessBobAcc / p.sim.nFramesPerPoint;
+    rawPacketSuccessBobVals(:, ie) = rawPacketSuccessBobAcc / p.sim.nFramesPerPoint;
     adaptiveClassBobVals(:, :, ie) = adaptiveClassBobAcc;
     adaptiveActionBobVals(:, :, ie) = adaptiveActionBobAcc;
     adaptivePathBobVals(:, :, ie) = adaptivePathBobAcc;
@@ -616,6 +623,7 @@ for ie = 1:numel(EbN0dBList)
         packetFrontEndEveVals(ie) = mean(packetFrontEndEveMethodVals(:, ie));
         packetHeaderEveVals(ie) = mean(packetHeaderEveMethodVals(:, ie));
         packetSuccessEveVals(:, ie) = packetSuccessEveAcc / p.sim.nFramesPerPoint;
+        rawPacketSuccessEveVals(:, ie) = rawPacketSuccessEveAcc / p.sim.nFramesPerPoint;
 
         [mseOutCommEve, psnrOutCommEve, ssimOutCommEve] = finalize_image_metric_acc_local(metricAccCommEve);
         [mseOutCompEve, psnrOutCompEve, ssimOutCompEve] = finalize_image_metric_acc_local(metricAccCompEve);
@@ -671,6 +679,7 @@ results.methods = methods;
 results.tx = txReport;
 results.linkBudget = linkBudget;
 results.ber = ber;
+results.rawPer = max(min(1 - rawPacketSuccessBobVals, 1), 0);
 results.per = max(min(1 - packetSuccessBobVals, 1), 0);
 results.packetDiagnostics = struct();
 results.packetDiagnostics.bob = struct( ...
@@ -678,6 +687,7 @@ results.packetDiagnostics.bob = struct( ...
     "headerSuccessRate", packetHeaderBobVals, ...
     "frontEndSuccessRateByMethod", packetFrontEndBobMethodVals, ...
     "headerSuccessRateByMethod", packetHeaderBobMethodVals, ...
+    "rawPayloadSuccessRate", rawPacketSuccessBobVals, ...
     "payloadSuccessRate", packetSuccessBobVals, ...
     "adaptiveFrontEnd", struct( ...
         "classNames", adaptiveDiagCfgGlobal.classNames, ...
@@ -723,12 +733,14 @@ if eveEnabled
     results.eve.jsrDb = JsrDbList;
     results.eve.scan = results.scan;
     results.eve.ber = berEve;
+    results.eve.rawPer = max(min(1 - rawPacketSuccessEveVals, 1), 0);
     results.eve.per = max(min(1 - packetSuccessEveVals, 1), 0);
     results.eve.packetDiagnostics = struct( ...
         "frontEndSuccessRate", packetFrontEndEveVals, ...
         "headerSuccessRate", packetHeaderEveVals, ...
         "frontEndSuccessRateByMethod", packetFrontEndEveMethodVals, ...
         "headerSuccessRateByMethod", packetHeaderEveMethodVals, ...
+        "rawPayloadSuccessRate", rawPacketSuccessEveVals, ...
         "payloadSuccessRate", packetSuccessEveVals);
     results.eve.assumptions = struct( ...
         "scramble", string(scrambleAssumptionEve), ...
@@ -1158,6 +1170,7 @@ mseCompBob = nan(nMethods, 1);
 psnrCompBob = nan(nMethods, 1);
 ssimCompBob = nan(nMethods, 1);
 packetSuccessBob = zeros(nMethods, 1);
+rawPacketSuccessBob = zeros(nMethods, 1);
 exampleBob = cell(nMethods, 1);
 adaptiveDiagCfg = local_adaptive_frontend_catalog_local(bobMitigation);
 adaptiveClassBob = zeros(numel(adaptiveDiagCfg.classNames), nMethods);
@@ -1178,6 +1191,7 @@ mseCompEve = nan(nMethods, 1);
 psnrCompEve = nan(nMethods, 1);
 ssimCompEve = nan(nMethods, 1);
 packetSuccessEve = zeros(nMethods, 1);
+rawPacketSuccessEve = zeros(nMethods, 1);
 exampleEve = cell(nMethods, 1);
 
 useParfor = logical(useParallelMethods) && local_has_parallel_pool_local();
@@ -1213,6 +1227,7 @@ if useParfor
             psnrCompBob(im) = bobRes.psnrComp;
             ssimCompBob(im) = bobRes.ssimComp;
             packetSuccessBob(im) = bobRes.packetSuccessRate;
+            rawPacketSuccessBob(im) = bobRes.rawPacketSuccessRate;
             exampleBob{im} = bobRes.example;
             adaptiveClassBob(:, im) = bobRes.adaptiveFrontEnd.classCounts;
             adaptiveActionBob(:, im) = bobRes.adaptiveFrontEnd.actionCounts;
@@ -1232,6 +1247,7 @@ if useParfor
                 psnrCompEve(im) = eveRes.psnrComp;
                 ssimCompEve(im) = eveRes.ssimComp;
                 packetSuccessEve(im) = eveRes.packetSuccessRate;
+                rawPacketSuccessEve(im) = eveRes.rawPacketSuccessRate;
                 exampleEve{im} = eveRes.example;
             end
         end
@@ -1257,6 +1273,7 @@ if useParfor
         psnrCompBob = nan(nMethods, 1);
         ssimCompBob = nan(nMethods, 1);
         packetSuccessBob = zeros(nMethods, 1);
+        rawPacketSuccessBob = zeros(nMethods, 1);
         exampleBob = cell(nMethods, 1);
         adaptiveClassBob = zeros(numel(adaptiveDiagCfg.classNames), nMethods);
         adaptiveActionBob = zeros(numel(adaptiveDiagCfg.actionNames), nMethods);
@@ -1275,6 +1292,7 @@ if useParfor
         psnrCompEve = nan(nMethods, 1);
         ssimCompEve = nan(nMethods, 1);
         packetSuccessEve = zeros(nMethods, 1);
+        rawPacketSuccessEve = zeros(nMethods, 1);
         exampleEve = cell(nMethods, 1);
     end
 end
@@ -1310,6 +1328,7 @@ if ~useParfor
         psnrCompBob(im) = bobRes.psnrComp;
         ssimCompBob(im) = bobRes.ssimComp;
         packetSuccessBob(im) = bobRes.packetSuccessRate;
+        rawPacketSuccessBob(im) = bobRes.rawPacketSuccessRate;
         exampleBob{im} = bobRes.example;
         adaptiveClassBob(:, im) = bobRes.adaptiveFrontEnd.classCounts;
         adaptiveActionBob(:, im) = bobRes.adaptiveFrontEnd.actionCounts;
@@ -1329,6 +1348,7 @@ if ~useParfor
             psnrCompEve(im) = eveRes.psnrComp;
             ssimCompEve(im) = eveRes.ssimComp;
             packetSuccessEve(im) = eveRes.packetSuccessRate;
+            rawPacketSuccessEve(im) = eveRes.rawPacketSuccessRate;
             exampleEve{im} = eveRes.example;
         end
     end
@@ -1340,6 +1360,7 @@ bobFrame.nTot = nTotBob;
 bobFrame.frontEndSuccessRate = frontEndBob;
 bobFrame.headerSuccessRate = headerBob;
 bobFrame.packetSuccessRate = packetSuccessBob;
+bobFrame.rawPacketSuccessRate = rawPacketSuccessBob;
 bobFrame.metricsComm = struct("mse", mseCommBob, "psnr", psnrCommBob, "ssim", ssimCommBob);
 bobFrame.metricsComp = struct("mse", mseCompBob, "psnr", psnrCompBob, "ssim", ssimCompBob);
 bobFrame.adaptiveFrontEnd = struct( ...
@@ -1360,6 +1381,7 @@ if eveEnabled
     eveFrame.frontEndSuccessRate = frontEndEve;
     eveFrame.headerSuccessRate = headerEve;
     eveFrame.packetSuccessRate = packetSuccessEve;
+    eveFrame.rawPacketSuccessRate = rawPacketSuccessEve;
     eveFrame.metricsComm = struct("mse", mseCommEve, "psnr", psnrCommEve, "ssim", ssimCommEve);
     eveFrame.metricsComp = struct("mse", mseCompEve, "psnr", psnrCompEve, "ssim", ssimCompEve);
     eveFrame.example = exampleEve;
