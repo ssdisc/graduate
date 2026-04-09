@@ -17,7 +17,7 @@ forceRetrain = false;
 batchTag = string(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
 generalizedTrainArgs = local_generalized_training_args();
 impulseDlTrainArgs = local_impulse_dl_training_args();
-selectorTrainArgs = local_selector_training_args();
+selectorTrainArgs = local_selector_training_args(p);
 requiredModels = local_required_ml_models(p.mitigation.methods);
 
 fprintf('========================================\n');
@@ -223,9 +223,41 @@ else
 end
 end
 
-function args = local_selector_training_args()
+function args = local_selector_training_args(p)
+dataSymbolsPerBlock = local_selector_training_symbol_count(p);
 args = { ...
     'ebN0dBRange', [-4, 16], ...
+    'dataSymbolsPerBlock', dataSymbolsPerBlock, ...
     'maxRetriesPerBlock', 10, ...
     'verbose', true};
+end
+
+function nSym = local_selector_training_symbol_count(p)
+bitsPerSym = local_bits_per_symbol(p.mod);
+payloadBits = max(8, round(double(p.packet.payloadBitsPerPacket)));
+payloadBits = 8 * floor(payloadBits / 8);
+codedBits = fec_coded_bits_length(payloadBits, p.fec);
+nSym = ceil(double(codedBits) / double(bitsPerSym));
+if isfield(p, "dsss") && isstruct(p.dsss)
+    nSym = nSym * dsss_effective_spread_factor(p.dsss);
+end
+nSym = max(1024, min(nSym, 4096));
+if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable ...
+        && isfield(p.fh, "symbolsPerHop") && double(p.fh.symbolsPerHop) > 0
+    hopLen = round(double(p.fh.symbolsPerHop));
+    nSym = hopLen * ceil(double(nSym) / double(hopLen));
+end
+end
+
+function bitsPerSym = local_bits_per_symbol(modCfg)
+switch upper(string(modCfg.type))
+    case "BPSK"
+        bitsPerSym = 1;
+    case "QPSK"
+        bitsPerSym = 2;
+    case "MSK"
+        bitsPerSym = 1;
+    otherwise
+        error("Unsupported modulation for selector training args: %s", char(modCfg.type));
+end
 end

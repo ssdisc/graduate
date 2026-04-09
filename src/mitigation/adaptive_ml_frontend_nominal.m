@@ -35,10 +35,15 @@ end
 
 selectorModel = local_require_selector_model(mitigation);
 channelLenSymbols = local_channel_len_symbols(p.channel, waveform);
-[featureRow, ~] = adaptive_frontend_extract_features(capture, syncSymRef, N0, ...
+[featureRow, featureInfo] = adaptive_frontend_extract_features(capture, syncSymRef, N0, ...
     "channelLenSymbols", channelLenSymbols);
 [className, confidence, classProbabilities] = ml_predict_interference_class(featureRow, selectorModel);
 actionName = local_map_class_to_action(mitigation, className);
+probeObs = capture.rFull(min(numel(syncSymRef) + 1, numel(capture.rFull)):end);
+if numel(probeObs) < 32
+    probeObs = capture.rFull;
+end
+[className, actionName] = local_apply_narrowband_guard(mitigation, className, actionName, featureInfo, probeObs);
 
 front.selectedClass = className;
 front.selectedAction = actionName;
@@ -92,6 +97,83 @@ if ~isfield(cfg.classToAction, fieldName)
     error("Missing classToAction mapping for class %s.", char(className));
 end
 actionName = string(cfg.classToAction.(fieldName));
+end
+
+function [className, actionName] = local_apply_narrowband_guard(mitigation, className, actionName, featureInfo, obs)
+if ~(isfield(mitigation, "adaptiveFrontend") && isstruct(mitigation.adaptiveFrontend) ...
+        && isfield(mitigation.adaptiveFrontend, "narrowbandGuard") ...
+        && isstruct(mitigation.adaptiveFrontend.narrowbandGuard))
+    return;
+end
+
+guard = mitigation.adaptiveFrontend.narrowbandGuard;
+if ~(isfield(guard, "enable") && logical(guard.enable))
+    return;
+end
+
+obs = obs(:);
+if numel(obs) < 32
+    return;
+end
+
+probeCfg = mitigation.fftBandstop;
+if isfield(guard, "probePeakRatio") && ~isempty(guard.probePeakRatio)
+    probeCfg.peakRatio = double(guard.probePeakRatio);
+end
+[~, probeInfo] = fft_bandstop_filter(obs, probeCfg);
+if ~(isfield(probeInfo, "applied") && probeInfo.applied && ~isempty(probeInfo.selectedBandwidthFrac))
+    return;
+end
+
+bwFrac = max(double(probeInfo.selectedBandwidthFrac));
+metrics = struct();
+if isfield(featureInfo, "metrics") && isstruct(featureInfo.metrics)
+    metrics = featureInfo.metrics;
+end
+
+overrideClasses = ["clean" "multipath"];
+if isfield(guard, "overrideClasses") && ~isempty(guard.overrideClasses)
+    overrideClasses = string(guard.overrideClasses(:).');
+end
+
+minBw = local_guard_scalar(guard, "minBandwidthFrac", 0.025);
+maxBw = local_guard_scalar(guard, "maxBandwidthFrac", 0.22);
+toneBw = local_guard_scalar(guard, "toneBandwidthFrac", 0.025);
+minFftPeakRatio = local_guard_scalar(guard, "minFftPeakRatio", 6.0);
+fftPeakRatio = max(local_metric_scalar(metrics, "fftPeakRatio"), max(double(probeInfo.peakRatios)));
+narrowbandLike = bwFrac >= minBw && bwFrac <= maxBw ...
+    && fftPeakRatio >= minFftPeakRatio;
+
+if className == "tone" && bwFrac >= toneBw
+    className = "narrowband";
+    actionName = "fft_bandstop";
+    return;
+end
+
+if any(className == overrideClasses) && narrowbandLike
+    className = "narrowband";
+    actionName = "fft_bandstop";
+end
+end
+
+function value = local_guard_scalar(cfg, fieldName, defaultValue)
+value = double(defaultValue);
+if isfield(cfg, fieldName) && ~isempty(cfg.(fieldName))
+    value = double(cfg.(fieldName));
+end
+if ~(isscalar(value) && isfinite(value))
+    error("adaptiveFrontend.narrowbandGuard.%s must be a finite scalar.", fieldName);
+end
+end
+
+function value = local_metric_scalar(metrics, fieldName)
+value = 0;
+if isfield(metrics, fieldName) && ~isempty(metrics.(fieldName))
+    value = double(metrics.(fieldName));
+end
+if ~(isscalar(value) && isfinite(value))
+    value = 0;
+end
 end
 
 function Lh = local_channel_len_symbols(channelCfg, waveform)
