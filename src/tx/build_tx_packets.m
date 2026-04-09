@@ -66,6 +66,7 @@ phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
 [~, shortSyncSym] = make_packet_sync(p.frame, 2);
 
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
+phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh);
 dsssEnable = isfield(p, 'dsss') && isfield(p.dsss, 'enable') && p.dsss.enable ...
     && dsss_effective_spread_factor(p.dsss) > 1;
 packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...
@@ -134,6 +135,12 @@ for pktIdx = 1:nPackets
     phyMeta.packetDataCrc16 = crc16_ccitt_bits(packetDataBits);
     [phyHeaderBits, phyHeader] = build_phy_header_bits(phyMeta, p.frame);
     phyHeaderSym = encode_phy_header_symbols(phyHeaderBits, p.frame, p.fec);
+    if phyHeaderFhCfg.enable
+        [phyHeaderSymTx, phyHeaderHopInfo] = fh_modulate(phyHeaderSym, phyHeaderFhCfg);
+    else
+        phyHeaderSymTx = phyHeaderSym;
+        phyHeaderHopInfo = struct('enable', false);
+    end
 
     scrambleCfgPkt = derive_packet_scramble_cfg(p.scramble, pktIdx, offsetsPkt.scrambleOffsetBits);
     dataBitsTxScr = scramble_bits(packetDataBits, scrambleCfgPkt);
@@ -156,7 +163,7 @@ for pktIdx = 1:nPackets
     end
 
     [~, syncSymPkt, syncInfoPkt] = make_packet_sync(p.frame, pktIdx);
-    txSymPkt = [syncSymPkt; phyHeaderSym; dataSymHop];
+    txSymPkt = [syncSymPkt; phyHeaderSymTx; dataSymHop];
     txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
 
     txPackets(pktIdx).packetIndex = pktIdx;
@@ -185,6 +192,9 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).phyHeader = phyHeader;
     txPackets(pktIdx).phyHeaderBits = phyHeaderBits;
     txPackets(pktIdx).phyHeaderSym = phyHeaderSym;
+    txPackets(pktIdx).phyHeaderSymTx = phyHeaderSymTx;
+    txPackets(pktIdx).phyHeaderFhCfg = phyHeaderFhCfg;
+    txPackets(pktIdx).phyHeaderHopInfo = phyHeaderHopInfo;
     txPackets(pktIdx).stateOffsets = offsetsPkt;
     txPackets(pktIdx).scrambleCfg = scrambleCfgPkt;
     txPackets(pktIdx).dsssCfg = dsssCfgPkt;

@@ -2703,15 +2703,173 @@ if ~(isscalar(value) && isfinite(value))
 end
 end
 
-function hdrSymPrep = local_prepare_header_symbols_local(hdrSym, actionName, mitigation)
+function hdrSymPrep = local_prepare_header_symbols_local(hdrSym, actionName, mitigation, headerActionCtx)
 hdrSym = hdrSym(:);
 actionName = string(actionName);
+if nargin < 4 || isempty(headerActionCtx)
+    headerActionCtx = local_empty_header_action_ctx_local();
+end
 if actionName == "none"
     hdrSymPrep = hdrSym;
     return;
 end
 
+if logical(headerActionCtx.usePerHop) && double(headerActionCtx.hopLen) > 0 ...
+        && local_action_prefers_per_hop_local(actionName)
+    mitigationUse = mitigation;
+    if actionName == "fft_bandstop" && logical(headerActionCtx.useCustomBandstop)
+        mitigationUse.fftBandstop = headerActionCtx.bandstopCfg;
+    end
+    [hdrSymPrep, ~] = local_apply_action_per_hop_local(hdrSym, actionName, mitigationUse, headerActionCtx.hopLen);
+    return;
+end
+
+if actionName == "fft_bandstop" && logical(headerActionCtx.useCustomBandstop)
+    [hdrSymPrep, ~] = fft_bandstop_filter(hdrSym, headerActionCtx.bandstopCfg);
+    return;
+end
+
 [hdrSymPrep, ~] = mitigate_impulses(hdrSym, actionName, mitigation);
+end
+
+function headerActionCtx = local_empty_header_action_ctx_local()
+headerActionCtx = struct( ...
+    "useCustomBandstop", false, ...
+    "bandstopCfg", struct(), ...
+    "usePerHop", false, ...
+    "hopLen", 0);
+end
+
+function headerActionCtx = local_build_header_action_ctx_local(rFull, preLen, hdrLen, actionName, mitigation)
+headerActionCtx = local_empty_header_action_ctx_local();
+actionName = string(actionName);
+if actionName ~= "fft_bandstop"
+    return;
+end
+if ~(isfield(mitigation, "headerBandstop") && isstruct(mitigation.headerBandstop))
+    return;
+end
+cfg = mitigation.headerBandstop;
+if ~(isfield(cfg, "enable") && logical(cfg.enable))
+    return;
+end
+headerBandstopCfg = local_header_bandstop_cfg_local(mitigation);
+headerActionCtx.useCustomBandstop = true;
+headerActionCtx.bandstopCfg = headerBandstopCfg;
+
+rFull = rFull(:);
+obsStart = max(1, round(double(preLen)) + 1);
+if obsStart > numel(rFull)
+    return;
+end
+obsTargetLen = local_header_bandstop_scalar_local(cfg, "observationSymbols", 512);
+obsTargetLen = max(round(double(hdrLen)), obsTargetLen);
+obsStop = min(numel(rFull), obsStart + obsTargetLen - 1);
+obs = rFull(obsStart:obsStop);
+minObsLen = local_header_bandstop_scalar_local(cfg, "minObservationSymbols", 192);
+if numel(obs) < minObsLen
+    return;
+end
+
+probeCfg = mitigation.fftBandstop;
+probeCfg.forcedFreqBounds = zeros(0, 2);
+[~, probeInfo] = fft_bandstop_filter(obs, probeCfg);
+if ~(isfield(probeInfo, "applied") && probeInfo.applied ...
+        && isfield(probeInfo, "selectedFreqBounds") && ~isempty(probeInfo.selectedFreqBounds))
+    return;
+end
+
+headerActionCtx.bandstopCfg.forcedFreqBounds = double(probeInfo.selectedFreqBounds);
+end
+
+function value = local_header_bandstop_scalar_local(cfg, fieldName, defaultValue)
+value = double(defaultValue);
+if isfield(cfg, fieldName) && ~isempty(cfg.(fieldName))
+    value = double(cfg.(fieldName));
+end
+if ~(isscalar(value) && isfinite(value))
+    error("mitigation.headerBandstop.%s must be a finite scalar.", fieldName);
+end
+end
+
+function cfgOut = local_header_bandstop_cfg_local(mitigation)
+if ~(isfield(mitigation, "fftBandstop") && isstruct(mitigation.fftBandstop))
+    error("mitigation.fftBandstop is required for header bandstop.");
+end
+cfgOut = mitigation.fftBandstop;
+cfgOut.forcedFreqBounds = zeros(0, 2);
+if ~(isfield(mitigation, "headerBandstop") && isstruct(mitigation.headerBandstop))
+    return;
+end
+headerCfg = mitigation.headerBandstop;
+overrideFields = ["peakRatio" "edgeRatio" "maxBands" "mergeGapBins" "padBins" ...
+    "minBandBins" "smoothSpanBins" "fftOversample" "maxBandwidthFrac" ...
+    "minFreqAbs" "suppressToFloor"];
+for k = 1:numel(overrideFields)
+    fieldName = overrideFields(k);
+    if isfield(headerCfg, fieldName) && ~isempty(headerCfg.(fieldName))
+        cfgOut.(fieldName) = headerCfg.(fieldName);
+    end
+end
+end
+
+function actions = local_header_action_candidates_local(primaryAction, mitigation)
+actions = string(primaryAction);
+if ~(isfield(mitigation, "headerDecodeDiversity") && isstruct(mitigation.headerDecodeDiversity))
+    return;
+end
+cfg = mitigation.headerDecodeDiversity;
+if ~(isfield(cfg, "enable") && logical(cfg.enable))
+    return;
+end
+if ~(isfield(cfg, "actions") && ~isempty(cfg.actions))
+    error("mitigation.headerDecodeDiversity.actions must not be empty when enabled.");
+end
+extraActions = string(cfg.actions(:).');
+if any(extraActions == "adaptive_ml_frontend")
+    error("mitigation.headerDecodeDiversity does not support adaptive_ml_frontend.");
+end
+actions = unique([string(primaryAction) extraActions], "stable");
+end
+
+function [phy, headerOk] = local_try_decode_header_local(rFull, preLen, hdrLen, primaryAction, mitigation, frameCfg, fhCfgBase, fecCfg, softCfg)
+phy = struct();
+headerOk = false;
+rFull = rFull(:);
+hdrRaw = rFull(preLen+1:preLen+hdrLen);
+[hdrRaw, headerHopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase);
+actions = local_header_action_candidates_local(primaryAction, mitigation);
+for actionName = actions
+    headerBlock = [complex(zeros(preLen, 1)); hdrRaw];
+    headerActionCtx = local_build_header_action_ctx_local(headerBlock, preLen, hdrLen, actionName, mitigation);
+    if isstruct(headerHopInfo) && isfield(headerHopInfo, "enable") && headerHopInfo.enable ...
+            && isfield(headerHopInfo, "hopLen") && double(headerHopInfo.hopLen) > 0
+        headerActionCtx.usePerHop = true;
+        headerActionCtx.hopLen = round(double(headerHopInfo.hopLen));
+        if isfield(headerActionCtx, "bandstopCfg") && isstruct(headerActionCtx.bandstopCfg)
+            headerActionCtx.bandstopCfg.forcedFreqBounds = zeros(0, 2);
+        end
+    end
+    hdrSym = local_prepare_header_symbols_local(hdrRaw, actionName, mitigation, headerActionCtx);
+    hdrBits = decode_phy_header_symbols(hdrSym, frameCfg, fecCfg, softCfg);
+    [phyNow, okNow] = parse_phy_header_bits(hdrBits, frameCfg);
+    if okNow
+        phy = phyNow;
+        headerOk = true;
+        return;
+    end
+end
+end
+
+function [hdrRaw, hopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase)
+hdrRaw = hdrRaw(:);
+fhCfg = phy_header_fh_cfg(frameCfg, fhCfgBase);
+hopInfo = struct('enable', false);
+if ~fhCfg.enable
+    return;
+end
+hopInfo = hop_info_from_fh_cfg_local(fhCfg, numel(hdrRaw));
+hdrRaw = fh_demodulate(hdrRaw, hopInfo);
 end
 
 function raw = local_init_raw_capture_local(nPackets, nSessionFrames)
@@ -2823,9 +2981,7 @@ for pktIdx = 1:nPackets
     nom.preambleRef{pktIdx} = syncSymRef;
 
     actionName = string(decision.symbolAction);
-    hdrSym = local_prepare_header_symbols_local(rFull(preLen+1:preLen+hdrLen), actionName, mitigation);
-    hdrBits = decode_phy_header_symbols(hdrSym, p.frame, p.fec, p.softMetric);
-    [phy, headerOk] = parse_phy_header_bits(hdrBits, p.frame);
+    [phy, headerOk] = local_try_decode_header_local(rFull, preLen, hdrLen, actionName, mitigation, p.frame, p.fh, p.fec, p.softMetric);
     nom.headerOk(pktIdx) = headerOk;
     if ~headerOk
         continue;

@@ -13,6 +13,7 @@ switch mode
         pilotSym = phy_header_pilot_symbols(frameCfg);
         coded = local_compact_fec_encode(bits, fec);
         bodySym = 1 - 2 * double(repelem(coded(:), repeat));
+        bodySym = local_compact_header_dsss_spread(bodySym, frameCfg);
         sym = [pilotSym(:); bodySym(:)];
         sym = sym(:);
     case "legacy_repeat"
@@ -55,6 +56,15 @@ bits = uint8(bits(:) ~= 0);
 tailBits = local_conv_termination_bits(fec.trellis);
 bitsTerm = [bits; zeros(tailBits, 1, "uint8")];
 coded = convenc(bitsTerm, fec.trellis);
+end
+
+function bodySym = local_compact_header_dsss_spread(bodySym, frameCfg)
+dsssCfg = phy_header_dsss_cfg(frameCfg);
+if ~dsssCfg.enable
+    bodySym = bodySym(:);
+    return;
+end
+[bodySym, ~] = dsss_spread(bodySym(:), dsssCfg);
 end
 
 function nTail = local_conv_termination_bits(trellis)

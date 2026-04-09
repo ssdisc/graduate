@@ -17,6 +17,7 @@ switch mode
         end
         rSymComp = local_compact_pilot_compensate(rSym, pilotSym);
         rBody = rSymComp(pilotLen + 1:end);
+        rBody = local_compact_header_dsss_despread(rBody, frameCfg);
         rUse = local_repeat_combine(rBody, repeat);
         bpskMod = struct("type", "BPSK");
         fecHdr = local_compact_fec_cfg(frameCfg, fec);
@@ -82,6 +83,15 @@ if isfield(frameCfg, "phyHeaderSoftBits") && ~isempty(frameCfg.phyHeaderSoftBits
     nSoft = round(double(frameCfg.phyHeaderSoftBits));
 end
 nSoft = min(max(nSoft, 1), 13);
+end
+
+function rBody = local_compact_header_dsss_despread(rBody, frameCfg)
+dsssCfg = phy_header_dsss_cfg(frameCfg);
+if ~dsssCfg.enable
+    rBody = rBody(:);
+    return;
+end
+[rBody, ~] = dsss_despread(rBody(:), dsssCfg);
 end
 
 function y = local_repeat_combine(x, repeat)

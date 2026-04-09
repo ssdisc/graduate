@@ -5,9 +5,10 @@ mode = local_phy_header_mode(frameCfg);
 switch mode
     case "compact_fec"
         repeat = local_phy_header_repeat(frameCfg, mode);
+        spreadFactor = local_phy_header_spread_factor(frameCfg);
         nSym = numel(phy_header_pilot_symbols(frameCfg)) + ...
             local_coded_bits_length( ...
-            phy_header_length_bits(frameCfg) + local_conv_termination_bits(fec.trellis), fec) * repeat;
+            phy_header_length_bits(frameCfg) + local_conv_termination_bits(fec.trellis), fec) * repeat * spreadFactor;
     case "legacy_repeat"
         repeat = local_phy_header_repeat(frameCfg, mode);
         nSym = phy_header_length_bits(frameCfg) * repeat;
@@ -47,6 +48,11 @@ switch mode
             repeat = max(1, round(double(frameCfg.phyHeaderRepeat)));
         end
 end
+end
+
+function spreadFactor = local_phy_header_spread_factor(frameCfg)
+dsssCfg = phy_header_dsss_cfg(frameCfg);
+spreadFactor = dsss_effective_spread_factor(dsssCfg);
 end
 
 function nTail = local_conv_termination_bits(trellis)

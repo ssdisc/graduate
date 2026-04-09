@@ -15,6 +15,7 @@ if ~isfield(cfg, "fftOversample"); cfg.fftOversample = 4; end
 if ~isfield(cfg, "maxBandwidthFrac"); cfg.maxBandwidthFrac = 0.22; end
 if ~isfield(cfg, "minFreqAbs"); cfg.minFreqAbs = 0.01; end
 if ~isfield(cfg, "suppressToFloor"); cfg.suppressToFloor = false; end
+if ~isfield(cfg, "forcedFreqBounds"); cfg.forcedFreqBounds = zeros(0, 2); end
 
 x = x(:);
 N = numel(x);
@@ -36,6 +37,48 @@ f = ((0:nfft-1).' / nfft) - 0.5;
 valid = abs(f) >= abs(double(cfg.minFreqAbs));
 detectFloor = local_noise_floor(Pdet, valid);
 applyFloor = local_noise_floor(Papply, valid);
+forcedFreqBounds = local_forced_freq_bounds(double(cfg.forcedFreqBounds));
+
+if ~isempty(forcedFreqBounds)
+    [mask, edges, freqBounds, centerFreq, bandWidthBins] = local_mask_from_freq_bounds(forcedFreqBounds, f, valid);
+    if ~any(mask)
+        y = x;
+        info = local_empty_info(false, nfft, detectFloor, applyFloor);
+        info.forced = true;
+        return;
+    end
+
+    if logical(cfg.suppressToFloor)
+        gain = ones(nfft, 1);
+        gain(mask) = sqrt(min(1, applyFloor ./ max(Papply(mask), applyFloor)));
+        S = S .* gain;
+    else
+        gain = ones(nfft, 1);
+        gain(mask) = 0;
+        S(mask) = 0;
+    end
+
+    yTmp = ifft(ifftshift(S), nfft);
+    y = yTmp(1:N);
+
+    info = struct();
+    info.applied = true;
+    info.forced = true;
+    info.nfft = nfft;
+    info.noiseFloor = applyFloor;
+    info.detectNoiseFloor = detectFloor;
+    info.bandEdges = edges;
+    info.centerFreq = centerFreq;
+    info.bandWidthBins = bandWidthBins;
+    info.selectedBandwidthFrac = bandWidthBins / nfft;
+    info.selectedFreqBounds = freqBounds;
+    info.peakRatios = zeros(size(centerFreq));
+    info.bandScores = zeros(size(centerFreq));
+    info.suppressionGain = gain(mask);
+    info.maskFraction = mean(mask);
+    return;
+end
+
 peakRatio = max(1.1, double(cfg.peakRatio));
 edgeRatio = min(max(double(cfg.edgeRatio), 1.0), peakRatio);
 smoothSpan = local_odd_span(double(cfg.smoothSpanBins), nfft);
@@ -90,6 +133,7 @@ edges = zeros(size(selected, 1), 2);
 centerFreq = zeros(size(selected, 1), 1);
 bandWidthBins = zeros(size(selected, 1), 1);
 peakRatios = zeros(size(selected, 1), 1);
+freqBounds = zeros(size(selected, 1), 2);
 for k = 1:size(selected, 1)
     left = max(1, round(selected(k, 1)) - padBins);
     right = min(nfft, round(selected(k, 2)) + padBins);
@@ -98,6 +142,7 @@ for k = 1:size(selected, 1)
     bandWidthBins(k) = right - left + 1;
     centerFreq(k) = mean(f(round(selected(k, 1)):round(selected(k, 2))));
     peakRatios(k) = selected(k, 4);
+    freqBounds(k, :) = [f(left) f(right)];
 end
 
 if ~any(mask)
@@ -121,6 +166,7 @@ y = yTmp(1:N);
 
 info = struct();
 info.applied = true;
+info.forced = false;
 info.nfft = nfft;
 info.noiseFloor = applyFloor;
 info.detectNoiseFloor = detectFloor;
@@ -128,6 +174,7 @@ info.bandEdges = edges;
 info.centerFreq = centerFreq;
 info.bandWidthBins = bandWidthBins;
 info.selectedBandwidthFrac = bandWidthBins / nfft;
+info.selectedFreqBounds = freqBounds;
 info.peakRatios = peakRatios;
 info.bandScores = bandScores(ord(1:pickCount));
 info.suppressionGain = gain(mask);
@@ -137,6 +184,7 @@ end
 function info = local_empty_info(applied, nfft, detectFloor, applyFloor)
 info = struct( ...
     "applied", logical(applied), ...
+    "forced", false, ...
     "nfft", double(nfft), ...
     "noiseFloor", double(applyFloor), ...
     "detectNoiseFloor", double(detectFloor), ...
@@ -144,10 +192,65 @@ info = struct( ...
     "centerFreq", zeros(0, 1), ...
     "bandWidthBins", zeros(0, 1), ...
     "selectedBandwidthFrac", zeros(0, 1), ...
+    "selectedFreqBounds", zeros(0, 2), ...
     "peakRatios", zeros(0, 1), ...
     "bandScores", zeros(0, 1), ...
     "suppressionGain", zeros(0, 1), ...
     "maskFraction", 0);
+end
+
+function bounds = local_forced_freq_bounds(rawBounds)
+if isempty(rawBounds)
+    bounds = zeros(0, 2);
+    return;
+end
+if ~(isnumeric(rawBounds) && ismatrix(rawBounds) && size(rawBounds, 2) == 2 && all(isfinite(rawBounds(:))))
+    error("fft_bandstop_filter:forcedFreqBounds", ...
+        "cfg.forcedFreqBounds must be a finite Nx2 numeric matrix.");
+end
+bounds = double(rawBounds);
+bounds = sort(bounds, 2);
+bounds(:, 1) = max(bounds(:, 1), -0.5);
+bounds(:, 2) = min(bounds(:, 2), 0.5 - eps);
+keep = bounds(:, 2) >= bounds(:, 1);
+bounds = bounds(keep, :);
+end
+
+function [mask, edges, appliedBounds, centerFreq, bandWidthBins] = local_mask_from_freq_bounds(freqBounds, f, valid)
+freqBounds = sortrows(freqBounds, 1);
+mask = false(numel(f), 1);
+edges = zeros(size(freqBounds, 1), 2);
+appliedBounds = zeros(size(freqBounds, 1), 2);
+centerFreq = zeros(size(freqBounds, 1), 1);
+bandWidthBins = zeros(size(freqBounds, 1), 1);
+writeIdx = 0;
+for k = 1:size(freqBounds, 1)
+    leftBound = freqBounds(k, 1);
+    rightBound = freqBounds(k, 2);
+    idx = find(valid & f >= leftBound & f <= rightBound);
+    if isempty(idx)
+        targetFreq = 0.5 * (leftBound + rightBound);
+        dist = abs(f - targetFreq);
+        dist(~valid) = inf;
+        [bestDist, bestIdx] = min(dist);
+        if ~isfinite(bestDist)
+            continue;
+        end
+        idx = bestIdx;
+    end
+    writeIdx = writeIdx + 1;
+    leftIdx = idx(1);
+    rightIdx = idx(end);
+    mask(leftIdx:rightIdx) = true;
+    edges(writeIdx, :) = [leftIdx rightIdx];
+    appliedBounds(writeIdx, :) = [f(leftIdx) f(rightIdx)];
+    centerFreq(writeIdx) = mean(f(idx));
+    bandWidthBins(writeIdx) = rightIdx - leftIdx + 1;
+end
+edges = edges(1:writeIdx, :);
+appliedBounds = appliedBounds(1:writeIdx, :);
+centerFreq = centerFreq(1:writeIdx);
+bandWidthBins = bandWidthBins(1:writeIdx);
 end
 
 function floorNow = local_noise_floor(P, valid)
