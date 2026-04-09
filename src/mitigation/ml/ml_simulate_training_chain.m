@@ -18,16 +18,24 @@ txSym = txSym(:);
 targetLen = round(double(targetLen));
 
 waveform = resolve_waveform_cfg(p);
-channelSample = adapt_channel_for_sps(p.channel, waveform);
+channelSample = adapt_channel_for_sps(p.channel, waveform, p.fh);
 
 txChannelSym = txSym;
 dsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, numel(txSym));
 [txChannelSym, ~] = dsss_spread(txChannelSym, dsssCfg);
+txSample = [];
 if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable
-    [txChannelSym, ~] = fh_modulate(txChannelSym, p.fh);
+    if fh_is_fast(p.fh)
+        txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
+        [txSample, ~] = fh_modulate_samples(txSample, p.fh, waveform);
+    else
+        [txChannelSym, ~] = fh_modulate(txChannelSym, p.fh);
+    end
 end
 
-txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
+if isempty(txSample)
+    txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
+end
 cleanChannel = channelSample;
 cleanChannel.impulseProb = 0;
 

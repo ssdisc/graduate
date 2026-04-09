@@ -1,8 +1,11 @@
-function front = capture_synced_block_from_samples(rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain)
+function front = capture_synced_block_from_samples(rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg)
 %CAPTURE_SYNCED_BLOCK_FROM_SAMPLES  Layered RX front-end from raw samples.
 
 if nargin < 9
     bootstrapChain = strings(1, 0);
+end
+if nargin < 10 || isempty(fhCaptureCfg)
+    fhCaptureCfg = struct("enable", false);
 end
 
 rxSampleRaw = rxSampleRaw(:);
@@ -22,7 +25,8 @@ front = struct( ...
     "rFull", complex(zeros(0, 1)), ...
     "reliabilityFull", zeros(0, 1));
 
-[rxStage, rawReliability] = local_sync_stage_observation_from_samples_local(rxSampleRaw, waveform, sampleAction, mitigation, syncStageSps);
+[rxStage, rawReliability, rxPrep, relSamplePrep] = local_sync_stage_observation_from_samples_local( ...
+    rxSampleRaw, waveform, sampleAction, mitigation, syncStageSps);
 syncRefStage = local_sync_reference_stage_local(syncSymRef, waveform, syncStageSps);
 syncCfgStage = local_sync_cfg_for_stage_local(syncCfgUse, syncStageSps);
 capture = adaptive_frontend_bootstrap_capture(rxStage, syncRefStage, stageTotalLen, syncCfgStage, mitigation, modCfg, bootstrapChain);
@@ -49,8 +53,8 @@ if isempty(startIdx) || ~isfinite(startIdx)
     return;
 end
 
-[rFull, okFull, extractInfo] = extract_fractional_block(capture.rxSync, startIdx, totalLen, ...
-    local_symbol_extract_sync_cfg_local(syncCfgUse), modCfg, syncStageSps);
+[rFull, reliabilityFull, okFull] = local_extract_symbol_block_local( ...
+    capture, rawReliability, rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, mitigation, modCfg, waveform, syncStageSps);
 if ~okFull
     return;
 end
@@ -62,14 +66,10 @@ front.startIdx = startIdx;
 front.syncInfo = syncInfo;
 front.rxSync = capture.rxSync;
 front.rFull = rFull;
-rawReliabilityBlk = local_extract_reliability_from_sample_times_local(rawReliability, extractInfo.sampleTimes);
-captureReliabilityBlk = local_extract_reliability_from_sample_times_local(capture.reliabilityTrack, extractInfo.sampleTimes);
-rawReliabilityBlk = local_fit_reliability_length_local(rawReliabilityBlk, totalLen);
-captureReliabilityBlk = local_fit_reliability_length_local(captureReliabilityBlk, totalLen);
-front.reliabilityFull = min(rawReliabilityBlk, captureReliabilityBlk);
+front.reliabilityFull = local_fit_reliability_length_local(reliabilityFull, totalLen);
 end
 
-function [rxStage, relStage] = local_sync_stage_observation_from_samples_local(rxSample, waveform, sampleAction, mitigation, stageSps)
+function [rxStage, relStage, rxPrep, relSample] = local_sync_stage_observation_from_samples_local(rxSample, waveform, sampleAction, mitigation, stageSps)
 rxSample = rxSample(:);
 sampleAction = string(sampleAction);
 relSample = ones(numel(rxSample), 1);
@@ -83,6 +83,126 @@ rxMf = local_matched_filter_samples_local(rxPrep, waveform);
 relMf = local_matched_filter_reliability_samples_local(relSample, waveform);
 [rxStage, relStage] = local_decimate_stage_branch_local(rxMf, relMf, waveform, stageSps);
 relStage = local_fit_reliability_length_local(relStage, numel(rxStage));
+end
+
+function [rFull, reliabilityFull, ok] = local_extract_symbol_block_local( ...
+    capture, rawReliabilityStage, rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, mitigation, modCfg, waveform, syncStageSps)
+rFull = complex(zeros(0, 1));
+reliabilityFull = zeros(0, 1);
+ok = false;
+
+if local_fast_fh_capture_enabled_local(fhCaptureCfg)
+    [rFull, reliabilityFull, ok] = local_extract_fast_fh_symbol_block_local( ...
+        rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, modCfg, waveform, syncStageSps);
+    return;
+end
+
+[rFull, okBlock, extractInfo] = extract_fractional_block(capture.rxSync, startIdx, totalLen, ...
+    local_symbol_extract_sync_cfg_local(syncCfgUse), modCfg, syncStageSps);
+if ~okBlock
+    return;
+end
+
+rawReliabilityBlk = local_extract_reliability_from_sample_times_local(rawReliabilityStage, extractInfo.sampleTimes);
+captureReliabilityBlk = local_extract_reliability_from_sample_times_local(capture.reliabilityTrack, extractInfo.sampleTimes);
+rawReliabilityBlk = local_fit_reliability_length_local(rawReliabilityBlk, totalLen);
+captureReliabilityBlk = local_fit_reliability_length_local(captureReliabilityBlk, totalLen);
+reliabilityFull = min(rawReliabilityBlk, captureReliabilityBlk);
+ok = true;
+end
+
+function [rFull, reliabilityFull, ok] = local_extract_fast_fh_symbol_block_local( ...
+    rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, modCfg, waveform, syncStageSps)
+rFull = complex(zeros(0, 1));
+reliabilityFull = zeros(0, 1);
+ok = false;
+
+if ~(isstruct(waveform) && isfield(waveform, "enable") && waveform.enable)
+    error("True fast FH requires waveform.enable=true.");
+end
+if ~(isfield(waveform, "sps") && double(waveform.sps) >= 2)
+    error("True fast FH requires waveform.sps>=2.");
+end
+
+decim = round(double(waveform.sps) / double(syncStageSps));
+packetStartSample = 1 + (double(startIdx) - 1) * decim;
+packetSampleLen = local_packet_sample_length_local(totalLen, waveform);
+
+[pktSample, okPkt, extractInfo] = extract_fractional_block( ...
+    rxPrep, packetStartSample, packetSampleLen, local_symbol_extract_sync_cfg_local(syncCfgUse), modCfg, 1);
+if ~okPkt
+    return;
+end
+
+relPkt = local_extract_reliability_from_sample_times_local(relSamplePrep, extractInfo.sampleTimes);
+pktSample = local_apply_fast_fh_packet_demod_local(pktSample, fhCaptureCfg, waveform);
+pktMf = local_matched_filter_samples_local(pktSample, waveform);
+relMf = local_matched_filter_reliability_samples_local(relPkt, waveform);
+[rFull, reliabilityFull] = local_decimate_stage_branch_local(pktMf, relMf, waveform, 1);
+rFull = local_fit_complex_length_local(rFull, totalLen);
+reliabilityFull = local_fit_reliability_length_local(reliabilityFull, totalLen);
+ok = numel(rFull) == totalLen && any(abs(rFull) > 0);
+end
+
+function tf = local_fast_fh_capture_enabled_local(fhCaptureCfg)
+tf = isstruct(fhCaptureCfg) && isfield(fhCaptureCfg, "enable") && logical(fhCaptureCfg.enable);
+end
+
+function pktOut = local_apply_fast_fh_packet_demod_local(pktIn, fhCaptureCfg, waveform)
+pktOut = pktIn(:);
+syncSymbols = local_fast_fh_capture_scalar_local(fhCaptureCfg, "syncSymbols");
+headerSymbols = local_fast_fh_capture_scalar_local(fhCaptureCfg, "headerSymbols");
+headerStart = local_symbol_boundary_sample_index_local(syncSymbols, waveform);
+dataStart = local_symbol_boundary_sample_index_local(syncSymbols + headerSymbols, waveform);
+
+if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
+        && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable ...
+        && fh_is_fast(fhCaptureCfg.headerFhCfg)
+    headerStop = min(numel(pktOut), dataStart - 1);
+    if headerStart <= headerStop
+        pktOut(headerStart:headerStop) = local_fast_fh_segment_demod_local( ...
+            pktOut(headerStart:headerStop), fhCaptureCfg.headerFhCfg, waveform);
+    end
+end
+
+if isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
+        && isfield(fhCaptureCfg.dataFhCfg, "enable") && fhCaptureCfg.dataFhCfg.enable ...
+        && fh_is_fast(fhCaptureCfg.dataFhCfg)
+    dataStart = min(max(1, dataStart), numel(pktOut) + 1);
+    if dataStart <= numel(pktOut)
+        pktOut(dataStart:end) = local_fast_fh_segment_demod_local( ...
+            pktOut(dataStart:end), fhCaptureCfg.dataFhCfg, waveform);
+    end
+end
+end
+
+function segOut = local_fast_fh_segment_demod_local(segIn, fhCfg, waveform)
+[~, hopInfo] = fh_modulate_samples(complex(zeros(numel(segIn), 1)), fhCfg, waveform);
+segOut = fh_demodulate_samples(segIn, hopInfo, waveform);
+end
+
+function value = local_fast_fh_capture_scalar_local(fhCaptureCfg, fieldName)
+if ~(isfield(fhCaptureCfg, fieldName) && ~isempty(fhCaptureCfg.(fieldName)))
+    error("fhCaptureCfg.%s is required for fast FH capture.", fieldName);
+end
+value = round(double(fhCaptureCfg.(fieldName)));
+if ~(isscalar(value) && isfinite(value) && value >= 0)
+    error("fhCaptureCfg.%s must be a nonnegative finite scalar.", fieldName);
+end
+end
+
+function nSample = local_packet_sample_length_local(nSym, waveform)
+nSym = max(0, round(double(nSym)));
+if ~waveform.enable
+    nSample = nSym;
+    return;
+end
+nSample = (nSym - 1) * round(double(waveform.sps)) + numel(waveform.rrcTaps);
+end
+
+function sampleIdx = local_symbol_boundary_sample_index_local(nLeadingSym, waveform)
+nLeadingSym = max(0, round(double(nLeadingSym)));
+sampleIdx = nLeadingSym * round(double(waveform.sps)) + 1;
 end
 
 function yMf = local_matched_filter_samples_local(ySample, waveform)

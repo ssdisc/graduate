@@ -42,6 +42,9 @@ if ~fh.enable
     hopInfo = struct('enable', false);
     return;
 end
+if fh_is_fast(fh)
+    error("fh_modulate only supports slow FH. Use fh_modulate_samples for true fast FH.");
+end
 
 nSym = numel(txSym);
 hopLen = fh.symbolsPerHop;  % 每跳的符号数

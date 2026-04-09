@@ -15,13 +15,22 @@ if ~(isfield(fhBase, "enable") && logical(fhBase.enable))
 end
 
 fhCfg.enable = true;
-if isfield(frameCfg, "phyHeaderFhSymbolsPerHop") && ~isempty(frameCfg.phyHeaderFhSymbolsPerHop)
-    fhCfg.symbolsPerHop = round(double(frameCfg.phyHeaderFhSymbolsPerHop));
+if isfield(frameCfg, "phyHeaderFhMode") && strlength(string(frameCfg.phyHeaderFhMode)) > 0
+    fhCfg.mode = char(lower(string(frameCfg.phyHeaderFhMode)));
 end
-if ~(isscalar(fhCfg.symbolsPerHop) && isfinite(fhCfg.symbolsPerHop) && fhCfg.symbolsPerHop >= 1)
-    error("frame.phyHeaderFhSymbolsPerHop must be a positive integer scalar.");
+if fh_is_fast(fhCfg)
+    if isfield(frameCfg, "phyHeaderFhHopsPerSymbol") && ~isempty(frameCfg.phyHeaderFhHopsPerSymbol)
+        fhCfg.hopsPerSymbol = round(double(frameCfg.phyHeaderFhHopsPerSymbol));
+    end
+else
+    if isfield(frameCfg, "phyHeaderFhSymbolsPerHop") && ~isempty(frameCfg.phyHeaderFhSymbolsPerHop)
+        fhCfg.symbolsPerHop = round(double(frameCfg.phyHeaderFhSymbolsPerHop));
+    end
+    if ~(isscalar(fhCfg.symbolsPerHop) && isfinite(fhCfg.symbolsPerHop) && fhCfg.symbolsPerHop >= 1)
+        error("frame.phyHeaderFhSymbolsPerHop must be a positive integer scalar.");
+    end
+    fhCfg.symbolsPerHop = max(1, round(double(fhCfg.symbolsPerHop)));
 end
-fhCfg.symbolsPerHop = max(1, round(double(fhCfg.symbolsPerHop)));
 
 fhCfg.sequenceType = 'linear';
 if isfield(frameCfg, "phyHeaderFhSequenceType") && ~isempty(frameCfg.phyHeaderFhSequenceType)

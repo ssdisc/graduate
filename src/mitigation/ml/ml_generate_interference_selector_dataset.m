@@ -46,16 +46,18 @@ for b = 1:nBlocks
         N0 = ebn0_to_n0(EbN0, codeRate, bitsPerSym, 1.0);
 
         pBlock = local_selector_channel_for_class(p, labelNow);
-        txFrame = local_build_training_packet(pBlock, dataSymbolsPerBlock);
+        [txFrame, fhCaptureCfg] = local_build_training_packet(pBlock, dataSymbolsPerBlock);
         frameDelaySym = randi([0, max(0, round(double(pBlock.channel.maxDelaySymbols)))], 1, 1);
         frameDelay = round(double(frameDelaySym) * waveform.sps);
-        txSample = [zeros(frameDelay, 1); pulse_tx_from_symbol_rate(txFrame, waveform)];
-        channelSample = adapt_channel_for_sps(pBlock.channel, waveform);
+        txSampleFrame = pulse_tx_from_symbol_rate(txFrame, waveform);
+        txSampleFrame = local_apply_fast_training_packet_samples(txSampleFrame, fhCaptureCfg, waveform);
+        txSample = [zeros(frameDelay, 1); txSampleFrame];
+        channelSample = adapt_channel_for_sps(pBlock.channel, waveform, pBlock.fh);
         rxSample = channel_bg_impulsive(txSample, N0, channelSample);
 
         totalLen = numel(txFrame);
         front = capture_synced_block_from_samples( ...
-            rxSample, syncSym, totalLen, syncCfg, pBlock.mitigation, pBlock.mod, waveform, "none");
+            rxSample, syncSym, totalLen, syncCfg, pBlock.mitigation, pBlock.mod, waveform, "none", strings(1, 0), fhCaptureCfg);
         if ~front.ok
             continue;
         end
@@ -136,8 +138,8 @@ switch lower(string(labelName))
     case "narrowband"
         pBlock.channel.narrowband.enable = true;
         pBlock.channel.narrowband.power = 0.004 + 0.08 * rand();
-        pBlock.channel.narrowband.centerHz = -2200 + 4400 * rand();
-        pBlock.channel.narrowband.bandwidthHz = 300 + 1400 * rand();
+        pBlock.channel.narrowband.centerFreqPoints = -14 + 28 * rand();
+        pBlock.channel.narrowband.bandwidthFreqPoints = 0.2 + 0.8 * rand();
     case "sweep"
         pBlock.channel.sweep.enable = true;
         pBlock.channel.sweep.power = 0.004 + 0.06 * rand();
@@ -155,7 +157,7 @@ switch lower(string(labelName))
 end
 end
 
-function txFrame = local_build_training_packet(p, dataSymbolsPerBlock)
+function [txFrame, fhCaptureCfg] = local_build_training_packet(p, dataSymbolsPerBlock)
 packetIdx = 1;
 bitsPerSym = bits_per_symbol_local(p.mod);
 packetDataBitsLen = local_training_packet_data_bits_len(p, dataSymbolsPerBlock, bitsPerSym);
@@ -169,6 +171,11 @@ phyMeta.packetDataBytes = uint16(packetDataBytes);
 phyMeta.packetDataCrc16 = crc16_ccitt_bits(packetDataBits);
 [phyHeaderBits, ~] = build_phy_header_bits(phyMeta, p.frame);
 phyHeaderSym = encode_phy_header_symbols(phyHeaderBits, p.frame, p.fec);
+phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh);
+phyHeaderFast = phyHeaderFhCfg.enable && fh_is_fast(phyHeaderFhCfg);
+if phyHeaderFhCfg.enable && ~phyHeaderFast
+    [phyHeaderSym, ~] = fh_modulate(phyHeaderSym, phyHeaderFhCfg);
+end
 
 scrambleCfg = derive_packet_scramble_cfg(p.scramble, packetIdx, 0);
 dataBitsScr = scramble_bits(packetDataBits, scrambleCfg);
@@ -177,13 +184,55 @@ codedBits = fec_encode(dataBitsScr, p.fec);
 [dataSym, ~] = modulate_bits(codedBitsInt, p.mod, p.fec);
 dataDsssCfg = derive_packet_dsss_cfg(p.dsss, packetIdx, 0, numel(dataSym));
 [dataSym, ~] = dsss_spread(dataSym, dataDsssCfg);
+fhCfg = struct("enable", false);
 if isfield(p, "fh") && isfield(p.fh, "enable") && p.fh.enable
     fhCfg = derive_packet_fh_cfg(p.fh, packetIdx, 0, numel(dataSym));
-    [dataSym, ~] = fh_modulate(dataSym, fhCfg);
+    if ~fh_is_fast(fhCfg)
+        [dataSym, ~] = fh_modulate(dataSym, fhCfg);
+    end
 end
 
 [~, syncSym] = make_packet_sync(p.frame, packetIdx);
 txFrame = [syncSym(:); phyHeaderSym(:); dataSym(:)];
+fhCaptureCfg = struct( ...
+    "enable", logical((phyHeaderFhCfg.enable && phyHeaderFast) || (fhCfg.enable && fh_is_fast(fhCfg))), ...
+    "syncSymbols", double(numel(syncSym)), ...
+    "headerSymbols", double(numel(phyHeaderSym)), ...
+    "headerFhCfg", phyHeaderFhCfg, ...
+    "dataFhCfg", fhCfg);
+end
+
+function txOut = local_apply_fast_training_packet_samples(txIn, fhCaptureCfg, waveform)
+txOut = txIn(:);
+if ~(isstruct(fhCaptureCfg) && isfield(fhCaptureCfg, "enable") && fhCaptureCfg.enable)
+    return;
+end
+
+headerStart = local_symbol_boundary_sample_index(double(fhCaptureCfg.syncSymbols), waveform);
+dataStart = local_symbol_boundary_sample_index(double(fhCaptureCfg.syncSymbols + fhCaptureCfg.headerSymbols), waveform);
+if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
+        && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable ...
+        && fh_is_fast(fhCaptureCfg.headerFhCfg)
+    headerStop = min(numel(txOut), dataStart - 1);
+    if headerStart <= headerStop
+        [segOut, ~] = fh_modulate_samples(txOut(headerStart:headerStop), fhCaptureCfg.headerFhCfg, waveform);
+        txOut(headerStart:headerStop) = segOut;
+    end
+end
+
+if isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
+        && isfield(fhCaptureCfg.dataFhCfg, "enable") && fhCaptureCfg.dataFhCfg.enable ...
+        && fh_is_fast(fhCaptureCfg.dataFhCfg)
+    if dataStart <= numel(txOut)
+        [segOut, ~] = fh_modulate_samples(txOut(dataStart:end), fhCaptureCfg.dataFhCfg, waveform);
+        txOut(dataStart:end) = segOut;
+    end
+end
+end
+
+function sampleIdx = local_symbol_boundary_sample_index(nLeadingSym, waveform)
+nLeadingSym = max(0, round(double(nLeadingSym)));
+sampleIdx = nLeadingSym * round(double(waveform.sps)) + 1;
 end
 
 function packetDataBitsLen = local_training_packet_data_bits_len(p, dataSymbolsPerBlock, bitsPerSym)

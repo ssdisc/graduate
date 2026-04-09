@@ -243,6 +243,7 @@ if isfield(p, "dsss") && isstruct(p.dsss)
 end
 nSym = max(1024, min(nSym, 4096));
 if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable ...
+        && ~fh_is_fast(p.fh) ...
         && isfield(p.fh, "symbolsPerHop") && double(p.fh.symbolsPerHop) > 0
     hopLen = round(double(p.fh.symbolsPerHop));
     nSym = hopLen * ceil(double(nSym) / double(hopLen));

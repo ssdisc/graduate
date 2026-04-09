@@ -27,6 +27,9 @@ if ~hopInfo.enable
     rxDehopped = rxSym;
     return;
 end
+if isfield(hopInfo, "mode") && string(hopInfo.mode) == "fast"
+    error("fh_demodulate only supports slow FH. Use fh_demodulate_samples for true fast FH.");
+end
 
 nSym = numel(rxSym);
 hopLen = hopInfo.hopLen;

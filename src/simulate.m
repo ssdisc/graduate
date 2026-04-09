@@ -387,7 +387,7 @@ for ie = 1:numel(EbN0dBList)
     if jsrScanIsGrid
         channelPoint = local_scale_channel_for_jsr_local(p.channel, linkBudget.bob.rxPowerLin(ie), N0, JsrDb, waveform);
     end
-    channelSample = adapt_channel_for_sps(channelPoint, waveform);
+    channelSample = adapt_channel_for_sps(channelPoint, waveform, p.fh);
     [klSigVsNoise(ie), klNoiseVsSig(ie), klSym(ie)] = signal_noise_kl(txBurstBobForPoint, N0, 128);
 
     if jsrScanIsGrid
@@ -2144,12 +2144,64 @@ relBlk(~isfinite(relBlk)) = 0;
 relBlk = max(min(relBlk, 1), 0);
 end
 
-function front = local_capture_synced_block_local(rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain)
+function front = local_capture_synced_block_local(rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg)
 if nargin < 9
     bootstrapChain = strings(1, 0);
 end
+if nargin < 10 || isempty(fhCaptureCfg)
+    fhCaptureCfg = struct("enable", false);
+end
 front = capture_synced_block_from_samples( ...
-    rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain);
+    rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg);
+end
+
+function fhCaptureCfg = local_packet_fast_fh_capture_cfg_local(txPacket, fhAssumption)
+fhCaptureCfg = struct("enable", false);
+if nargin < 2 || strlength(string(fhAssumption)) == 0
+    fhAssumption = "known";
+end
+
+headerFhCfg = struct("enable", false);
+if isfield(txPacket, "phyHeaderFhCfg") && isstruct(txPacket.phyHeaderFhCfg)
+    headerFhCfg = local_assumed_packet_fh_cfg_local(txPacket.phyHeaderFhCfg, fhAssumption);
+end
+
+dataFhCfg = struct("enable", false);
+if isfield(txPacket, "fhCfg") && isstruct(txPacket.fhCfg)
+    dataFhCfg = local_assumed_packet_fh_cfg_local(txPacket.fhCfg, fhAssumption);
+end
+
+headerFast = isfield(headerFhCfg, "enable") && headerFhCfg.enable && fh_is_fast(headerFhCfg);
+dataFast = isfield(dataFhCfg, "enable") && dataFhCfg.enable && fh_is_fast(dataFhCfg);
+if ~(headerFast || dataFast)
+    return;
+end
+
+fhCaptureCfg = struct( ...
+    "enable", true, ...
+    "syncSymbols", double(numel(txPacket.syncSym)), ...
+    "headerSymbols", double(numel(txPacket.phyHeaderSym)), ...
+    "headerFhCfg", headerFhCfg, ...
+    "dataFhCfg", dataFhCfg);
+end
+
+function fhCfgOut = local_assumed_packet_fh_cfg_local(fhCfgIn, assumption)
+fhCfgOut = fhCfgIn;
+if ~(isstruct(fhCfgOut) && isfield(fhCfgOut, "enable") && fhCfgOut.enable)
+    fhCfgOut = struct("enable", false);
+    return;
+end
+
+switch lower(string(assumption))
+    case "known"
+        return;
+    case "none"
+        fhCfgOut.enable = false;
+    case "partial"
+        fhCfgOut = make_partial_fh_config(fhCfgOut);
+    otherwise
+        error("Unknown fast-FH assumption: %s", string(assumption));
+end
 end
 
 function [rxStage, relStage] = local_sync_stage_observation_from_samples_local(rxSample, waveform, sampleAction, mitigation, stageSps)
@@ -2868,6 +2920,9 @@ hopInfo = struct('enable', false);
 if ~fhCfg.enable
     return;
 end
+if fh_is_fast(fhCfg)
+    return;
+end
 hopInfo = hop_info_from_fh_cfg_local(fhCfg, numel(hdrRaw));
 hdrRaw = fh_demodulate(hdrRaw, hopInfo);
 end
@@ -2941,8 +2996,9 @@ for pktIdx = 1:nPackets
     totalLen = preLen + hdrLen + dataLen;
     sampleActionHint = local_initial_sample_action_hint_local(methodName, adaptiveEnabled);
     bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
+    fhCaptureCfg = local_packet_fast_fh_capture_cfg_local(txPackets(pktIdx), fhAssumption);
     front = local_capture_synced_block_local( ...
-        rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, sampleActionHint, bootstrapChain);
+        rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, sampleActionHint, bootstrapChain, fhCaptureCfg);
     if ~front.ok
         continue;
     end
@@ -2955,7 +3011,7 @@ for pktIdx = 1:nPackets
     if local_is_adaptive_frontend_method_local(methodName) && string(decision.sampleAction) ~= sampleActionHint
         front = local_capture_synced_block_local( ...
             rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, ...
-            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled));
+            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg);
         if ~front.ok
             continue;
         end
@@ -2989,7 +3045,8 @@ for pktIdx = 1:nPackets
 
     rxState = derive_rx_packet_state_local( ...
         p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
-    if fhEnabled
+    symbolFhEnabled = fhEnabled && ~fh_is_fast(rxState.fhCfg);
+    if symbolFhEnabled
         hopInfoUsed = local_nominal_hop_info_local(rxState, fhAssumption);
     else
         hopInfoUsed = struct("enable", false);
@@ -3000,7 +3057,7 @@ for pktIdx = 1:nPackets
     nom.phy(pktIdx) = phy;
     nom.rxState{pktIdx} = rxState;
     [nom.rDataPrepared{pktIdx}, nom.rDataReliability{pktIdx}] = local_prepare_data_symbols_local( ...
-        rData, rDataRel, rxState, hopInfoUsed, p.mod, rxSyncCfg, fhEnabled, actionName, mitigation);
+        rData, rDataRel, rxState, hopInfoUsed, p.mod, rxSyncCfg, symbolFhEnabled, actionName, mitigation);
     nom.ok(pktIdx) = true;
 end
 end
@@ -3618,6 +3675,10 @@ end
 
 function hopInfo = hop_info_from_fh_cfg_local(fhCfg, nSym)
 if ~isfield(fhCfg, "enable") || ~fhCfg.enable
+    hopInfo = struct('enable', false);
+    return;
+end
+if fh_is_fast(fhCfg)
     hopInfo = struct('enable', false);
     return;
 end

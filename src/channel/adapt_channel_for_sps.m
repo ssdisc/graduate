@@ -1,5 +1,5 @@
-function chOut = adapt_channel_for_sps(chIn, waveformOrSps)
-%ADAPT_CHANNEL_FOR_SPS  将外部符号/Hz口径的信道配置映射到采样级口径。
+function chOut = adapt_channel_for_sps(chIn, waveformOrSps, fhRef)
+%ADAPT_CHANNEL_FOR_SPS  将外部符号/相对频点口径的信道配置映射到采样级口径。
 %
 % 兼容两种输入：
 %   waveform struct - 推荐，使用其中的sps/sampleRateHz做完整换算
@@ -8,9 +8,13 @@ function chOut = adapt_channel_for_sps(chIn, waveformOrSps)
 chOut = chIn;
 sps = 1;
 sampleRateHz = NaN;
+waveform = struct();
 
 if nargin < 2 || isempty(waveformOrSps)
     waveformOrSps = 1;
+end
+if nargin < 3 || isempty(fhRef)
+    fhRef = struct();
 end
 if isstruct(waveformOrSps)
     waveform = waveformOrSps;
@@ -55,17 +59,25 @@ if isfield(chOut, "singleTone") && isstruct(chOut.singleTone)
 end
 
 if isfield(chOut, "narrowband") && isstruct(chOut.narrowband)
-    if isfield(chOut.narrowband, "centerHz") && ~isempty(chOut.narrowband.centerHz)
-        require_sample_rate_local(sampleRateHz, "narrowband.centerHz");
-        chOut.narrowband.centerFreq = double(chOut.narrowband.centerHz) / sampleRateHz;
+    if isfield(chOut.narrowband, "centerFreqPoints") && ~isempty(chOut.narrowband.centerFreqPoints)
+        require_sample_rate_local(sampleRateHz, "narrowband.centerFreqPoints");
+        require_waveform_local(waveform, "narrowband.centerFreqPoints");
+        spacingHz = fh_frequency_spacing_hz(fhRef, waveform);
+        chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreqPoints) * spacingHz / sampleRateHz;
     elseif isfield(chOut.narrowband, "centerFreq")
         chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreq);
+    else
+        error("字段narrowband.centerFreqPoints需要显式给出。");
     end
-    if isfield(chOut.narrowband, "bandwidthHz") && ~isempty(chOut.narrowband.bandwidthHz)
-        require_sample_rate_local(sampleRateHz, "narrowband.bandwidthHz");
-        chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidthHz) / sampleRateHz, 1e-3);
+    if isfield(chOut.narrowband, "bandwidthFreqPoints") && ~isempty(chOut.narrowband.bandwidthFreqPoints)
+        require_sample_rate_local(sampleRateHz, "narrowband.bandwidthFreqPoints");
+        require_waveform_local(waveform, "narrowband.bandwidthFreqPoints");
+        spacingHz = fh_frequency_spacing_hz(fhRef, waveform);
+        chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidthFreqPoints) * spacingHz / sampleRateHz, 1e-3);
     elseif isfield(chOut.narrowband, "bandwidth")
         chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidth), 1e-3);
+    else
+        error("字段narrowband.bandwidthFreqPoints需要显式给出。");
     end
 end
 
@@ -101,6 +113,13 @@ end
 function require_sample_rate_local(sampleRateHz, fieldName)
 if ~(isfinite(sampleRateHz) && sampleRateHz > 0)
     error("字段%s需要有效的waveform.sampleRateHz支持。", fieldName);
+end
+end
+
+function require_waveform_local(waveform, fieldName)
+if ~isstruct(waveform) || ~(isfield(waveform, "symbolRateHz") && isfinite(double(waveform.symbolRateHz)) ...
+        && double(waveform.symbolRateHz) > 0)
+    error("字段%s需要包含有效symbolRateHz的waveform结构体支持。", fieldName);
 end
 end
 

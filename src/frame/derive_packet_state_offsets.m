@@ -36,7 +36,7 @@ for prevIdx = 1:(pktIdx - 1)
         [codedBitsInt, ~] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
         nBaseSymPrev = ceil(numel(codedBitsInt) / bitsPerSym);
         nSymPrev = dsss_symbol_count(nBaseSymPrev, p.dsss);
-        fhOffsetHops = fhOffsetHops + ceil(double(nSymPrev) / double(p.fh.symbolsPerHop));
+        fhOffsetHops = fhOffsetHops + local_packet_fh_hop_count(p.fh, p.waveform, nSymPrev);
         dsssOffsetChips = dsssOffsetChips + nSymPrev;
     elseif isfield(p, "dsss") && isstruct(p.dsss)
         codedBitsLen = local_coded_bits_length(prevPacketBits, p.fec);
@@ -82,6 +82,26 @@ end
 
 function tf = local_fh_enabled(p)
 tf = isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable;
+end
+
+function nHops = local_packet_fh_hop_count(fhCfg, waveformCfg, nSym)
+nSym = max(0, round(double(nSym)));
+if nSym <= 0
+    nHops = 0;
+    return;
+end
+if fh_is_fast(fhCfg)
+    if ~(isstruct(waveformCfg) && isfield(waveformCfg, "sps"))
+        error("Fast FH offset derivation requires waveform.sps.");
+    end
+    samplesPerHop = fh_samples_per_hop(fhCfg, waveformCfg);
+    nHops = ceil(double(nSym) * double(waveformCfg.sps) / double(samplesPerHop));
+    return;
+end
+if ~(isfield(fhCfg, "symbolsPerHop") && ~isempty(fhCfg.symbolsPerHop))
+    error("Slow FH requires fh.symbolsPerHop.");
+end
+nHops = ceil(double(nSym) / double(fhCfg.symbolsPerHop));
 end
 
 function nBits = local_coded_bits_length(nInfoBits, fec)
