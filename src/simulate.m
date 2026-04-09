@@ -385,7 +385,7 @@ for ie = 1:numel(EbN0dBList)
     txBurstBobForPoint = linkBudget.bob.rxAmplitudeScale(ie) * txSymForChannel;
     channelPoint = p.channel;
     if jsrScanIsGrid
-        channelPoint = local_scale_channel_for_jsr_local(p.channel, linkBudget.bob.rxPowerLin(ie), N0, JsrDb);
+        channelPoint = local_scale_channel_for_jsr_local(p.channel, linkBudget.bob.rxPowerLin(ie), N0, JsrDb, waveform);
     end
     channelSample = adapt_channel_for_sps(channelPoint, waveform);
     [klSigVsNoise(ie), klNoiseVsSig(ie), klSym(ie)] = signal_noise_kl(txBurstBobForPoint, N0, 128);
@@ -3664,7 +3664,7 @@ end
 tf = totalWeight > 0;
 end
 
-function channelOut = local_scale_channel_for_jsr_local(channelCfg, signalPowerLin, N0, jsrDb)
+function channelOut = local_scale_channel_for_jsr_local(channelCfg, signalPowerLin, N0, jsrDb, waveformCfg)
 signalPowerLin = double(signalPowerLin);
 N0 = double(N0);
 jsrDb = double(jsrDb);
@@ -3677,6 +3677,9 @@ end
 if ~isscalar(jsrDb) || ~isfinite(jsrDb)
     error("jsrDb 必须是有限标量。");
 end
+if ~(isstruct(waveformCfg) && isfield(waveformCfg, "sps"))
+    error("waveformCfg 必须提供有效的sps字段。");
+end
 
 channelOut = channelCfg;
 targetJammerPower = signalPowerLin * 10 .^ (jsrDb / 10);
@@ -3687,11 +3690,11 @@ end
 
 if detail.impulseActive
     avgImpulsePower = targetJammerPower * detail.impulseWeight / totalWeight;
-    impulseProb = double(channelCfg.impulseProb);
-    if ~(isfinite(impulseProb) && impulseProb > 0)
+    impulseProbSample = local_impulse_probability_for_power_budget_local(channelCfg, waveformCfg);
+    if ~(isfinite(impulseProbSample) && impulseProbSample > 0)
         error("impulseWeight>0 时，channel.impulseProb 必须为正有限数。");
     end
-    channelOut.impulseToBgRatio = avgImpulsePower / max(impulseProb * N0, eps);
+    channelOut.impulseToBgRatio = avgImpulsePower / max(impulseProbSample * N0, eps);
 else
     channelOut.impulseToBgRatio = 0;
 end
@@ -3703,6 +3706,27 @@ for k = 1:numel(sourceNames)
         continue;
     end
     channelOut.(sourceName).power = targetJammerPower * detail.(sourceName + "Weight") / totalWeight;
+end
+end
+
+function impulseProbSample = local_impulse_probability_for_power_budget_local(channelCfg, waveformCfg)
+if ~isfield(channelCfg, "impulseProb") || isempty(channelCfg.impulseProb)
+    error("channel.impulseProb 缺失。");
+end
+impulseProbSym = double(channelCfg.impulseProb);
+if ~(isscalar(impulseProbSym) && isfinite(impulseProbSym) && impulseProbSym > 0 && impulseProbSym <= 1)
+    error("channel.impulseProb 必须是 (0, 1] 范围内的有限标量。");
+end
+
+sps = double(waveformCfg.sps);
+if ~(isscalar(sps) && isfinite(sps) && sps >= 1 && abs(sps - round(sps)) < 1e-12)
+    error("waveform.sps 必须是正整数。");
+end
+sps = round(sps);
+
+impulseProbSample = 1 - (1 - impulseProbSym) .^ (1 / sps);
+if ~(isfinite(impulseProbSample) && impulseProbSample > 0 && impulseProbSample <= 1)
+    error("由channel.impulseProb和waveform.sps推导出的采样级脉冲概率无效。");
 end
 end
 
