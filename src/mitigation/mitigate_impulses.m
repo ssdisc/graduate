@@ -168,6 +168,29 @@ switch lower(string(method))
         reliability = double(rel);
         reliability(mask) = 0;
 
+    case "ml_narrowband"
+        if isfield(mit, "mlNarrowband") && ~isempty(mit.mlNarrowband)
+            model = mit.mlNarrowband;
+        else
+            model = ml_narrowband_action_model();
+        end
+        local_require_trained_dl_model(model, "ml_narrowband", mit);
+        bandstopCfg = local_require_fft_bandstop_cfg(mit);
+        [featureRow, featureInfo] = ml_extract_narrowband_features(r, bandstopCfg);
+        [shouldBandstop, ~] = ml_predict_narrowband_action(featureRow, model);
+        if ~shouldBandstop
+            rOut = r;
+            return;
+        end
+        if ~(isfield(featureInfo, "probeInfo") && isstruct(featureInfo.probeInfo) ...
+                && isfield(featureInfo.probeInfo, "applied") && featureInfo.probeInfo.applied ...
+                && isfield(featureInfo.probeInfo, "selectedFreqBounds") && ~isempty(featureInfo.probeInfo.selectedFreqBounds))
+            rOut = r;
+            return;
+        end
+        bandstopCfg.forcedFreqBounds = double(featureInfo.probeInfo.selectedFreqBounds);
+        [rOut, ~] = fft_bandstop_filter(r, bandstopCfg);
+
     case "adaptive_ml_frontend"
         error("adaptive_ml_frontend is orchestrated at the packet front-end level and must not be sent to mitigate_impulses directly.");
 
@@ -182,6 +205,14 @@ if requireTrained && ~(isfield(model, "trained") && logical(model.trained))
     error("mitigate_impulses:MissingTrainedModel", ...
         "Method %s requires a trained ML model, but the loaded model is not trained.", char(methodName));
 end
+end
+
+function cfg = local_require_fft_bandstop_cfg(mit)
+if ~(isfield(mit, "fftBandstop") && isstruct(mit.fftBandstop))
+    error("mitigate_impulses:MissingFftBandstopCfg", ...
+        "Method ml_narrowband requires mitigation.fftBandstop.");
+end
+cfg = mit.fftBandstop;
 end
 
 function w = local_threshold_gate_probability(p, threshold)

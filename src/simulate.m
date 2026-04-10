@@ -2128,7 +2128,7 @@ end
 
 function tf = local_action_prefers_per_hop_local(actionName)
 actionName = lower(string(actionName));
-tf = any(actionName == ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch"]);
+tf = any(actionName == ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"]);
 end
 
 function relPrep = local_fit_reliability_length_local(reliability, targetLen)
@@ -2673,7 +2673,7 @@ if any(actionName == ["none" "adaptive_ml_frontend"])
 end
 
 sampleActions = ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard"];
-symbolActions = ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch"];
+symbolActions = ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"];
 if any(actionName == sampleActions)
     sampleAction = actionName;
     return;
@@ -2991,6 +2991,7 @@ nom = struct();
 nom.ok = false(nFrames, 1);
 nom.rDataPrepared = cell(nFrames, 1);
 nom.rDataReliability = cell(nFrames, 1);
+nom.symbolAction = strings(nFrames, 1);
 nom.preambleRx = cell(nFrames, 1);
 nom.preambleRef = cell(nFrames, 1);
 nom.adaptiveClass = strings(nFrames, 1);
@@ -3153,16 +3154,22 @@ for frameIdx = 1:numel(sessionFrames)
     nom.preambleRx{frameIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
     nom.preambleRef{frameIdx} = sessionFrame.syncSym(:);
     actionName = string(decision.symbolAction);
-    symbolFhEnabled = isfield(rxStateSession, "fhCfg") && isstruct(rxStateSession.fhCfg) ...
-        && isfield(rxStateSession.fhCfg, "enable") && rxStateSession.fhCfg.enable ...
-        && ~fh_is_fast(rxStateSession.fhCfg);
-    if symbolFhEnabled
-        hopInfoUsed = local_nominal_hop_info_local(rxStateSession, fhAssumption);
+    nom.symbolAction(frameIdx) = actionName;
+    if string(sessionFrame.decodeKind) == "protected_header"
+        [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = ...
+            local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame);
     else
-        hopInfoUsed = struct("enable", false);
+        symbolFhEnabled = isfield(rxStateSession, "fhCfg") && isstruct(rxStateSession.fhCfg) ...
+            && isfield(rxStateSession.fhCfg, "enable") && rxStateSession.fhCfg.enable ...
+            && ~fh_is_fast(rxStateSession.fhCfg);
+        if symbolFhEnabled
+            hopInfoUsed = local_nominal_hop_info_local(rxStateSession, fhAssumption);
+        else
+            hopInfoUsed = struct("enable", false);
+        end
+        [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = local_prepare_data_symbols_local( ...
+            rFull(preLen+1:end), reliabilityFull(preLen+1:end), rxStateSession, hopInfoUsed, sessionFrame.modCfg, rxSyncCfg, symbolFhEnabled, actionName, mitigation);
     end
-    [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = local_prepare_data_symbols_local( ...
-        rFull(preLen+1:end), reliabilityFull(preLen+1:end), rxStateSession, hopInfoUsed, sessionFrame.modCfg, rxSyncCfg, symbolFhEnabled, actionName, mitigation);
     nom.ok(frameIdx) = true;
 end
 end
@@ -3209,7 +3216,13 @@ for frameIdx = 1:min(numel(sessionFrames), numel(sessionNom.ok))
             && ~isempty(sessionNom.rDataReliability{frameIdx})
         reliability = local_fit_reliability_length_local(sessionNom.rDataReliability{frameIdx}, nDemodSym);
     end
-    [metaSession, okFrame] = local_try_decode_session_frame_local(rData, reliability, sessionFrames(frameIdx), p);
+    primaryAction = "none";
+    if isfield(sessionNom, "symbolAction") && numel(sessionNom.symbolAction) >= frameIdx ...
+            && strlength(string(sessionNom.symbolAction(frameIdx))) > 0
+        primaryAction = string(sessionNom.symbolAction(frameIdx));
+    end
+    [metaSession, okFrame] = local_try_decode_session_frame_local( ...
+        rData, reliability, sessionFrames(frameIdx), p, primaryAction, mitigation);
     if okFrame
         sessionOut = learn_rx_session_local(metaSession);
         return;
@@ -3220,18 +3233,53 @@ end
 
 if numel(rMitList) >= 2
     rCombined = local_average_session_symbols_local(rMitList);
-    [metaSession, okFrame] = local_try_decode_session_frame_local(rCombined, [], sessionFrames(1), p);
+    primaryAction = "none";
+    if isfield(sessionNom, "symbolAction") && ~isempty(sessionNom.symbolAction)
+        firstIdx = find(strlength(sessionNom.symbolAction) > 0, 1, "first");
+        if ~isempty(firstIdx)
+            primaryAction = string(sessionNom.symbolAction(firstIdx));
+        end
+    end
+    [metaSession, okFrame] = local_try_decode_session_frame_local( ...
+        rCombined, [], sessionFrames(1), p, primaryAction, mitigation);
     if okFrame
         sessionOut = learn_rx_session_local(metaSession);
     end
 end
 end
 
-function [metaSession, ok] = local_try_decode_session_frame_local(rData, reliability, sessionFrame, p)
+function [metaSession, ok] = local_try_decode_session_frame_local(rData, reliability, sessionFrame, p, primaryAction, mitigation)
 metaSession = struct();
 ok = false;
 
 switch string(sessionFrame.decodeKind)
+    case "protected_header"
+        actions = local_header_action_candidates_local(primaryAction, mitigation);
+        for actionName = actions
+            headerActionCtx = local_build_header_action_ctx_local(rData(:), 0, numel(rData), actionName, mitigation);
+            if isfield(sessionFrame, "hopInfo") && isstruct(sessionFrame.hopInfo) ...
+                    && isfield(sessionFrame.hopInfo, "enable") && sessionFrame.hopInfo.enable ...
+                    && isfield(sessionFrame.hopInfo, "hopLen") && double(sessionFrame.hopInfo.hopLen) > 0
+                headerActionCtx.usePerHop = true;
+                headerActionCtx.hopLen = round(double(sessionFrame.hopInfo.hopLen));
+                if isfield(headerActionCtx, "bandstopCfg") && isstruct(headerActionCtx.bandstopCfg)
+                    headerActionCtx.bandstopCfg.forcedFreqBounds = zeros(0, 2);
+                end
+            end
+            rUse = local_prepare_header_symbols_local(rData, actionName, mitigation, headerActionCtx);
+            symbolRepeat = 1;
+            if isfield(sessionFrame, "symbolRepeat") && ~isempty(sessionFrame.symbolRepeat)
+                symbolRepeat = max(1, round(double(sessionFrame.symbolRepeat)));
+            end
+            if symbolRepeat > 1
+                rUse = local_repeat_combine_symbols_local(rUse, symbolRepeat);
+            end
+            sessionBits = decode_protected_header_symbols(rUse, sessionFrame.infoBitsLen, p.frame, p.fec, p.softMetric);
+            [metaSession, ~, ok] = parse_session_header_bits(sessionBits, p.frame);
+            if ok
+                return;
+            end
+        end
     case "payload_like"
         demodSoft = demodulate_to_softbits(rData, sessionFrame.modCfg, sessionFrame.fecCfg, p.softMetric, reliability);
         demodDeint = deinterleave_bits(demodSoft, sessionFrame.intState, p.interleaver);
@@ -3245,8 +3293,10 @@ switch string(sessionFrame.decodeKind)
         error("Unsupported session frame decodeKind: %s", string(sessionFrame.decodeKind));
 end
 
-sessionBits = fit_bits_length(sessionBits, sessionFrame.infoBitsLen);
-[metaSession, ~, ok] = parse_session_header_bits(sessionBits, p.frame);
+if exist("sessionBits", "var")
+    sessionBits = fit_bits_length(sessionBits, sessionFrame.infoBitsLen);
+    [metaSession, ~, ok] = parse_session_header_bits(sessionBits, p.frame);
+end
 end
 
 function y = local_repeat_combine_symbols_local(x, repeat)
@@ -3300,6 +3350,21 @@ for k = 1:numel(parts)
     mat(:, k) = parts{k}(1:nSym);
 end
 y = mean(mat, 2);
+end
+
+function [hdrRaw, reliability] = local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame)
+hdrLen = double(sessionFrame.nDataSym);
+hdrRaw = fit_complex_length_local(rFull(preLen+1:end), hdrLen);
+reliability = local_fit_reliability_length_local(reliabilityFull(preLen+1:end), hdrLen);
+if ~(isfield(sessionFrame, "fhCfg") && isstruct(sessionFrame.fhCfg) ...
+        && isfield(sessionFrame.fhCfg, "enable") && sessionFrame.fhCfg.enable)
+    return;
+end
+if fh_is_fast(sessionFrame.fhCfg)
+    return;
+end
+hopInfo = hop_info_from_fh_cfg_local(sessionFrame.fhCfg, numel(hdrRaw));
+hdrRaw = fh_demodulate(hdrRaw, hopInfo);
 end
 
 function rate = local_nominal_success_rate_local(nom)

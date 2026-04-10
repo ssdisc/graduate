@@ -73,7 +73,7 @@ switch pathName
         rxPrep = rxRaw;
         reliability = ones(numel(rxRaw), 1);
         methodName = "none";
-    case {"adaptive_notch", "blanking", "fft_notch", "fft_bandstop", "stft_notch", "clipping", "ml_blanking", "ml_cnn", "ml_gru"}
+    case {"adaptive_notch", "blanking", "fft_notch", "fft_bandstop", "stft_notch", "clipping", "ml_blanking", "ml_cnn", "ml_gru", "ml_narrowband"}
         methodName = pathName;
         [rxPrep, reliability] = mitigate_impulses(rxRaw, methodName, mitigation);
     otherwise

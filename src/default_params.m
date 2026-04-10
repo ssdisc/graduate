@@ -5,7 +5,7 @@ arguments
     opts.strictModelLoad (1,1) logical = true
     opts.requireTrainedMlModels (1,1) logical = true
     opts.allowBatchModelFallback (1,1) logical = true
-    opts.loadMlModels string = ["lr" "cnn" "gru" "selector"]
+    opts.loadMlModels string = ["lr" "cnn" "gru" "selector" "narrowband"]
 end
 
 p = struct();
@@ -111,7 +111,7 @@ p.frame.phyHeaderSpreadPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1];
 p.frame.phyHeaderSpreadInit = [0 0 0 0 0 0 0 0 0 1 1];
 p.frame.phyHeaderFhEnable = true;          % PHY小头固定已知跳频，仅作用于头部
 p.frame.phyHeaderFhMode = 'fast';          % 'slow' | 'fast'
-p.frame.phyHeaderFhHopsPerSymbol = 2;      % 真快跳频：每个符号内的跳数
+p.frame.phyHeaderFhHopsPerSymbol = 3;      % 真快跳频：每个符号内的跳数
 p.frame.phyHeaderFhSymbolsPerHop = 1;      % slow模式下的头部每跳符号数
 p.frame.phyHeaderFhSequenceType = 'linear';
 p.frame.phyHeaderFhFreqSet = [];
@@ -171,7 +171,7 @@ p.fh = struct();
 p.fh.enable = true;              % 是否启用跳频
 p.fh.nFreqs = 8;                 % payload跳频频点数量
 p.fh.mode = 'fast';              % 'slow' | 'fast'
-p.fh.hopsPerSymbol = 2;          % 真快跳频：每个符号内的跳数
+p.fh.hopsPerSymbol = 3;          % 真快跳频：每个符号内的跳数
 p.fh.symbolsPerHop = 1;          % slow模式下的每跳符号数
 p.fh.sequenceType = 'chaos';     % 'pn' | 'chaos' | 'linear' | 'random'
 p.fh.pnPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1]; % x^11 + x^2 + 1
@@ -251,7 +251,7 @@ p.channel.multipath.rayleigh = false;        % 启用瑞利衰落（各径独立
 % 10) 脉冲抑制
 p.mitigation = struct();
 p.mitigation.methods = ["none" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" ...
-    "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard" "adaptive_ml_frontend"]; % 运行并比较
+    "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard" "ml_narrowband" "adaptive_ml_frontend"]; % 运行并比较
 % p.mitigation.methods = ["none"]; % 运行并比较
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
 p.mitigation.thresholdAlpha = 4.0; % T = alpha * median(abs(r))
@@ -320,7 +320,7 @@ p.mitigation.binding = struct();
 p.mitigation.binding.enable = true;
 p.mitigation.binding.impulseMethods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard" "adaptive_ml_frontend"];
 p.mitigation.binding.singleToneMethods = ["none" "fft_notch" "adaptive_notch" "adaptive_ml_frontend"];
-p.mitigation.binding.narrowbandMethods = ["none" "fft_bandstop" "adaptive_notch" "adaptive_ml_frontend"];
+p.mitigation.binding.narrowbandMethods = ["none" "fft_bandstop" "adaptive_notch" "ml_narrowband" "adaptive_ml_frontend"];
 p.mitigation.binding.sweepMethods = ["none" "stft_notch" "adaptive_ml_frontend"];
 p.mitigation.binding.mixedMethods = ["none" "adaptive_ml_frontend"];
 p.mitigation.thresholdCalibration = struct();
@@ -352,7 +352,7 @@ if ~exist(modelDir, 'dir')
 end
 
 requestedMlModels = lower(string(opts.loadMlModels(:).'));
-invalidMlModels = setdiff(requestedMlModels, ["lr" "cnn" "gru" "selector"]);
+invalidMlModels = setdiff(requestedMlModels, ["lr" "cnn" "gru" "selector" "narrowband"]);
 if ~isempty(invalidMlModels)
     error("default_params:UnknownMlModelKind", ...
         "Unknown loadMlModels entry: %s", strjoin(cellstr(invalidMlModels), ", "));
@@ -440,6 +440,19 @@ if any(requestedMlModels == "selector")
         "expectedContext", expectedReloadContext);
 else
     p.mitigation.selector = ml_interference_selector_model();
+end
+
+expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
+
+if any(requestedMlModels == "narrowband")
+    p.mitigation.mlNarrowband = load_pretrained_model( ...
+        fullfile(modelDir, "narrowband_action_model.mat"), @ml_narrowband_action_model, ...
+        "strict", opts.strictModelLoad, ...
+        "requireTrained", opts.requireTrainedMlModels, ...
+        "allowBatchFallback", opts.allowBatchModelFallback, ...
+        "expectedContext", expectedNarrowbandContext);
+else
+    p.mitigation.mlNarrowband = ml_narrowband_action_model();
 end
 
 %% 截获/隐蔽分析

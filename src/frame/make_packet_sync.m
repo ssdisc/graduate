@@ -19,7 +19,12 @@ else
 end
 
 [syncBits, syncSym] = make_preamble(syncLen, cfgUse);
-syncInfo = struct("kind", syncKind, "length", syncLen);
+[syncSym, protectInfo] = local_protect_sync_symbols_local(syncSym, cfgUse);
+syncInfo = struct( ...
+    "kind", syncKind, ...
+    "length", syncLen, ...
+    "symbolLength", numel(syncSym), ...
+    "spreadFactor", protectInfo.spreadFactor);
 end
 
 function syncLen = local_first_sync_length(frameCfg)
@@ -53,4 +58,15 @@ end
 if isfield(frameCfg, "packetSyncChaosParams") && isstruct(frameCfg.packetSyncChaosParams)
     cfgOut.preambleChaosParams = frameCfg.packetSyncChaosParams;
 end
+end
+
+function [syncSym, info] = local_protect_sync_symbols_local(syncSymIn, frameCfg)
+syncSym = syncSymIn(:);
+dsssCfg = phy_header_dsss_cfg(frameCfg);
+info = struct("spreadFactor", 1);
+if ~dsssCfg.enable
+    return;
+end
+[syncSym, dsssInfo] = dsss_spread(syncSym, dsssCfg);
+info.spreadFactor = dsssInfo.spreadFactor;
 end

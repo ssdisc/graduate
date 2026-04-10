@@ -18,8 +18,10 @@ batchTag = string(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
 generalizedTrainArgs = local_generalized_training_args(p);
 impulseDlTrainArgs = local_impulse_dl_training_args();
 selectorTrainArgs = local_selector_training_args(p);
+narrowbandTrainArgs = local_narrowband_training_args();
 requiredModels = local_required_ml_models(p.mitigation.methods);
 expectedReloadContext = ml_capture_reload_context(p);
+expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
 
 fprintf('========================================\n');
 fprintf('Demo config source: src/default_params.m\n');
@@ -153,6 +155,35 @@ else
     fprintf('Skipping selector model load: current methods do not use adaptive_ml_frontend.\n\n');
 end
 
+if requiredModels.narrowband
+    narrowbandModelPath = fullfile(modelDir, 'narrowband_action_model.mat');
+    if ~forceRetrain
+        [p.mitigation.mlNarrowband, loadedNarrowband, loadedNarrowbandPath] = load_pretrained_model( ...
+            narrowbandModelPath, @ml_narrowband_action_model, "expectedContext", expectedNarrowbandContext);
+        loadedNarrowband = loadedNarrowband && isfield(p.mitigation.mlNarrowband, 'trained') ...
+            && logical(p.mitigation.mlNarrowband.trained);
+        if ~loadedNarrowband
+            loadedNarrowbandPath = "";
+        end
+    else
+        loadedNarrowband = false;
+        loadedNarrowbandPath = "";
+    end
+    if loadedNarrowband
+        fprintf('Loaded narrowband action model: %s\n\n', char(loadedNarrowbandPath));
+    else
+        fprintf('Training narrowband action model...\n');
+        [p.mitigation.mlNarrowband, narrowbandReport] = ml_train_narrowband_action(p, ...
+            narrowbandTrainArgs{:}, ...
+            'saveArtifacts', true, 'saveDir', string(modelDir), ...
+            'saveTag', batchTag, 'savedBy', "run_demo");
+        fprintf('Narrowband action model saved (latest): %s\n', char(narrowbandReport.artifacts.latestPath));
+        fprintf('Narrowband action model saved (batch): %s\n\n', char(narrowbandReport.artifacts.batchPath));
+    end
+else
+    fprintf('Skipping narrowband action model load: current methods do not use ml_narrowband.\n\n');
+end
+
 p.mitigation.strictModelLoad = true;
 p.mitigation.requireTrainedModels = true;
 if isfield(p, 'eve') && isstruct(p.eve) && isfield(p.eve, 'mitigation')
@@ -244,6 +275,7 @@ required.lr = any(methods == "ml_blanking");
 required.cnn = any(methods == "ml_cnn" | methods == "ml_cnn_hard");
 required.gru = any(methods == "ml_gru" | methods == "ml_gru_hard" | methods == "adaptive_ml_frontend");
 required.selector = any(methods == "adaptive_ml_frontend");
+required.narrowband = any(methods == "ml_narrowband");
 end
 
 function txt = local_on_off_text(tf)
@@ -260,6 +292,14 @@ args = { ...
     'ebN0dBRange', [-4, 16], ...
     'dataSymbolsPerBlock', dataSymbolsPerBlock, ...
     'maxRetriesPerBlock', 10, ...
+    'verbose', true};
+end
+
+function args = local_narrowband_training_args()
+args = { ...
+    'ebN0dBRange', [-4, 16], ...
+    'blockLenRange', [96 1024], ...
+    'bpskProbability', 0.35, ...
     'verbose', true};
 end
 

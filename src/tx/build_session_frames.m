@@ -21,19 +21,18 @@ end
 switch mode
     case "session_frame_repeat"
         repeatCount = session_frame_repeat_count(p.frame);
-        [dataSymBaseTx, modInfo, intState, fecCfg] = local_encode_repeat_session_frame(sessionHeaderBits, p);
-        frameTemplate = local_make_frame_template(mode, syncSym, syncInfo, dataSymBaseTx, waveform, p, ...
-            p.mod, fecCfg, intState, 1, numel(sessionHeaderBits), "payload_like");
-        modInfo = local_apply_session_link_to_mod_info(modInfo, frameTemplate.dsssInfo);
+        [dataSymBaseTx, modInfo] = local_encode_session_header_frame(sessionHeaderBits, p, 1);
+        frameTemplate = local_make_frame_template(mode, syncSym, syncInfo, dataSymBaseTx, waveform, ...
+            local_session_header_fh_cfg(p), struct("type", "BPSK"), numel(sessionHeaderBits), 1);
         sessionFrames = repmat(frameTemplate, repeatCount, 1);
         for idx = 1:repeatCount
             sessionFrames(idx).frameIndex = idx;
         end
     case "session_frame_strong"
-        [dataSymBaseTx, modInfo, fecCfg, bitRepeat] = local_encode_strong_session_frame(sessionHeaderBits, p);
-        frameTemplate = local_make_frame_template(mode, syncSym, syncInfo, dataSymBaseTx, waveform, p, ...
-            struct("type", "BPSK"), fecCfg, struct(), bitRepeat, numel(sessionHeaderBits), "strong_bpsk");
-        modInfo = local_apply_session_link_to_mod_info(modInfo, frameTemplate.dsssInfo);
+        bitRepeat = session_frame_strong_repeat(p.frame);
+        [dataSymBaseTx, modInfo] = local_encode_session_header_frame(sessionHeaderBits, p, bitRepeat);
+        frameTemplate = local_make_frame_template(mode, syncSym, syncInfo, dataSymBaseTx, waveform, ...
+            local_session_header_fh_cfg(p), struct("type", "BPSK"), numel(sessionHeaderBits), bitRepeat);
         frameTemplate.frameIndex = 1;
         sessionFrames = frameTemplate;
     otherwise
@@ -55,9 +54,9 @@ plan.txBurstForChannel = vertcat(txParts{:});
 plan.txBurstBasebandForSpectrum = vertcat(basebandParts{:});
 end
 
-function frame = local_make_frame_template(mode, syncSym, syncInfo, dataSymBaseTx, waveform, p, modCfg, fecCfg, intState, bitRepeat, infoBitsLen, decodeKind)
-[dataSymTx, dsssCfg, dsssInfo, fhCfg, hopInfo, txSymBasebandForSpectrum, txSymForChannel] = ...
-    local_build_session_data_path(syncSym, dataSymBaseTx, p, waveform);
+function frame = local_make_frame_template(mode, syncSym, syncInfo, dataSymBaseTx, waveform, fhCfg, modCfg, infoBitsLen, symbolRepeat)
+[dataSymTx, hopInfo, txSymBasebandForSpectrum, txSymForChannel] = ...
+    local_build_session_header_path(syncSym, dataSymBaseTx, fhCfg, waveform);
 txSymFrame = [syncSym(:); dataSymTx(:)];
 frame = struct();
 frame.transportMode = mode;
@@ -72,41 +71,35 @@ frame.txSymFrame = txSymFrame;
 frame.txSymForChannel = txSymForChannel;
 frame.txSymBasebandForSpectrum = txSymBasebandForSpectrum;
 frame.modCfg = modCfg;
-frame.fecCfg = fecCfg;
-frame.intState = intState;
-frame.bitRepeat = bitRepeat;
 frame.infoBitsLen = infoBitsLen;
-frame.decodeKind = decodeKind;
-frame.dsssCfg = dsssCfg;
-frame.dsssInfo = dsssInfo;
+frame.decodeKind = "protected_header";
+frame.symbolRepeat = symbolRepeat;
+frame.dsssCfg = struct("enable", false);
+frame.dsssInfo = struct("enable", false, "spreadFactor", 1);
 frame.fhCfg = fhCfg;
 frame.hopInfo = hopInfo;
 end
 
-function [dataSymBaseTx, modInfo, intState, fecCfg] = local_encode_repeat_session_frame(sessionHeaderBits, p)
-fecCfg = local_session_term_fec_cfg(p.fec);
-codedBits = local_term_fec_encode(sessionHeaderBits, fecCfg);
-[codedBitsInt, intState] = interleave_bits(codedBits, p.interleaver);
-[dataSymBaseTx, modInfo] = modulate_bits(codedBitsInt, p.mod, fecCfg);
+function [dataSymBaseTx, modInfo] = local_encode_session_header_frame(sessionHeaderBits, p, symbolRepeat)
+dataSymBaseTx = encode_protected_header_symbols(sessionHeaderBits, p.frame, p.fec);
+symbolRepeat = max(1, round(double(symbolRepeat)));
+if symbolRepeat > 1
+    dataSymBaseTx = repelem(dataSymBaseTx(:), symbolRepeat);
+else
+    dataSymBaseTx = dataSymBaseTx(:);
+end
+modInfo = local_session_header_mod_info(numel(sessionHeaderBits), numel(dataSymBaseTx));
 end
 
-function [dataSymBaseTx, modInfo, fecCfg, bitRepeat] = local_encode_strong_session_frame(sessionHeaderBits, p)
-fecCfg = local_session_term_fec_cfg(p.fec);
-bitRepeat = session_frame_strong_repeat(p.frame);
-codedBits = local_term_fec_encode(sessionHeaderBits, fecCfg);
-codedBitsStrong = repelem(codedBits(:), bitRepeat);
-[dataSymBaseTx, modInfo] = modulate_bits(codedBitsStrong, struct("type", "BPSK"), fecCfg);
+function fhCfg = local_session_header_fh_cfg(p)
+fhCfg = phy_header_fh_cfg(p.frame, p.fh);
 end
 
-function [dataSymTx, dsssCfg, dsssInfo, fhCfg, hopInfo, txSymBasebandForSpectrum, txSymForChannel] = local_build_session_data_path(syncSym, dataSymBaseTx, p, waveform)
-dsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, numel(dataSymBaseTx));
-[dataSymSpread, dsssInfo] = dsss_spread(dataSymBaseTx(:), dsssCfg);
-fhCfg = derive_packet_fh_cfg(p.fh, 1, 0, numel(dataSymSpread));
-
-dataSymTx = dataSymSpread;
+function [dataSymTx, hopInfo, txSymBasebandForSpectrum, txSymForChannel] = local_build_session_header_path(syncSym, dataSymBaseTx, fhCfg, waveform)
+dataSymTx = dataSymBaseTx(:);
 hopInfo = struct('enable', false);
 if isfield(fhCfg, "enable") && fhCfg.enable && ~fh_is_fast(fhCfg)
-    [dataSymTx, hopInfo] = fh_modulate(dataSymSpread, fhCfg);
+    [dataSymTx, hopInfo] = fh_modulate(dataSymTx, fhCfg);
 end
 
 txSymFrame = [syncSym(:); dataSymTx(:)];
@@ -134,37 +127,14 @@ nLeadingSym = max(0, round(double(nLeadingSym)));
 sampleIdx = nLeadingSym * round(double(waveform.sps)) + 1;
 end
 
-function modInfo = local_apply_session_link_to_mod_info(modInfo, dsssInfo)
-if ~(isstruct(dsssInfo) && isfield(dsssInfo, "spreadFactor"))
-    return;
-end
-modInfo.spreadFactor = dsssInfo.spreadFactor;
-if isfield(modInfo, "bitsPerSymbol") && isfield(modInfo, "codeRate")
-    modInfo.bitLoad = modInfo.bitsPerSymbol * modInfo.codeRate / dsssInfo.spreadFactor;
-end
-end
-
-function fecCfg = local_session_term_fec_cfg(fecBase)
-fecCfg = fecBase;
-fecCfg.kind = "conv";
-fecCfg.opmode = 'term';
-fecCfg.tracebackDepth = max(double(fecBase.tracebackDepth), 5 * local_conv_memory_bits(fecBase.trellis));
-end
-
-function memoryBits = local_conv_memory_bits(trellis)
-memoryBits = max(0, round(log2(trellis.numStates)));
-end
-
-function codedBits = local_term_fec_encode(bits, fecCfg)
-bits = uint8(bits(:) ~= 0);
-tailBits = local_conv_termination_bits(fecCfg.trellis);
-bitsTerm = [bits; zeros(tailBits, 1, "uint8")];
-codedBits = convenc(bitsTerm, fecCfg.trellis);
-end
-
-function nTail = local_conv_termination_bits(trellis)
-numInputBits = max(1, round(log2(trellis.numInputSymbols)));
-memoryBits = local_conv_memory_bits(trellis);
-tailSymbols = ceil(double(memoryBits) / double(numInputBits));
-nTail = tailSymbols * numInputBits;
+function modInfo = local_session_header_mod_info(infoBitsLen, nSym)
+nSym = max(1, round(double(nSym)));
+codeRate = double(infoBitsLen) / double(nSym);
+codeRate = min(max(codeRate, 0), 1);
+modInfo = struct( ...
+    "type", "BPSK", ...
+    "bitsPerSymbol", 1, ...
+    "codeRate", codeRate, ...
+    "spreadFactor", 1, ...
+    "bitLoad", codeRate);
 end
