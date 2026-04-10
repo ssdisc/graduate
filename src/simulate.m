@@ -660,8 +660,14 @@ fprintf('[SIM] 开始频谱估计与结果汇总...\n');
 % 波形/频谱（单次突发，无信道，基于真实发射采样波形）
 [~, spectrumPointIdx] = max(linkBudget.bob.txPowerLin);
 txBurstForSpectrum = linkBudget.bob.rxAmplitudeScale(spectrumPointIdx) * txSymForChannel;
-[psd, freqHz, bw99Hz, etaBpsHz, spectrumInfo] = estimate_spectrum( ...
+txBurstBasebandForSpectrum = txBurstForSpectrum;
+if isfield(txPlan, "txBurstBasebandForSpectrum") && ~isempty(txPlan.txBurstBasebandForSpectrum)
+    txBurstBasebandForSpectrum = linkBudget.bob.rxAmplitudeScale(spectrumPointIdx) * txPlan.txBurstBasebandForSpectrum;
+end
+[psd, freqHz, burstBw99Hz, burstEtaBpsHz, burstSpectrumInfo] = estimate_spectrum( ...
     txBurstForSpectrum, modInfo, waveform, struct("payloadBits", numel(payloadBits)));
+[~, ~, basebandBw99Hz, basebandEtaBpsHz, basebandSpectrumInfo] = estimate_spectrum( ...
+    txBurstBasebandForSpectrum, modInfo, waveform, struct("payloadBits", numel(payloadBits)));
 
 results = struct();
 results.params = p;
@@ -711,13 +717,19 @@ results.example = example;
 results.spectrum = struct( ...
     "freqHz", freqHz, ...
     "psd", psd, ...
-    "bw99Hz", bw99Hz, ...
-    "etaBpsHz", etaBpsHz, ...
-    "symbolRateHz", spectrumInfo.symbolRateHz, ...
-    "sampleRateHz", spectrumInfo.sampleRateHz, ...
-    "burstDurationSec", spectrumInfo.burstDurationSec, ...
-    "grossInfoBitRateBps", spectrumInfo.grossInfoBitRateBps, ...
-    "payloadBitRateBps", spectrumInfo.payloadBitRateBps);
+    "bw99Hz", burstBw99Hz, ...
+    "etaBpsHz", burstEtaBpsHz, ...
+    "burstBw99Hz", burstBw99Hz, ...
+    "burstEtaBpsHz", burstEtaBpsHz, ...
+    "basebandBw99Hz", basebandBw99Hz, ...
+    "basebandEtaBpsHz", basebandEtaBpsHz, ...
+    "symbolRateHz", burstSpectrumInfo.symbolRateHz, ...
+    "sampleRateHz", burstSpectrumInfo.sampleRateHz, ...
+    "burstDurationSec", burstSpectrumInfo.burstDurationSec, ...
+    "grossInfoBitRateBps", burstSpectrumInfo.grossInfoBitRateBps, ...
+    "payloadBitRateBps", burstSpectrumInfo.payloadBitRateBps, ...
+    "burstInfo", burstSpectrumInfo, ...
+    "basebandInfo", basebandSpectrumInfo);
 results.kl = struct("ebN0dB", EbN0dBList, ...
     "jsrDb", JsrDbList, ...
     "signalVsNoise", klSigVsNoise, ...
@@ -2185,6 +2197,29 @@ fhCaptureCfg = struct( ...
     "dataFhCfg", dataFhCfg);
 end
 
+function fhCaptureCfg = local_session_fast_fh_capture_cfg_local(sessionFrame, fhAssumption)
+fhCaptureCfg = struct("enable", false);
+if nargin < 2 || strlength(string(fhAssumption)) == 0
+    fhAssumption = "known";
+end
+
+dataFhCfg = struct("enable", false);
+if isfield(sessionFrame, "fhCfg") && isstruct(sessionFrame.fhCfg)
+    dataFhCfg = local_assumed_packet_fh_cfg_local(sessionFrame.fhCfg, fhAssumption);
+end
+
+if ~(isfield(dataFhCfg, "enable") && dataFhCfg.enable && fh_is_fast(dataFhCfg))
+    return;
+end
+
+fhCaptureCfg = struct( ...
+    "enable", true, ...
+    "syncSymbols", double(numel(sessionFrame.syncSym)), ...
+    "headerSymbols", 0, ...
+    "headerFhCfg", struct("enable", false), ...
+    "dataFhCfg", dataFhCfg);
+end
+
 function fhCfgOut = local_assumed_packet_fh_cfg_local(fhCfgIn, assumption)
 fhCfgOut = fhCfgIn;
 if ~(isstruct(fhCfgOut) && isfield(fhCfgOut, "enable") && fhCfgOut.enable)
@@ -2982,7 +3017,7 @@ function nom = local_build_packet_nominal_local(rawCapture, txPackets, sessionFr
 nPackets = numel(txPackets);
 nom = local_init_packet_nominal_local(nPackets, numel(sessionFrames));
 nom.session = local_build_session_nominal_local( ...
-    rawCapture.sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, adaptiveEnabled);
+    rawCapture.sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, adaptiveEnabled, fhAssumption);
 
 for pktIdx = 1:nPackets
     if numel(rawCapture.rxPackets) < pktIdx || isempty(rawCapture.rxPackets{pktIdx})
@@ -3062,7 +3097,7 @@ for pktIdx = 1:nPackets
 end
 end
 
-function nom = local_build_session_nominal_local(sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, adaptiveEnabled)
+function nom = local_build_session_nominal_local(sessionRx, sessionFrames, methodName, mitigation, syncCfgUse, rxSyncCfg, p, waveform, N0, adaptiveEnabled, fhAssumption)
 nom = local_init_session_nominal_local(numel(sessionFrames));
 if isempty(sessionFrames)
     return;
@@ -3078,8 +3113,9 @@ for frameIdx = 1:numel(sessionFrames)
     totalLen = preLen + sessionFrame.nDataSym;
     sampleActionHint = local_initial_sample_action_hint_local(methodName, adaptiveEnabled);
     bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
+    fhCaptureCfg = local_session_fast_fh_capture_cfg_local(sessionFrame, fhAssumption);
     front = local_capture_synced_block_local( ...
-        sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, sampleActionHint, bootstrapChain);
+        sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, sampleActionHint, bootstrapChain, fhCaptureCfg);
     if ~front.ok
         continue;
     end
@@ -3092,7 +3128,7 @@ for frameIdx = 1:numel(sessionFrames)
     if local_is_adaptive_frontend_method_local(methodName) && string(decision.sampleAction) ~= sampleActionHint
         front = local_capture_synced_block_local( ...
             sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, ...
-            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled));
+            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg);
         if ~front.ok
             continue;
         end
@@ -3113,14 +3149,39 @@ for frameIdx = 1:numel(sessionFrames)
         end
     end
 
-    rxStateSession = struct("nDataSym", sessionFrame.nDataSym);
+    rxStateSession = local_session_rx_state_local(sessionFrame);
     nom.preambleRx{frameIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
     nom.preambleRef{frameIdx} = sessionFrame.syncSym(:);
     actionName = string(decision.symbolAction);
+    symbolFhEnabled = isfield(rxStateSession, "fhCfg") && isstruct(rxStateSession.fhCfg) ...
+        && isfield(rxStateSession.fhCfg, "enable") && rxStateSession.fhCfg.enable ...
+        && ~fh_is_fast(rxStateSession.fhCfg);
+    if symbolFhEnabled
+        hopInfoUsed = local_nominal_hop_info_local(rxStateSession, fhAssumption);
+    else
+        hopInfoUsed = struct("enable", false);
+    end
     [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = local_prepare_data_symbols_local( ...
-        rFull(preLen+1:end), reliabilityFull(preLen+1:end), rxStateSession, struct("enable", false), sessionFrame.modCfg, rxSyncCfg, false, actionName, mitigation);
+        rFull(preLen+1:end), reliabilityFull(preLen+1:end), rxStateSession, hopInfoUsed, sessionFrame.modCfg, rxSyncCfg, symbolFhEnabled, actionName, mitigation);
     nom.ok(frameIdx) = true;
 end
+end
+
+function rxStateSession = local_session_rx_state_local(sessionFrame)
+rxStateSession = struct( ...
+    "nDataSym", double(sessionFrame.nDataSym), ...
+    "nDemodSym", double(local_session_demod_symbol_count_local(sessionFrame)), ...
+    "dsssCfg", sessionFrame.dsssCfg, ...
+    "fhCfg", sessionFrame.fhCfg, ...
+    "hopInfo", sessionFrame.hopInfo);
+end
+
+function nSym = local_session_demod_symbol_count_local(sessionFrame)
+nSym = double(sessionFrame.nDataSym);
+if isfield(sessionFrame, "nDemodSym") && ~isempty(sessionFrame.nDemodSym)
+    nSym = double(sessionFrame.nDemodSym);
+end
+nSym = max(0, round(nSym));
 end
 
 function [sessionOut, calState] = local_recover_session_from_nominal_local(sessionIn, sessionNom, sessionFrames, methodName, mitigation, p, calState)
@@ -3141,11 +3202,12 @@ for frameIdx = 1:min(numel(sessionFrames), numel(sessionNom.ok))
         continue;
     end
 
-    rData = fit_complex_length_local(sessionNom.rDataPrepared{frameIdx}, sessionFrames(frameIdx).nDataSym);
+    nDemodSym = local_session_demod_symbol_count_local(sessionFrames(frameIdx));
+    rData = fit_complex_length_local(sessionNom.rDataPrepared{frameIdx}, nDemodSym);
     reliability = [];
     if isfield(sessionNom, "rDataReliability") && numel(sessionNom.rDataReliability) >= frameIdx ...
             && ~isempty(sessionNom.rDataReliability{frameIdx})
-        reliability = local_fit_reliability_length_local(sessionNom.rDataReliability{frameIdx}, sessionFrames(frameIdx).nDataSym);
+        reliability = local_fit_reliability_length_local(sessionNom.rDataReliability{frameIdx}, nDemodSym);
     end
     [metaSession, okFrame] = local_try_decode_session_frame_local(rData, reliability, sessionFrames(frameIdx), p);
     if okFrame
@@ -3153,7 +3215,7 @@ for frameIdx = 1:min(numel(sessionFrames), numel(sessionNom.ok))
         return;
     end
 
-    rMitList{end+1, 1} = fit_complex_length_local(rData, sessionFrames(frameIdx).nDataSym); %#ok<AGROW>
+    rMitList{end+1, 1} = fit_complex_length_local(rData, nDemodSym); %#ok<AGROW>
 end
 
 if numel(rMitList) >= 2

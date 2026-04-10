@@ -91,6 +91,7 @@ packetStrideHops = packet_stride_hops_local(p, maxPacketDataSym);
 
 txPackets = repmat(struct(), nPackets, 1);
 txBurstChannelParts = cell(nPackets, 1);
+txBurstSpectrumParts = cell(nPackets, 1);
 modInfoRef = struct();
 
 for pktIdx = 1:nPackets
@@ -173,6 +174,7 @@ for pktIdx = 1:nPackets
     [~, syncSymPkt, syncInfoPkt] = make_packet_sync(p.frame, pktIdx);
     txSymPkt = [syncSymPkt; phyHeaderSymTx; dataSymHop];
     txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
+    txSymForSpectrum = txSymForChannel;
     if phyHeaderFast || dataFast
         txSymForChannel = local_apply_fast_fh_segments_to_packet_samples( ...
             txSymForChannel, numel(syncSymPkt), numel(phyHeaderSym), phyHeaderFhCfg, fhCfgPkt, waveform);
@@ -219,6 +221,7 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).txSymPkt = txSymPkt;
     txPackets(pktIdx).txSymForChannel = txSymForChannel;
     txBurstChannelParts{pktIdx} = txSymForChannel;
+    txBurstSpectrumParts{pktIdx} = txSymForSpectrum;
 end
 
 plan = struct();
@@ -242,6 +245,7 @@ plan.sessionMeta = sessionMeta;
 plan.sessionFrames = sessionFrames;
 plan.sessionFramePlan = sessionFramePlan;
 plan.txBurstForChannel = vertcat(sessionFramePlan.txBurstForChannel(:), vertcat(txBurstChannelParts{:}));
+plan.txBurstBasebandForSpectrum = vertcat(sessionFramePlan.txBurstBasebandForSpectrum(:), vertcat(txBurstSpectrumParts{:}));
 end
 
 function nSym = n_symbols_for_info_bits_local(p, nInfoBits)

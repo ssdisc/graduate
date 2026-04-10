@@ -59,11 +59,12 @@ if isfield(chOut, "singleTone") && isstruct(chOut.singleTone)
 end
 
 if isfield(chOut, "narrowband") && isstruct(chOut.narrowband)
+    nbSpacingHz = NaN;
     if isfield(chOut.narrowband, "centerFreqPoints") && ~isempty(chOut.narrowband.centerFreqPoints)
         require_sample_rate_local(sampleRateHz, "narrowband.centerFreqPoints");
         require_waveform_local(waveform, "narrowband.centerFreqPoints");
-        spacingHz = fh_frequency_spacing_hz(fhRef, waveform);
-        chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreqPoints) * spacingHz / sampleRateHz;
+        nbSpacingHz = fh_frequency_spacing_hz(fhRef, waveform);
+        chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreqPoints) * nbSpacingHz / sampleRateHz;
     elseif isfield(chOut.narrowband, "centerFreq")
         chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreq);
     else
@@ -72,12 +73,17 @@ if isfield(chOut, "narrowband") && isstruct(chOut.narrowband)
     if isfield(chOut.narrowband, "bandwidthFreqPoints") && ~isempty(chOut.narrowband.bandwidthFreqPoints)
         require_sample_rate_local(sampleRateHz, "narrowband.bandwidthFreqPoints");
         require_waveform_local(waveform, "narrowband.bandwidthFreqPoints");
-        spacingHz = fh_frequency_spacing_hz(fhRef, waveform);
-        chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidthFreqPoints) * spacingHz / sampleRateHz, 1e-3);
+        if ~(isfinite(nbSpacingHz) && nbSpacingHz > 0)
+            nbSpacingHz = fh_frequency_spacing_hz(fhRef, waveform);
+        end
+        chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidthFreqPoints) * nbSpacingHz / sampleRateHz, 1e-3);
     elseif isfield(chOut.narrowband, "bandwidth")
         chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidth), 1e-3);
     else
         error("字段narrowband.bandwidthFreqPoints需要显式给出。");
+    end
+    if abs(double(chOut.narrowband.centerFreq)) + double(chOut.narrowband.bandwidth) / 2 >= 0.5
+        error("narrowband center/bandwidth exceeds Nyquist support: |fc| + bw/2 must be < 0.5.");
     end
 end
 

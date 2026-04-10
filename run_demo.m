@@ -15,10 +15,11 @@ end
 
 forceRetrain = false;
 batchTag = string(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
-generalizedTrainArgs = local_generalized_training_args();
+generalizedTrainArgs = local_generalized_training_args(p);
 impulseDlTrainArgs = local_impulse_dl_training_args();
 selectorTrainArgs = local_selector_training_args(p);
 requiredModels = local_required_ml_models(p.mitigation.methods);
+expectedReloadContext = ml_capture_reload_context(p);
 
 fprintf('========================================\n');
 fprintf('Demo config source: src/default_params.m\n');
@@ -39,7 +40,8 @@ fprintf('========================================\n\n');
 if requiredModels.lr
     lrModelPath = fullfile(modelDir, 'impulse_lr_model.mat');
     if ~forceRetrain
-        [p.mitigation.ml, loadedLr, loadedLrPath] = load_pretrained_model(lrModelPath, @ml_impulse_lr_model);
+        [p.mitigation.ml, loadedLr, loadedLrPath] = load_pretrained_model( ...
+            lrModelPath, @ml_impulse_lr_model, "expectedContext", expectedReloadContext);
         loadedLr = loadedLr && isfield(p.mitigation.ml, 'trained') && logical(p.mitigation.ml.trained);
         if ~loadedLr
             loadedLrPath = "";
@@ -67,7 +69,8 @@ end
 if requiredModels.cnn
     cnnModelPath = fullfile(modelDir, 'impulse_cnn_model.mat');
     if ~forceRetrain
-        [p.mitigation.mlCnn, loadedCnn, loadedCnnPath] = load_pretrained_model(cnnModelPath, @ml_cnn_impulse_model);
+        [p.mitigation.mlCnn, loadedCnn, loadedCnnPath] = load_pretrained_model( ...
+            cnnModelPath, @ml_cnn_impulse_model, "expectedContext", expectedReloadContext);
         loadedCnn = loadedCnn && isfield(p.mitigation.mlCnn, 'trained') && logical(p.mitigation.mlCnn.trained);
         if ~loadedCnn
             loadedCnnPath = "";
@@ -95,7 +98,8 @@ end
 if requiredModels.gru
     gruModelPath = fullfile(modelDir, 'impulse_gru_model.mat');
     if ~forceRetrain
-        [p.mitigation.mlGru, loadedGru, loadedGruPath] = load_pretrained_model(gruModelPath, @ml_gru_impulse_model);
+        [p.mitigation.mlGru, loadedGru, loadedGruPath] = load_pretrained_model( ...
+            gruModelPath, @ml_gru_impulse_model, "expectedContext", expectedReloadContext);
         loadedGru = loadedGru && isfield(p.mitigation.mlGru, 'trained') && logical(p.mitigation.mlGru.trained);
         if ~loadedGru
             loadedGruPath = "";
@@ -123,7 +127,8 @@ end
 if requiredModels.selector
     selectorModelPath = fullfile(modelDir, 'interference_selector_model.mat');
     if ~forceRetrain
-        [p.mitigation.selector, loadedSelector, loadedSelectorPath] = load_pretrained_model(selectorModelPath, @ml_interference_selector_model);
+        [p.mitigation.selector, loadedSelector, loadedSelectorPath] = load_pretrained_model( ...
+            selectorModelPath, @ml_interference_selector_model, "expectedContext", expectedReloadContext);
         loadedSelector = loadedSelector && isfield(p.mitigation.selector, 'trained') && logical(p.mitigation.selector.trained);
         if ~loadedSelector
             loadedSelectorPath = "";
@@ -166,7 +171,10 @@ end
 
 end
 
-function args = local_generalized_training_args()
+function args = local_generalized_training_args(p)
+[narrowbandCenterFreqPointsRange, narrowbandBandwidthFreqPointsRange] = ...
+    local_narrowband_training_ranges(p, [-2500, 2500], [200, 1800]);
+
 args = { ...
     'ebN0dBRange', [-2, 16], ...
     'labelScoreThreshold', 0.1, ...
@@ -181,8 +189,8 @@ args = { ...
     'singleToneFreqHzRange', [-2500, 2500], ...
     'narrowbandProbability', 0.35, ...
     'narrowbandPowerRange', [0.0025, 0.12], ...
-    'narrowbandCenterHzRange', [-2500, 2500], ...
-    'narrowbandBandwidthHzRange', [200, 1800], ...
+    'narrowbandCenterFreqPointsRange', narrowbandCenterFreqPointsRange, ...
+    'narrowbandBandwidthFreqPointsRange', narrowbandBandwidthFreqPointsRange, ...
     'sweepProbability', 0.20, ...
     'sweepPowerRange', [0.0025, 0.08], ...
     'sweepStartHzRange', [-3500, -500], ...
@@ -195,6 +203,29 @@ args = { ...
     'multipathRayleighProbability', 0.50, ...
     'maxAdditionalImpairments', 2, ...
     'verbose', true};
+end
+
+function [centerFreqPointsRange, bandwidthFreqPointsRange] = local_narrowband_training_ranges(p, centerHzRange, bandwidthHzRange)
+waveform = resolve_waveform_cfg(p);
+spacingHz = fh_frequency_spacing_hz(p.fh, waveform);
+
+centerHzRange = double(centerHzRange(:).');
+bandwidthHzRange = double(bandwidthHzRange(:).');
+if numel(centerHzRange) ~= 2 || any(~isfinite(centerHzRange)) || centerHzRange(1) > centerHzRange(2)
+    error("local_generalized_training_args:InvalidCenterHzRange", ...
+        "centerHzRange must be an ascending finite 1x2 range.");
+end
+if numel(bandwidthHzRange) ~= 2 || any(~isfinite(bandwidthHzRange)) || bandwidthHzRange(1) <= 0 || bandwidthHzRange(1) > bandwidthHzRange(2)
+    error("local_generalized_training_args:InvalidBandwidthHzRange", ...
+        "bandwidthHzRange must be a positive ascending finite 1x2 range.");
+end
+
+bandwidthFreqPointsRange = bandwidthHzRange / spacingHz;
+bandwidthFreqPointsRange = max(bandwidthFreqPointsRange, 1e-6);
+[maxCenterFreqPoints, ~] = narrowband_center_freq_points_limit(p.fh, waveform, bandwidthFreqPointsRange(2));
+centerFreqPointsRange = centerHzRange / spacingHz;
+centerFreqPointsRange = max(min(centerFreqPointsRange, maxCenterFreqPoints), -maxCenterFreqPoints);
+centerFreqPointsRange = sort(centerFreqPointsRange);
 end
 
 function args = local_impulse_dl_training_args()

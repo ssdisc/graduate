@@ -142,6 +142,18 @@ end
 
 s.spectrum99ObwHz = results.spectrum.bw99Hz;
 s.spectralEfficiency = results.spectrum.etaBpsHz;
+if isfield(results.spectrum, "burstBw99Hz")
+    s.burstSpectrum99ObwHz = results.spectrum.burstBw99Hz;
+end
+if isfield(results.spectrum, "burstEtaBpsHz")
+    s.burstSpectralEfficiency = results.spectrum.burstEtaBpsHz;
+end
+if isfield(results.spectrum, "basebandBw99Hz")
+    s.basebandSpectrum99ObwHz = results.spectrum.basebandBw99Hz;
+end
+if isfield(results.spectrum, "basebandEtaBpsHz")
+    s.basebandSpectralEfficiency = results.spectrum.basebandEtaBpsHz;
+end
 end
 
 function [commMetrics, compMetrics] = local_get_image_metrics(results)

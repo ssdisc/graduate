@@ -138,8 +138,10 @@ switch lower(string(labelName))
     case "narrowband"
         pBlock.channel.narrowband.enable = true;
         pBlock.channel.narrowband.power = 0.004 + 0.08 * rand();
-        pBlock.channel.narrowband.centerFreqPoints = -14 + 28 * rand();
         pBlock.channel.narrowband.bandwidthFreqPoints = 0.2 + 0.8 * rand();
+        [maxCenterFreqPoints, ~] = narrowband_center_freq_points_limit( ...
+            pBlock.fh, resolve_waveform_cfg(pBlock), pBlock.channel.narrowband.bandwidthFreqPoints);
+        pBlock.channel.narrowband.centerFreqPoints = -maxCenterFreqPoints + 2 * maxCenterFreqPoints * rand();
     case "sweep"
         pBlock.channel.sweep.enable = true;
         pBlock.channel.sweep.power = 0.004 + 0.06 * rand();

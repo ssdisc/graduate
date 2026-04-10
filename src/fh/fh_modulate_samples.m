@@ -26,16 +26,8 @@ nHops = ceil(nSample / hopLenSamples);
 freqOffsets = fh.freqSet(freqIdx);
 
 txHopped = complex(zeros(size(txSample)));
-sps = double(waveform.sps);
-for hop = 1:nHops
-    startIdx = (hop - 1) * hopLenSamples + 1;
-    endIdx = min(hop * hopLenSamples, nSample);
-    segLen = endIdx - startIdx + 1;
-    fHop = freqOffsets(hop);
-    n = (0:segLen-1).';
-    phaseRot = exp(1j * 2 * pi * (fHop / sps) * n);
-    txHopped(startIdx:endIdx) = txSample(startIdx:endIdx) .* phaseRot;
-end
+phaseRot = fh_phase_sequence_samples(freqOffsets, hopLenSamples, nSample, waveform);
+txHopped = txSample .* phaseRot;
 
 hopInfo = struct();
 hopInfo.enable = true;
@@ -48,4 +40,5 @@ hopInfo.freqOffsets = freqOffsets;
 hopInfo.pnState = pnState;
 hopInfo.nFreqs = fh.nFreqs;
 hopInfo.freqSet = fh.freqSet;
+hopInfo.phaseContinuous = true;
 end

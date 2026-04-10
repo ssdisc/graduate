@@ -31,21 +31,12 @@ if isempty(freqOffsets)
     error("fast-FH hopInfo.freqOffsets must not be empty.");
 end
 
-rxDehopped = complex(zeros(size(rxSample)));
-sps = double(waveform.sps);
 nHops = ceil(nSample / hopLenSamples);
 if numel(freqOffsets) < nHops
     error("fast-FH hopInfo has %d hops but %d are required for %d samples.", ...
         numel(freqOffsets), nHops, nSample);
 end
 
-for hop = 1:nHops
-    startIdx = (hop - 1) * hopLenSamples + 1;
-    endIdx = min(hop * hopLenSamples, nSample);
-    segLen = endIdx - startIdx + 1;
-    fHop = freqOffsets(hop);
-    n = (0:segLen-1).';
-    phaseDerot = exp(-1j * 2 * pi * (fHop / sps) * n);
-    rxDehopped(startIdx:endIdx) = rxSample(startIdx:endIdx) .* phaseDerot;
-end
+phaseRot = fh_phase_sequence_samples(freqOffsets, hopLenSamples, nSample, waveform);
+rxDehopped = rxSample .* conj(phaseRot);
 end
