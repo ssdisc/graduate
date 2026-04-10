@@ -137,7 +137,9 @@ for pktIdx = 1:nPackets
     [phyHeaderBits, phyHeader] = build_phy_header_bits(phyMeta, p.frame);
     phyHeaderSym = encode_phy_header_symbols(phyHeaderBits, p.frame, p.fec);
     phyHeaderFast = phyHeaderFhCfg.enable && fh_is_fast(phyHeaderFhCfg);
-    if phyHeaderFhCfg.enable && ~phyHeaderFast
+    if phyHeaderFast
+        [phyHeaderSymTx, phyHeaderHopInfo] = fh_fast_symbol_expand(phyHeaderSym, phyHeaderFhCfg);
+    elseif phyHeaderFhCfg.enable
         [phyHeaderSymTx, phyHeaderHopInfo] = fh_modulate(phyHeaderSym, phyHeaderFhCfg);
     else
         phyHeaderSymTx = phyHeaderSym;
@@ -160,8 +162,7 @@ for pktIdx = 1:nPackets
         fhCfgPkt = derive_packet_fh_cfg(p.fh, pktIdx, offsetsPkt.fhOffsetHops, numel(dataSymTx));
         dataFast = fh_is_fast(fhCfgPkt);
         if dataFast
-            dataSymHop = dataSymTx;
-            hopInfo = struct('enable', false);
+            [dataSymHop, hopInfo] = fh_fast_symbol_expand(dataSymTx, fhCfgPkt);
         else
             [dataSymHop, hopInfo] = fh_modulate(dataSymTx, fhCfgPkt);
         end
@@ -177,7 +178,7 @@ for pktIdx = 1:nPackets
     txSymForSpectrum = txSymForChannel;
     if phyHeaderFast || dataFast
         txSymForChannel = local_apply_fast_fh_segments_to_packet_samples( ...
-            txSymForChannel, numel(syncSymPkt), numel(phyHeaderSym), phyHeaderFhCfg, fhCfgPkt, waveform);
+            txSymForChannel, numel(syncSymPkt), numel(phyHeaderSymTx), phyHeaderFhCfg, fhCfgPkt, waveform);
     end
 
     txPackets(pktIdx).packetIndex = pktIdx;
@@ -215,6 +216,12 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).dsssInfo = dsssInfo;
     txPackets(pktIdx).dataSymBaseTx = dataSymTxBase;
     txPackets(pktIdx).dataSymTx = dataSymTx;
+    txPackets(pktIdx).dataSymHop = dataSymHop;
+    txPackets(pktIdx).nDemodSym = numel(dataSymTxBase);
+    txPackets(pktIdx).nDataSymBase = numel(dataSymTx);
+    txPackets(pktIdx).nDataSymTx = numel(dataSymHop);
+    txPackets(pktIdx).nPhyHeaderSymBase = numel(phyHeaderSym);
+    txPackets(pktIdx).nPhyHeaderSymTx = numel(phyHeaderSymTx);
     txPackets(pktIdx).fhCfg = fhCfgPkt;
     txPackets(pktIdx).hopInfo = hopInfo;
     txPackets(pktIdx).intState = intState;
@@ -262,11 +269,7 @@ if ~isfield(p, "fh") || ~isstruct(p.fh) || ~isfield(p.fh, "enable") || ~p.fh.ena
     return;
 end
 if fh_is_fast(p.fh)
-    if ~(isfield(p, "waveform") && isstruct(p.waveform))
-        error("Fast FH packet stride requires waveform config.");
-    end
-    samplesPerHop = fh_samples_per_hop(p.fh, p.waveform);
-    nHops = ceil(double(nSym) * double(p.waveform.sps) / double(samplesPerHop));
+    nHops = double(nSym) * double(fh_hops_per_symbol(p.fh));
     return;
 end
 nHops = ceil(double(nSym) / double(p.fh.symbolsPerHop));

@@ -110,9 +110,9 @@ p.frame.phyHeaderSpreadSequenceType = 'pn';
 p.frame.phyHeaderSpreadPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1];
 p.frame.phyHeaderSpreadInit = [0 0 0 0 0 0 0 0 0 1 1];
 p.frame.phyHeaderFhEnable = true;          % PHY小头固定已知跳频，仅作用于头部
-p.frame.phyHeaderFhMode = 'fast';          % 'slow' | 'fast'
-p.frame.phyHeaderFhHopsPerSymbol = 5;      % 真快跳频：每个符号内的跳数
-p.frame.phyHeaderFhSymbolsPerHop = 1;      % slow模式下的头部每跳符号数
+p.frame.phyHeaderFhMode = 'slow';          % 'slow' | 'fast'
+p.frame.phyHeaderFhHopsPerSymbol = 2;      % fast模式保留参数；默认禁用
+p.frame.phyHeaderFhSymbolsPerHop = 4;      % slow模式下的头部每跳符号数
 p.frame.phyHeaderFhSequenceType = 'linear';
 p.frame.phyHeaderFhFreqSet = [];
 p.frame.phyHeaderPilotLength = 0;          % 默认关闭；当前这版pilot补偿会拉低PHY头成功率
@@ -152,7 +152,9 @@ p.fec.ldpc.multithreaded = false;
 % 7) 交织（块交织器）
 p.interleaver = struct();
 p.interleaver.enable = true;
+% p.interleaver.nRows = 128;
 p.interleaver.nRows = 64;
+
 
 % 8) 调制
 p.mod = struct();
@@ -170,9 +172,9 @@ p.dsss.pnInit = [0 0 0 0 0 0 0 0 0 1 1];         % 非零初始状态
 p.fh = struct();
 p.fh.enable = true;              % 是否启用跳频
 p.fh.nFreqs = 8;                 % payload跳频频点数量
-p.fh.mode = 'fast';              % 'slow' | 'fast'
-p.fh.hopsPerSymbol = 5;          % 真快跳频：每个符号内的跳数
-p.fh.symbolsPerHop = 1;          % slow模式下的每跳符号数
+p.fh.mode = 'slow';              % 'slow' | 'fast'
+p.fh.hopsPerSymbol = 2;          % fast模式保留参数；默认回到慢跳频
+p.fh.symbolsPerHop = 64;         % 旧慢跳频基线：每跳64个符号
 p.fh.sequenceType = 'chaos';     % 'pn' | 'chaos' | 'linear' | 'random'
 p.fh.pnPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1]; % x^11 + x^2 + 1
 p.fh.pnInit = [0 0 0 0 0 0 0 0 0 1 1];         % 跳频PN序列初始状态
@@ -201,7 +203,7 @@ p.waveform.rxMatchedFilter = true; % 接收端匹配滤波
 fhDefaultWaveform = resolve_waveform_cfg(p);
 fhNonOverlapFreqSet = fh_nonoverlap_freq_set(fhDefaultWaveform, p.fh.nFreqs);
 p.fh.freqSet = fhNonOverlapFreqSet;
-p.frame.phyHeaderFhFreqSet = fhNonOverlapFreqSet;
+p.frame.phyHeaderFhFreqSet = p.fh.freqSet;
 
 %% 信道
 % 对外配置口径：
@@ -225,8 +227,8 @@ p.channel.singleTone.randomPhase = true;
 p.channel.narrowband = struct();
 p.channel.narrowband.enable = true;
 p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；enable=false时忽略
-p.channel.narrowband.centerFreqPoints = 1.0; % 窄带噪声中心频率 = 相对DC的payload跳频频点间隔个数
-p.channel.narrowband.bandwidthFreqPoints = 1.0; % 窄带噪声双边带宽 = 多少个payload跳频频点间隔
+p.channel.narrowband.centerFreqPoints = 1.5; % 对齐旧基线：约1500 Hz中心频率
+p.channel.narrowband.bandwidthFreqPoints = 1.0; % 对齐旧基线：约1000 Hz双边带宽
 % 可选：扫频干扰（线性chirp）
 p.channel.sweep = struct();
 p.channel.sweep.enable = false;

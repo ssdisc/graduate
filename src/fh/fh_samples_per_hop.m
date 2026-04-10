@@ -16,12 +16,9 @@ if ~(isscalar(sps) && isfinite(sps) && abs(sps - round(sps)) < 1e-12 && sps >= 2
     error("waveform.sps must be an integer scalar >= 2 for fast FH, got %g.", sps);
 end
 sps = round(sps);
-hopsPerSymbol = fh_hops_per_symbol(fhCfg);
-if mod(sps, hopsPerSymbol) ~= 0
-    error("fast FH requires waveform.sps=%d to be divisible by fh.hopsPerSymbol=%d.", sps, hopsPerSymbol);
-end
+fh_hops_per_symbol(fhCfg);
 
-samplesPerHop = sps / hopsPerSymbol;
+samplesPerHop = sps;
 if samplesPerHop < 1
     error("fast FH produced an invalid samplesPerHop=%g.", samplesPerHop);
 end

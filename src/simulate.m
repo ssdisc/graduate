@@ -2067,13 +2067,17 @@ function [yPrep, relPrep] = local_prepare_data_symbols_local(rData, rawReliabili
 % block. Here we only process the payload region.
 r = fit_complex_length_local(rData, rxState.nDataSym);
 rawReliability = local_fit_reliability_length_local(rawReliability, rxState.nDataSym);
+fastFhEnabled = isfield(rxState, "fhCfg") && isstruct(rxState.fhCfg) ...
+    && isfield(rxState.fhCfg, "enable") && rxState.fhCfg.enable && fh_is_fast(rxState.fhCfg);
 
-if fhEnabled
+if fastFhEnabled
+    [r, rawReliability] = local_fast_fh_symbol_prepare_local(r, rawReliability, hopInfoUsed, rxState);
+elseif fhEnabled
     r = fh_demodulate(r, hopInfoUsed);
 end
 
-[r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled);
-relPrep = local_fit_reliability_length_local(relPrep, rxState.nDataSym);
+[r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled && ~fastFhEnabled);
+relPrep = local_fit_reliability_length_local(relPrep, numel(r));
 if all(relPrep >= 0.999999)
     relPrep = rawReliability;
 else
@@ -2091,6 +2095,64 @@ end
 
 yPrep = r;
 relPrep = local_fit_reliability_length_local(relPrep, local_rx_demod_symbol_count_local(rxState));
+end
+
+function [rOut, relOut] = local_fast_fh_symbol_prepare_local(rIn, relIn, hopInfoUsed, rxState)
+rIn = rIn(:);
+relIn = local_fit_reliability_length_local(relIn, numel(rIn));
+if ~(isfield(rxState, "nDataSymBase") && ~isempty(rxState.nDataSymBase))
+    error("fast FH payload recovery requires rxState.nDataSymBase.");
+end
+if ~(isfield(rxState, "fhCfg") && isstruct(rxState.fhCfg) && fh_is_fast(rxState.fhCfg))
+    error("local_fast_fh_symbol_prepare_local requires fast FH rxState.fhCfg.");
+end
+
+hopsPerSymbol = fh_hops_per_symbol(rxState.fhCfg);
+nBase = round(double(rxState.nDataSymBase));
+nExpected = nBase * hopsPerSymbol;
+rUse = fit_complex_length_local(rIn, nExpected);
+relUse = local_fit_reliability_length_local(relIn, nExpected);
+
+if isstruct(hopInfoUsed) && isfield(hopInfoUsed, "enable") && hopInfoUsed.enable
+    if ~(isfield(hopInfoUsed, "mode") && string(hopInfoUsed.mode) == "fast")
+        error("fast FH payload recovery requires fast-mode hopInfo.");
+    end
+end
+
+rOut = local_group_mean_complex_local(rUse, hopsPerSymbol, nBase);
+relOut = local_group_mean_real_local(relUse, hopsPerSymbol, nBase);
+end
+
+function y = local_group_mean_complex_local(x, groupLen, nGroups)
+x = x(:);
+groupLen = max(1, round(double(groupLen)));
+nGroups = max(0, round(double(nGroups)));
+needLen = groupLen * nGroups;
+if needLen <= 0
+    y = complex(zeros(0, 1));
+    return;
+end
+if numel(x) < needLen
+    error("group mean requires %d samples, got %d.", needLen, numel(x));
+end
+x = reshape(x(1:needLen), groupLen, nGroups);
+y = mean(x, 1).';
+end
+
+function y = local_group_mean_real_local(x, groupLen, nGroups)
+x = double(x(:));
+groupLen = max(1, round(double(groupLen)));
+nGroups = max(0, round(double(nGroups)));
+needLen = groupLen * nGroups;
+if needLen <= 0
+    y = zeros(0, 1);
+    return;
+end
+if numel(x) < needLen
+    error("group mean requires %d samples, got %d.", needLen, numel(x));
+end
+x = reshape(x(1:needLen), groupLen, nGroups);
+y = mean(x, 1).';
 end
 
 function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled)
@@ -2192,7 +2254,7 @@ end
 fhCaptureCfg = struct( ...
     "enable", true, ...
     "syncSymbols", double(numel(txPacket.syncSym)), ...
-    "headerSymbols", double(numel(txPacket.phyHeaderSym)), ...
+    "headerSymbols", double(numel(txPacket.phyHeaderSymTx)), ...
     "headerFhCfg", headerFhCfg, ...
     "dataFhCfg", dataFhCfg);
 end
@@ -2924,7 +2986,7 @@ phy = struct();
 headerOk = false;
 rFull = rFull(:);
 hdrRaw = rFull(preLen+1:preLen+hdrLen);
-[hdrRaw, headerHopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase);
+[hdrRaw, headerHopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg);
 actions = local_header_action_candidates_local(primaryAction, mitigation);
 for actionName = actions
     headerBlock = [complex(zeros(preLen, 1)); hdrRaw];
@@ -2948,7 +3010,7 @@ for actionName = actions
 end
 end
 
-function [hdrRaw, hopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase)
+function [hdrRaw, hopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg)
 hdrRaw = hdrRaw(:);
 fhCfg = phy_header_fh_cfg(frameCfg, fhCfgBase);
 hopInfo = struct('enable', false);
@@ -2956,6 +3018,8 @@ if ~fhCfg.enable
     return;
 end
 if fh_is_fast(fhCfg)
+    baseHdrLen = phy_header_symbol_length(frameCfg, fecCfg);
+    hdrRaw = local_group_mean_complex_local(hdrRaw, fh_hops_per_symbol(fhCfg), baseHdrLen);
     return;
 end
 hopInfo = hop_info_from_fh_cfg_local(fhCfg, numel(hdrRaw));
@@ -3027,8 +3091,8 @@ for pktIdx = 1:nPackets
     rxRaw = rawCapture.rxPackets{pktIdx};
     syncSymRef = txPackets(pktIdx).syncSym(:);
     preLen = numel(syncSymRef);
-    hdrLen = numel(txPackets(pktIdx).phyHeaderSym);
-    dataLen = numel(txPackets(pktIdx).dataSymTx);
+    hdrLen = numel(txPackets(pktIdx).phyHeaderSymTx);
+    dataLen = numel(txPackets(pktIdx).dataSymHop);
     totalLen = preLen + hdrLen + dataLen;
     sampleActionHint = local_initial_sample_action_hint_local(methodName, adaptiveEnabled);
     bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
@@ -3156,8 +3220,9 @@ for frameIdx = 1:numel(sessionFrames)
     actionName = string(decision.symbolAction);
     nom.symbolAction(frameIdx) = actionName;
     if string(sessionFrame.decodeKind) == "protected_header"
+        hopInfoUsed = local_nominal_hop_info_local(rxStateSession, fhAssumption);
         [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = ...
-            local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame);
+            local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame, hopInfoUsed);
     else
         symbolFhEnabled = isfield(rxStateSession, "fhCfg") && isstruct(rxStateSession.fhCfg) ...
             && isfield(rxStateSession.fhCfg, "enable") && rxStateSession.fhCfg.enable ...
@@ -3352,7 +3417,7 @@ end
 y = mean(mat, 2);
 end
 
-function [hdrRaw, reliability] = local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame)
+function [hdrRaw, reliability] = local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame, hopInfoUsed)
 hdrLen = double(sessionFrame.nDataSym);
 hdrRaw = fit_complex_length_local(rFull(preLen+1:end), hdrLen);
 reliability = local_fit_reliability_length_local(reliabilityFull(preLen+1:end), hdrLen);
@@ -3361,9 +3426,16 @@ if ~(isfield(sessionFrame, "fhCfg") && isstruct(sessionFrame.fhCfg) ...
     return;
 end
 if fh_is_fast(sessionFrame.fhCfg)
+    baseLen = local_session_demod_symbol_count_local(sessionFrame);
+    hdrRaw = local_group_mean_complex_local(hdrRaw, fh_hops_per_symbol(sessionFrame.fhCfg), baseLen);
+    reliability = local_group_mean_real_local(reliability, fh_hops_per_symbol(sessionFrame.fhCfg), baseLen);
     return;
 end
-hopInfo = hop_info_from_fh_cfg_local(sessionFrame.fhCfg, numel(hdrRaw));
+if nargin >= 5 && isstruct(hopInfoUsed) && isfield(hopInfoUsed, "enable") && hopInfoUsed.enable
+    hopInfo = hopInfoUsed;
+else
+    hopInfo = hop_info_from_fh_cfg_local(sessionFrame.fhCfg, numel(hdrRaw));
+end
 hdrRaw = fh_demodulate(hdrRaw, hopInfo);
 end
 
@@ -3535,7 +3607,12 @@ fecCodedBitsLen = coded_bits_length_local(packetDataBitsLen, p.fec);
 nDemodSym = ceil(numel(codedBitsInt) / bitsPerSym);
 offsets = derive_packet_state_offsets(p, pktIdx);
 dsssCfg = derive_packet_dsss_cfg(p.dsss, pktIdx, offsets.dsssOffsetChips, nDemodSym);
-nDataSym = dsss_symbol_count(nDemodSym, dsssCfg);
+nDataSymBase = dsss_symbol_count(nDemodSym, dsssCfg);
+fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, offsets.fhOffsetHops, nDataSymBase);
+nDataSym = nDataSymBase;
+if isfield(fhCfg, "enable") && fhCfg.enable && fh_is_fast(fhCfg)
+    nDataSym = nDataSymBase * fh_hops_per_symbol(fhCfg);
+end
 
 state = struct();
 state.packetIndex = pktIdx;
@@ -3544,13 +3621,14 @@ state.packetDataBytes = ceil(packetDataBitsLen / 8);
 state.fecCodedBitsLen = fecCodedBitsLen;
 state.codedBitsLen = numel(codedBitsInt);
 state.nDemodSym = nDemodSym;
+state.nDataSymBase = nDataSymBase;
 state.nDataSym = nDataSym;
 state.intState = intState;
 state.stateOffsets = offsets;
 state.scrambleCfg = derive_packet_scramble_cfg(p.scramble, pktIdx, offsets.scrambleOffsetBits);
 state.dsssCfg = dsssCfg;
-state.fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, offsets.fhOffsetHops, nDataSym);
-state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nDataSym);
+state.fhCfg = fhCfg;
+state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nDataSymBase);
 end
 
 function [payloadPktRx, sessionOut, packetInfo, ok] = recover_payload_packet_local(packetDataBitsRx, phyHeader, sessionIn, p)
@@ -3806,7 +3884,7 @@ if ~isfield(fhCfg, "enable") || ~fhCfg.enable
     return;
 end
 if fh_is_fast(fhCfg)
-    hopInfo = struct('enable', false);
+    hopInfo = fh_fast_hop_info(fhCfg, nSym);
     return;
 end
 [~, hopInfo] = fh_modulate(complex(zeros(nSym, 1)), fhCfg);

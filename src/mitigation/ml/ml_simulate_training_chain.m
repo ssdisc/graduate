@@ -26,6 +26,7 @@ dsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, numel(txSym));
 txSample = [];
 if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable
     if fh_is_fast(p.fh)
+        [txChannelSym, ~] = fh_fast_symbol_expand(txChannelSym, p.fh);
         txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
         [txSample, ~] = fh_modulate_samples(txSample, p.fh, waveform);
     else

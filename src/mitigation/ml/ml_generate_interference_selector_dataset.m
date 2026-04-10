@@ -175,7 +175,9 @@ phyMeta.packetDataCrc16 = crc16_ccitt_bits(packetDataBits);
 phyHeaderSym = encode_phy_header_symbols(phyHeaderBits, p.frame, p.fec);
 phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh);
 phyHeaderFast = phyHeaderFhCfg.enable && fh_is_fast(phyHeaderFhCfg);
-if phyHeaderFhCfg.enable && ~phyHeaderFast
+if phyHeaderFast
+    [phyHeaderSym, ~] = fh_fast_symbol_expand(phyHeaderSym, phyHeaderFhCfg);
+elseif phyHeaderFhCfg.enable
     [phyHeaderSym, ~] = fh_modulate(phyHeaderSym, phyHeaderFhCfg);
 end
 
@@ -189,7 +191,9 @@ dataDsssCfg = derive_packet_dsss_cfg(p.dsss, packetIdx, 0, numel(dataSym));
 fhCfg = struct("enable", false);
 if isfield(p, "fh") && isfield(p.fh, "enable") && p.fh.enable
     fhCfg = derive_packet_fh_cfg(p.fh, packetIdx, 0, numel(dataSym));
-    if ~fh_is_fast(fhCfg)
+    if fh_is_fast(fhCfg)
+        [dataSym, ~] = fh_fast_symbol_expand(dataSym, fhCfg);
+    else
         [dataSym, ~] = fh_modulate(dataSym, fhCfg);
     end
 end

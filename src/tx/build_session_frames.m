@@ -66,6 +66,7 @@ frame.syncInfo = syncInfo;
 frame.dataSymBaseTx = dataSymBaseTx(:);
 frame.dataSymTx = dataSymTx(:);
 frame.nDemodSym = numel(dataSymBaseTx);
+frame.nDataSymBase = numel(dataSymBaseTx);
 frame.nDataSym = numel(dataSymTx);
 frame.txSymFrame = txSymFrame;
 frame.txSymForChannel = txSymForChannel;
@@ -98,7 +99,9 @@ end
 function [dataSymTx, hopInfo, txSymBasebandForSpectrum, txSymForChannel] = local_build_session_header_path(syncSym, dataSymBaseTx, fhCfg, waveform)
 dataSymTx = dataSymBaseTx(:);
 hopInfo = struct('enable', false);
-if isfield(fhCfg, "enable") && fhCfg.enable && ~fh_is_fast(fhCfg)
+if isfield(fhCfg, "enable") && fhCfg.enable && fh_is_fast(fhCfg)
+    [dataSymTx, hopInfo] = fh_fast_symbol_expand(dataSymTx, fhCfg);
+elseif isfield(fhCfg, "enable") && fhCfg.enable
     [dataSymTx, hopInfo] = fh_modulate(dataSymTx, fhCfg);
 end
 

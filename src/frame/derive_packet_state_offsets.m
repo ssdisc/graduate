@@ -84,18 +84,14 @@ function tf = local_fh_enabled(p)
 tf = isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable;
 end
 
-function nHops = local_packet_fh_hop_count(fhCfg, waveformCfg, nSym)
+function nHops = local_packet_fh_hop_count(fhCfg, ~, nSym)
 nSym = max(0, round(double(nSym)));
 if nSym <= 0
     nHops = 0;
     return;
 end
 if fh_is_fast(fhCfg)
-    if ~(isstruct(waveformCfg) && isfield(waveformCfg, "sps"))
-        error("Fast FH offset derivation requires waveform.sps.");
-    end
-    samplesPerHop = fh_samples_per_hop(fhCfg, waveformCfg);
-    nHops = ceil(double(nSym) * double(waveformCfg.sps) / double(samplesPerHop));
+    nHops = double(nSym) * double(fh_hops_per_symbol(fhCfg));
     return;
 end
 if ~(isfield(fhCfg, "symbolsPerHop") && ~isempty(fhCfg.symbolsPerHop))
