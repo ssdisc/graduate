@@ -22,6 +22,12 @@ narrowbandTrainArgs = local_narrowband_training_args();
 requiredModels = local_required_ml_models(p.mitigation.methods);
 expectedReloadContext = ml_capture_reload_context(p);
 expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
+impulseTrainingArmed = forceRetrain || local_impulse_training_enabled(p);
+if impulseTrainingArmed
+    expectedImpulseReloadContext = expectedReloadContext;
+else
+    expectedImpulseReloadContext = [];
+end
 
 fprintf('========================================\n');
 fprintf('Demo config source: src/default_params.m\n');
@@ -34,6 +40,8 @@ fprintf('Frames per point: %d\n', p.sim.nFramesPerPoint);
 fprintf('Parallel: %s\n', local_on_off_text(p.sim.useParallel));
 fprintf('Eve: %s, Warden: %s\n\n', ...
     local_on_off_text(p.eve.enable), local_on_off_text(p.covert.enable && p.covert.warden.enable));
+fprintf('Impulse model retrain armed: %s (forceRetrain=%s, impulseProb=%.6g)\n\n', ...
+    local_on_off_text(impulseTrainingArmed), local_on_off_text(forceRetrain), double(p.channel.impulseProb));
 
 fprintf('========================================\n');
 fprintf('Loading or training required ML models...\n');
@@ -43,7 +51,7 @@ if requiredModels.lr
     lrModelPath = fullfile(modelDir, 'impulse_lr_model.mat');
     if ~forceRetrain
         [p.mitigation.ml, loadedLr, loadedLrPath] = load_pretrained_model( ...
-            lrModelPath, @ml_impulse_lr_model, "expectedContext", expectedReloadContext);
+            lrModelPath, @ml_impulse_lr_model, "expectedContext", expectedImpulseReloadContext);
         loadedLr = loadedLr && isfield(p.mitigation.ml, 'trained') && logical(p.mitigation.ml.trained);
         if ~loadedLr
             loadedLrPath = "";
@@ -54,7 +62,7 @@ if requiredModels.lr
     end
     if loadedLr
         fprintf('Loaded LR model: %s\n\n', char(loadedLrPath));
-    else
+    elseif impulseTrainingArmed
         fprintf('Training LR model...\n');
         [p.mitigation.ml, lrReport] = ml_train_impulse_lr(p, ...
             generalizedTrainArgs{:}, ...
@@ -63,6 +71,8 @@ if requiredModels.lr
             'saveTag', batchTag, 'savedBy', "run_demo");
         fprintf('LR model saved (latest): %s\n', char(lrReport.artifacts.latestPath));
         fprintf('LR model saved (batch): %s\n\n', char(lrReport.artifacts.batchPath));
+    else
+        fprintf('Skipping LR model training: forceRetrain=OFF and impulseProb<=0.\n\n');
     end
 else
     fprintf('Skipping LR model load: current methods do not use ml_blanking.\n\n');
@@ -72,7 +82,7 @@ if requiredModels.cnn
     cnnModelPath = fullfile(modelDir, 'impulse_cnn_model.mat');
     if ~forceRetrain
         [p.mitigation.mlCnn, loadedCnn, loadedCnnPath] = load_pretrained_model( ...
-            cnnModelPath, @ml_cnn_impulse_model, "expectedContext", expectedReloadContext);
+            cnnModelPath, @ml_cnn_impulse_model, "expectedContext", expectedImpulseReloadContext);
         loadedCnn = loadedCnn && isfield(p.mitigation.mlCnn, 'trained') && logical(p.mitigation.mlCnn.trained);
         if ~loadedCnn
             loadedCnnPath = "";
@@ -83,7 +93,7 @@ if requiredModels.cnn
     end
     if loadedCnn
         fprintf('Loaded CNN model: %s\n\n', char(loadedCnnPath));
-    else
+    elseif impulseTrainingArmed
         fprintf('Training CNN model...\n');
         [p.mitigation.mlCnn, cnnReport] = ml_train_cnn_impulse(p, ...
             generalizedTrainArgs{:}, ...
@@ -92,6 +102,8 @@ if requiredModels.cnn
             'saveTag', batchTag, 'savedBy', "run_demo");
         fprintf('CNN model saved (latest): %s\n', char(cnnReport.artifacts.latestPath));
         fprintf('CNN model saved (batch): %s\n\n', char(cnnReport.artifacts.batchPath));
+    else
+        fprintf('Skipping CNN model training: forceRetrain=OFF and impulseProb<=0.\n\n');
     end
 else
     fprintf('Skipping CNN model load: current methods do not use ml_cnn/ml_cnn_hard.\n\n');
@@ -101,7 +113,7 @@ if requiredModels.gru
     gruModelPath = fullfile(modelDir, 'impulse_gru_model.mat');
     if ~forceRetrain
         [p.mitigation.mlGru, loadedGru, loadedGruPath] = load_pretrained_model( ...
-            gruModelPath, @ml_gru_impulse_model, "expectedContext", expectedReloadContext);
+            gruModelPath, @ml_gru_impulse_model, "expectedContext", expectedImpulseReloadContext);
         loadedGru = loadedGru && isfield(p.mitigation.mlGru, 'trained') && logical(p.mitigation.mlGru.trained);
         if ~loadedGru
             loadedGruPath = "";
@@ -112,7 +124,7 @@ if requiredModels.gru
     end
     if loadedGru
         fprintf('Loaded GRU model: %s\n\n', char(loadedGruPath));
-    else
+    elseif impulseTrainingArmed
         fprintf('Training GRU model...\n');
         [p.mitigation.mlGru, gruReport] = ml_train_gru_impulse(p, ...
             generalizedTrainArgs{:}, ...
@@ -121,6 +133,8 @@ if requiredModels.gru
             'saveTag', batchTag, 'savedBy', "run_demo");
         fprintf('GRU model saved (latest): %s\n', char(gruReport.artifacts.latestPath));
         fprintf('GRU model saved (batch): %s\n\n', char(gruReport.artifacts.batchPath));
+    else
+        fprintf('Skipping GRU model training: forceRetrain=OFF and impulseProb<=0.\n\n');
     end
 else
     fprintf('Skipping GRU model load: current methods do not use ml_gru/ml_gru_hard.\n\n');
@@ -276,6 +290,18 @@ required.cnn = any(methods == "ml_cnn" | methods == "ml_cnn_hard");
 required.gru = any(methods == "ml_gru" | methods == "ml_gru_hard" | methods == "adaptive_ml_frontend");
 required.selector = any(methods == "adaptive_ml_frontend");
 required.narrowband = any(methods == "ml_narrowband");
+end
+
+function tf = local_impulse_training_enabled(p)
+tf = false;
+if ~(isfield(p, "channel") && isstruct(p.channel) && isfield(p.channel, "impulseProb") && ~isempty(p.channel.impulseProb))
+    return;
+end
+impulseProb = double(p.channel.impulseProb);
+if ~(isscalar(impulseProb) && isfinite(impulseProb))
+    error("channel.impulseProb must be a finite scalar.");
+end
+tf = impulseProb > 0;
 end
 
 function txt = local_on_off_text(tf)
