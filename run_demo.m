@@ -7,6 +7,8 @@ p = default_params( ...
     "strictModelLoad", false, ...
     "requireTrainedMlModels", false, ...
     "loadMlModels", strings(1, 0));
+[activeMethods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(p.mitigation, p.channel);
+p.mitigation.methods = activeMethods;
 
 modelDir = fullfile(pwd, 'models');
 if ~exist(modelDir, 'dir')
@@ -19,10 +21,11 @@ generalizedTrainArgs = local_generalized_training_args(p);
 impulseDlTrainArgs = local_impulse_dl_training_args();
 selectorTrainArgs = local_selector_training_args(p);
 narrowbandTrainArgs = local_narrowband_training_args();
-requiredModels = local_required_ml_models(p.mitigation.methods);
+requiredModels = local_required_ml_models(activeMethods);
 expectedReloadContext = ml_capture_reload_context(p);
 expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
 impulseTrainingArmed = forceRetrain || local_impulse_training_enabled(p);
+narrowbandTrainingArmed = forceRetrain || local_narrowband_training_enabled(p);
 if impulseTrainingArmed
     expectedImpulseReloadContext = expectedReloadContext;
 else
@@ -32,6 +35,8 @@ end
 fprintf('========================================\n');
 fprintf('Demo config source: src/default_params.m\n');
 fprintf('========================================\n');
+fprintf('Active interference types: %s\n', local_list_text(activeInterferenceTypes));
+fprintf('Allowed methods after binding: %s\n', local_list_text(allowedMethods));
 fprintf('Methods: %s\n', strjoin(cellstr(p.mitigation.methods), ', '));
 fprintf('Eb/N0 points: %s dB\n', mat2str(double(p.linkBudget.ebN0dBList)));
 fprintf('JSR points: %s dB\n', mat2str(double(p.linkBudget.jsrDbList)));
@@ -42,6 +47,9 @@ fprintf('Eve: %s, Warden: %s\n\n', ...
     local_on_off_text(p.eve.enable), local_on_off_text(p.covert.enable && p.covert.warden.enable));
 fprintf('Impulse model retrain armed: %s (forceRetrain=%s, impulseProb=%.6g)\n\n', ...
     local_on_off_text(impulseTrainingArmed), local_on_off_text(forceRetrain), double(p.channel.impulseProb));
+fprintf('Narrowband model retrain armed: %s (forceRetrain=%s, narrowbandEnable=%s, narrowbandWeight=%.6g)\n\n', ...
+    local_on_off_text(narrowbandTrainingArmed), local_on_off_text(forceRetrain), ...
+    local_on_off_text(local_narrowband_enable_flag(p)), double(p.channel.narrowband.weight));
 
 fprintf('========================================\n');
 fprintf('Loading or training required ML models...\n');
@@ -185,7 +193,7 @@ if requiredModels.narrowband
     end
     if loadedNarrowband
         fprintf('Loaded narrowband action model: %s\n\n', char(loadedNarrowbandPath));
-    else
+    elseif narrowbandTrainingArmed
         fprintf('Training narrowband action model...\n');
         [p.mitigation.mlNarrowband, narrowbandReport] = ml_train_narrowband_action(p, ...
             narrowbandTrainArgs{:}, ...
@@ -193,9 +201,11 @@ if requiredModels.narrowband
             'saveTag', batchTag, 'savedBy', "run_demo");
         fprintf('Narrowband action model saved (latest): %s\n', char(narrowbandReport.artifacts.latestPath));
         fprintf('Narrowband action model saved (batch): %s\n\n', char(narrowbandReport.artifacts.batchPath));
+    else
+        fprintf('Skipping narrowband action model training: forceRetrain=OFF or narrowband interference is inactive.\n\n');
     end
 else
-    fprintf('Skipping narrowband action model load: current methods do not use ml_narrowband.\n\n');
+    fprintf('Skipping narrowband action model load: effective methods do not use ml_narrowband.\n\n');
 end
 
 p.mitigation.strictModelLoad = true;
@@ -312,6 +322,15 @@ else
 end
 end
 
+function txt = local_list_text(values)
+values = string(values(:).');
+if isempty(values)
+    txt = 'none';
+else
+    txt = strjoin(cellstr(values), ', ');
+end
+end
+
 function args = local_selector_training_args(p)
 dataSymbolsPerBlock = local_selector_training_symbol_count(p);
 args = { ...
@@ -327,6 +346,42 @@ args = { ...
     'blockLenRange', [96 1024], ...
     'bpskProbability', 0.35, ...
     'verbose', true};
+end
+
+function tf = local_narrowband_training_enabled(p)
+tf = false;
+if ~(isfield(p, "channel") && isstruct(p.channel) ...
+        && isfield(p.channel, "narrowband") && isstruct(p.channel.narrowband))
+    return;
+end
+narrowbandCfg = p.channel.narrowband;
+if ~(isfield(narrowbandCfg, "enable") && ~isempty(narrowbandCfg.enable))
+    return;
+end
+enable = logical(narrowbandCfg.enable);
+if ~isscalar(enable)
+    error("channel.narrowband.enable must be a logical scalar.");
+end
+weight = 1;
+if isfield(narrowbandCfg, "weight") && ~isempty(narrowbandCfg.weight)
+    weight = double(narrowbandCfg.weight);
+end
+if ~(isscalar(weight) && isfinite(weight))
+    error("channel.narrowband.weight must be a finite scalar.");
+end
+tf = enable && weight > 0;
+end
+
+function tf = local_narrowband_enable_flag(p)
+tf = false;
+if isfield(p, "channel") && isstruct(p.channel) ...
+        && isfield(p.channel, "narrowband") && isstruct(p.channel.narrowband) ...
+        && isfield(p.channel.narrowband, "enable") && ~isempty(p.channel.narrowband.enable)
+    tf = logical(p.channel.narrowband.enable);
+    if ~isscalar(tf)
+        error("channel.narrowband.enable must be a logical scalar.");
+    end
+end
 end
 
 function nSym = local_selector_training_symbol_count(p)
