@@ -92,7 +92,7 @@ reliabilityFull = zeros(0, 1);
 ok = false;
 
 if local_fast_fh_capture_enabled_local(fhCaptureCfg)
-    [rFull, reliabilityFull, ok] = local_extract_fast_fh_symbol_block_local( ...
+    [rFull, reliabilityFull, ok] = local_extract_sample_fh_symbol_block_local( ...
         rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, modCfg, waveform, syncStageSps);
     return;
 end
@@ -111,17 +111,17 @@ reliabilityFull = min(rawReliabilityBlk, captureReliabilityBlk);
 ok = true;
 end
 
-function [rFull, reliabilityFull, ok] = local_extract_fast_fh_symbol_block_local( ...
+function [rFull, reliabilityFull, ok] = local_extract_sample_fh_symbol_block_local( ...
     rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, modCfg, waveform, syncStageSps)
 rFull = complex(zeros(0, 1));
 reliabilityFull = zeros(0, 1);
 ok = false;
 
 if ~(isstruct(waveform) && isfield(waveform, "enable") && waveform.enable)
-    error("True fast FH requires waveform.enable=true.");
+    error("Sample-domain FH capture requires waveform.enable=true.");
 end
 if ~(isfield(waveform, "sps") && double(waveform.sps) >= 2)
-    error("True fast FH requires waveform.sps>=2.");
+    error("Sample-domain FH capture requires waveform.sps>=2.");
 end
 
 decim = round(double(waveform.sps) / double(syncStageSps));
@@ -156,8 +156,7 @@ headerStart = local_symbol_boundary_sample_index_local(syncSymbols, waveform);
 dataStart = local_symbol_boundary_sample_index_local(syncSymbols + headerSymbols, waveform);
 
 if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
-        && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable ...
-        && fh_is_fast(fhCaptureCfg.headerFhCfg)
+        && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable
     headerStop = min(numel(pktOut), dataStart - 1);
     if headerStart <= headerStop
         pktOut(headerStart:headerStop) = local_fast_fh_segment_demod_local( ...
@@ -166,8 +165,7 @@ if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ..
 end
 
 if isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
-        && isfield(fhCaptureCfg.dataFhCfg, "enable") && fhCaptureCfg.dataFhCfg.enable ...
-        && fh_is_fast(fhCaptureCfg.dataFhCfg)
+        && isfield(fhCaptureCfg.dataFhCfg, "enable") && fhCaptureCfg.dataFhCfg.enable
     dataStart = min(max(1, dataStart), numel(pktOut) + 1);
     if dataStart <= numel(pktOut)
         pktOut(dataStart:end) = local_fast_fh_segment_demod_local( ...
@@ -177,13 +175,13 @@ end
 end
 
 function segOut = local_fast_fh_segment_demod_local(segIn, fhCfg, waveform)
-[~, hopInfo] = fh_modulate_samples(complex(zeros(numel(segIn), 1)), fhCfg, waveform);
+hopInfo = fh_sample_hop_info_from_cfg(fhCfg, waveform, numel(segIn));
 segOut = fh_demodulate_samples(segIn, hopInfo, waveform);
 end
 
 function value = local_fast_fh_capture_scalar_local(fhCaptureCfg, fieldName)
 if ~(isfield(fhCaptureCfg, fieldName) && ~isempty(fhCaptureCfg.(fieldName)))
-    error("fhCaptureCfg.%s is required for fast FH capture.", fieldName);
+    error("fhCaptureCfg.%s is required for sample-domain FH capture.", fieldName);
 end
 value = round(double(fhCaptureCfg.(fieldName)));
 if ~(isscalar(value) && isfinite(value) && value >= 0)

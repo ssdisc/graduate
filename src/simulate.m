@@ -2069,10 +2069,11 @@ r = fit_complex_length_local(rData, rxState.nDataSym);
 rawReliability = local_fit_reliability_length_local(rawReliability, rxState.nDataSym);
 fastFhEnabled = isfield(rxState, "fhCfg") && isstruct(rxState.fhCfg) ...
     && isfield(rxState.fhCfg, "enable") && rxState.fhCfg.enable && fh_is_fast(rxState.fhCfg);
+sampleFhDataDemod = isfield(rxState, "sampleFhDataDemod") && logical(rxState.sampleFhDataDemod);
 
 if fastFhEnabled
     [r, rawReliability] = local_fast_fh_symbol_prepare_local(r, rawReliability, hopInfoUsed, rxState);
-elseif fhEnabled
+elseif fhEnabled && ~sampleFhDataDemod
     r = fh_demodulate(r, hopInfoUsed);
 end
 
@@ -2229,7 +2230,7 @@ front = capture_synced_block_from_samples( ...
     rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg);
 end
 
-function fhCaptureCfg = local_packet_fast_fh_capture_cfg_local(txPacket, fhAssumption)
+function fhCaptureCfg = local_packet_sample_fh_capture_cfg_local(txPacket, fhAssumption)
 fhCaptureCfg = struct("enable", false);
 if nargin < 2 || strlength(string(fhAssumption)) == 0
     fhAssumption = "known";
@@ -2245,9 +2246,9 @@ if isfield(txPacket, "fhCfg") && isstruct(txPacket.fhCfg)
     dataFhCfg = local_assumed_packet_fh_cfg_local(txPacket.fhCfg, fhAssumption);
 end
 
-headerFast = isfield(headerFhCfg, "enable") && headerFhCfg.enable && fh_is_fast(headerFhCfg);
-dataFast = isfield(dataFhCfg, "enable") && dataFhCfg.enable && fh_is_fast(dataFhCfg);
-if ~(headerFast || dataFast)
+headerEnabled = isfield(headerFhCfg, "enable") && headerFhCfg.enable;
+dataEnabled = isfield(dataFhCfg, "enable") && dataFhCfg.enable;
+if ~(headerEnabled || dataEnabled)
     return;
 end
 
@@ -2259,7 +2260,7 @@ fhCaptureCfg = struct( ...
     "dataFhCfg", dataFhCfg);
 end
 
-function fhCaptureCfg = local_session_fast_fh_capture_cfg_local(sessionFrame, fhAssumption)
+function fhCaptureCfg = local_session_sample_fh_capture_cfg_local(sessionFrame, fhAssumption)
 fhCaptureCfg = struct("enable", false);
 if nargin < 2 || strlength(string(fhAssumption)) == 0
     fhAssumption = "known";
@@ -2270,7 +2271,7 @@ if isfield(sessionFrame, "fhCfg") && isstruct(sessionFrame.fhCfg)
     dataFhCfg = local_assumed_packet_fh_cfg_local(sessionFrame.fhCfg, fhAssumption);
 end
 
-if ~(isfield(dataFhCfg, "enable") && dataFhCfg.enable && fh_is_fast(dataFhCfg))
+if ~(isfield(dataFhCfg, "enable") && dataFhCfg.enable)
     return;
 end
 
@@ -2981,12 +2982,12 @@ end
 actions = unique([string(primaryAction) extraActions], "stable");
 end
 
-function [phy, headerOk] = local_try_decode_header_local(rFull, preLen, hdrLen, primaryAction, mitigation, frameCfg, fhCfgBase, fecCfg, softCfg)
+function [phy, headerOk] = local_try_decode_header_local(rFull, preLen, hdrLen, primaryAction, mitigation, frameCfg, fhCfgBase, fecCfg, softCfg, sampleFhDehopped)
 phy = struct();
 headerOk = false;
 rFull = rFull(:);
 hdrRaw = rFull(preLen+1:preLen+hdrLen);
-[hdrRaw, headerHopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg);
+[hdrRaw, headerHopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg, sampleFhDehopped);
 actions = local_header_action_candidates_local(primaryAction, mitigation);
 for actionName = actions
     headerBlock = [complex(zeros(preLen, 1)); hdrRaw];
@@ -3010,7 +3011,7 @@ for actionName = actions
 end
 end
 
-function [hdrRaw, hopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg)
+function [hdrRaw, hopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg, sampleFhDehopped)
 hdrRaw = hdrRaw(:);
 fhCfg = phy_header_fh_cfg(frameCfg, fhCfgBase);
 hopInfo = struct('enable', false);
@@ -3023,7 +3024,9 @@ if fh_is_fast(fhCfg)
     return;
 end
 hopInfo = hop_info_from_fh_cfg_local(fhCfg, numel(hdrRaw));
-hdrRaw = fh_demodulate(hdrRaw, hopInfo);
+if ~sampleFhDehopped
+    hdrRaw = fh_demodulate(hdrRaw, hopInfo);
+end
 end
 
 function raw = local_init_raw_capture_local(nPackets, nSessionFrames)
@@ -3096,7 +3099,7 @@ for pktIdx = 1:nPackets
     totalLen = preLen + hdrLen + dataLen;
     sampleActionHint = local_initial_sample_action_hint_local(methodName, adaptiveEnabled);
     bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
-    fhCaptureCfg = local_packet_fast_fh_capture_cfg_local(txPackets(pktIdx), fhAssumption);
+    fhCaptureCfg = local_packet_sample_fh_capture_cfg_local(txPackets(pktIdx), fhAssumption);
     front = local_capture_synced_block_local( ...
         rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, sampleActionHint, bootstrapChain, fhCaptureCfg);
     if ~front.ok
@@ -3137,7 +3140,9 @@ for pktIdx = 1:nPackets
     nom.preambleRef{pktIdx} = syncSymRef;
 
     actionName = string(decision.symbolAction);
-    [phy, headerOk] = local_try_decode_header_local(rFull, preLen, hdrLen, actionName, mitigation, p.frame, p.fh, p.fec, p.softMetric);
+    [phy, headerOk] = local_try_decode_header_local( ...
+        rFull, preLen, hdrLen, actionName, mitigation, p.frame, p.fh, p.fec, p.softMetric, ...
+        local_header_sample_fh_demod_enabled_local(fhCaptureCfg));
     nom.headerOk(pktIdx) = headerOk;
     if ~headerOk
         continue;
@@ -3145,6 +3150,7 @@ for pktIdx = 1:nPackets
 
     rxState = derive_rx_packet_state_local( ...
         p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
+    rxState.sampleFhDataDemod = local_data_sample_fh_demod_enabled_local(fhCaptureCfg);
     symbolFhEnabled = fhEnabled && ~fh_is_fast(rxState.fhCfg);
     if symbolFhEnabled
         hopInfoUsed = local_nominal_hop_info_local(rxState, fhAssumption);
@@ -3178,7 +3184,7 @@ for frameIdx = 1:numel(sessionFrames)
     totalLen = preLen + sessionFrame.nDataSym;
     sampleActionHint = local_initial_sample_action_hint_local(methodName, adaptiveEnabled);
     bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
-    fhCaptureCfg = local_session_fast_fh_capture_cfg_local(sessionFrame, fhAssumption);
+    fhCaptureCfg = local_session_sample_fh_capture_cfg_local(sessionFrame, fhAssumption);
     front = local_capture_synced_block_local( ...
         sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, sampleActionHint, bootstrapChain, fhCaptureCfg);
     if ~front.ok
@@ -3215,6 +3221,7 @@ for frameIdx = 1:numel(sessionFrames)
     end
 
     rxStateSession = local_session_rx_state_local(sessionFrame);
+    rxStateSession.sampleFhDataDemod = local_data_sample_fh_demod_enabled_local(fhCaptureCfg);
     nom.preambleRx{frameIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
     nom.preambleRef{frameIdx} = sessionFrame.syncSym(:);
     actionName = string(decision.symbolAction);
@@ -3222,7 +3229,9 @@ for frameIdx = 1:numel(sessionFrames)
     if string(sessionFrame.decodeKind) == "protected_header"
         hopInfoUsed = local_nominal_hop_info_local(rxStateSession, fhAssumption);
         [nom.rDataPrepared{frameIdx}, nom.rDataReliability{frameIdx}] = ...
-            local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame, hopInfoUsed);
+            local_prepare_session_header_symbols_local( ...
+                rFull, reliabilityFull, preLen, sessionFrame, hopInfoUsed, ...
+                local_data_sample_fh_demod_enabled_local(fhCaptureCfg));
     else
         symbolFhEnabled = isfield(rxStateSession, "fhCfg") && isstruct(rxStateSession.fhCfg) ...
             && isfield(rxStateSession.fhCfg, "enable") && rxStateSession.fhCfg.enable ...
@@ -3417,7 +3426,7 @@ end
 y = mean(mat, 2);
 end
 
-function [hdrRaw, reliability] = local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame, hopInfoUsed)
+function [hdrRaw, reliability] = local_prepare_session_header_symbols_local(rFull, reliabilityFull, preLen, sessionFrame, hopInfoUsed, sampleFhDehopped)
 hdrLen = double(sessionFrame.nDataSym);
 hdrRaw = fit_complex_length_local(rFull(preLen+1:end), hdrLen);
 reliability = local_fit_reliability_length_local(reliabilityFull(preLen+1:end), hdrLen);
@@ -3436,7 +3445,9 @@ if nargin >= 5 && isstruct(hopInfoUsed) && isfield(hopInfoUsed, "enable") && hop
 else
     hopInfo = hop_info_from_fh_cfg_local(sessionFrame.fhCfg, numel(hdrRaw));
 end
-hdrRaw = fh_demodulate(hdrRaw, hopInfo);
+if ~(nargin >= 6 && logical(sampleFhDehopped))
+    hdrRaw = fh_demodulate(hdrRaw, hopInfo);
+end
 end
 
 function rate = local_nominal_success_rate_local(nom)
@@ -3879,15 +3890,7 @@ end
 end
 
 function hopInfo = hop_info_from_fh_cfg_local(fhCfg, nSym)
-if ~isfield(fhCfg, "enable") || ~fhCfg.enable
-    hopInfo = struct('enable', false);
-    return;
-end
-if fh_is_fast(fhCfg)
-    hopInfo = fh_fast_hop_info(fhCfg, nSym);
-    return;
-end
-[~, hopInfo] = fh_modulate(complex(zeros(nSym, 1)), fhCfg);
+hopInfo = fh_hop_info_from_cfg(fhCfg, nSym);
 end
 
 function hopInfo = eve_hop_info_local(rxState, assumption)
@@ -3902,6 +3905,18 @@ switch lower(string(assumption))
     otherwise
         error("Unknown eve fh assumption: %s", string(assumption));
 end
+end
+
+function tf = local_header_sample_fh_demod_enabled_local(fhCaptureCfg)
+tf = isstruct(fhCaptureCfg) && isfield(fhCaptureCfg, "enable") && logical(fhCaptureCfg.enable) ...
+    && isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
+    && isfield(fhCaptureCfg.headerFhCfg, "enable") && logical(fhCaptureCfg.headerFhCfg.enable);
+end
+
+function tf = local_data_sample_fh_demod_enabled_local(fhCaptureCfg)
+tf = isstruct(fhCaptureCfg) && isfield(fhCaptureCfg, "enable") && logical(fhCaptureCfg.enable) ...
+    && isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
+    && isfield(fhCaptureCfg.dataFhCfg, "enable") && logical(fhCaptureCfg.dataFhCfg.enable);
 end
 
 function hopInfo = local_nominal_hop_info_local(rxState, fhAssumption)

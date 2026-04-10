@@ -23,19 +23,15 @@ channelSample = adapt_channel_for_sps(p.channel, waveform, p.fh);
 txChannelSym = txSym;
 dsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, numel(txSym));
 [txChannelSym, ~] = dsss_spread(txChannelSym, dsssCfg);
-txSample = [];
 if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable
     if fh_is_fast(p.fh)
         [txChannelSym, ~] = fh_fast_symbol_expand(txChannelSym, p.fh);
-        txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
-        [txSample, ~] = fh_modulate_samples(txSample, p.fh, waveform);
-    else
-        [txChannelSym, ~] = fh_modulate(txChannelSym, p.fh);
     end
 end
 
-if isempty(txSample)
-    txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
+txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
+if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable
+    [txSample, ~] = fh_modulate_samples(txSample, p.fh, waveform);
 end
 cleanChannel = channelSample;
 cleanChannel.impulseProb = 0;

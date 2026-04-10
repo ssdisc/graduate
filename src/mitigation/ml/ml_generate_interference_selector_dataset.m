@@ -177,8 +177,6 @@ phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh);
 phyHeaderFast = phyHeaderFhCfg.enable && fh_is_fast(phyHeaderFhCfg);
 if phyHeaderFast
     [phyHeaderSym, ~] = fh_fast_symbol_expand(phyHeaderSym, phyHeaderFhCfg);
-elseif phyHeaderFhCfg.enable
-    [phyHeaderSym, ~] = fh_modulate(phyHeaderSym, phyHeaderFhCfg);
 end
 
 scrambleCfg = derive_packet_scramble_cfg(p.scramble, packetIdx, 0);
@@ -193,15 +191,14 @@ if isfield(p, "fh") && isfield(p.fh, "enable") && p.fh.enable
     fhCfg = derive_packet_fh_cfg(p.fh, packetIdx, 0, numel(dataSym));
     if fh_is_fast(fhCfg)
         [dataSym, ~] = fh_fast_symbol_expand(dataSym, fhCfg);
-    else
-        [dataSym, ~] = fh_modulate(dataSym, fhCfg);
     end
 end
 
 [~, syncSym] = make_packet_sync(p.frame, packetIdx);
 txFrame = [syncSym(:); phyHeaderSym(:); dataSym(:)];
 fhCaptureCfg = struct( ...
-    "enable", logical((phyHeaderFhCfg.enable && phyHeaderFast) || (fhCfg.enable && fh_is_fast(fhCfg))), ...
+    "enable", logical((isfield(phyHeaderFhCfg, "enable") && phyHeaderFhCfg.enable) ...
+        || (isfield(fhCfg, "enable") && fhCfg.enable)), ...
     "syncSymbols", double(numel(syncSym)), ...
     "headerSymbols", double(numel(phyHeaderSym)), ...
     "headerFhCfg", phyHeaderFhCfg, ...
@@ -217,8 +214,7 @@ end
 headerStart = local_symbol_boundary_sample_index(double(fhCaptureCfg.syncSymbols), waveform);
 dataStart = local_symbol_boundary_sample_index(double(fhCaptureCfg.syncSymbols + fhCaptureCfg.headerSymbols), waveform);
 if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
-        && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable ...
-        && fh_is_fast(fhCaptureCfg.headerFhCfg)
+        && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable
     headerStop = min(numel(txOut), dataStart - 1);
     if headerStart <= headerStop
         [segOut, ~] = fh_modulate_samples(txOut(headerStart:headerStop), fhCaptureCfg.headerFhCfg, waveform);
@@ -227,8 +223,7 @@ if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ..
 end
 
 if isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
-        && isfield(fhCaptureCfg.dataFhCfg, "enable") && fhCaptureCfg.dataFhCfg.enable ...
-        && fh_is_fast(fhCaptureCfg.dataFhCfg)
+        && isfield(fhCaptureCfg.dataFhCfg, "enable") && fhCaptureCfg.dataFhCfg.enable
     if dataStart <= numel(txOut)
         [segOut, ~] = fh_modulate_samples(txOut(dataStart:end), fhCaptureCfg.dataFhCfg, waveform);
         txOut(dataStart:end) = segOut;

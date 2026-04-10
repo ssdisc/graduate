@@ -140,7 +140,8 @@ for pktIdx = 1:nPackets
     if phyHeaderFast
         [phyHeaderSymTx, phyHeaderHopInfo] = fh_fast_symbol_expand(phyHeaderSym, phyHeaderFhCfg);
     elseif phyHeaderFhCfg.enable
-        [phyHeaderSymTx, phyHeaderHopInfo] = fh_modulate(phyHeaderSym, phyHeaderFhCfg);
+        phyHeaderSymTx = phyHeaderSym;
+        phyHeaderHopInfo = fh_hop_info_from_cfg(phyHeaderFhCfg, numel(phyHeaderSymTx));
     else
         phyHeaderSymTx = phyHeaderSym;
         phyHeaderHopInfo = struct('enable', false);
@@ -164,7 +165,8 @@ for pktIdx = 1:nPackets
         if dataFast
             [dataSymHop, hopInfo] = fh_fast_symbol_expand(dataSymTx, fhCfgPkt);
         else
-            [dataSymHop, hopInfo] = fh_modulate(dataSymTx, fhCfgPkt);
+            dataSymHop = dataSymTx;
+            hopInfo = fh_hop_info_from_cfg(fhCfgPkt, numel(dataSymHop));
         end
     else
         dataSymHop = dataSymTx;
@@ -176,8 +178,9 @@ for pktIdx = 1:nPackets
     txSymPkt = [syncSymPkt; phyHeaderSymTx; dataSymHop];
     txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
     txSymForSpectrum = txSymForChannel;
-    if phyHeaderFast || dataFast
-        txSymForChannel = local_apply_fast_fh_segments_to_packet_samples( ...
+    if (isfield(phyHeaderFhCfg, "enable") && phyHeaderFhCfg.enable) ...
+            || (isfield(fhCfgPkt, "enable") && fhCfgPkt.enable)
+        txSymForChannel = local_apply_fh_segments_to_packet_samples( ...
             txSymForChannel, numel(syncSymPkt), numel(phyHeaderSymTx), phyHeaderFhCfg, fhCfgPkt, waveform);
     end
 
@@ -300,13 +303,13 @@ else
 end
 end
 
-function txOut = local_apply_fast_fh_segments_to_packet_samples(txIn, nSyncSym, nHeaderSym, headerFhCfg, dataFhCfg, waveform)
+function txOut = local_apply_fh_segments_to_packet_samples(txIn, nSyncSym, nHeaderSym, headerFhCfg, dataFhCfg, waveform)
 txOut = txIn(:);
 
 headerStart = local_symbol_boundary_sample_index(nSyncSym, waveform);
 dataStart = local_symbol_boundary_sample_index(nSyncSym + nHeaderSym, waveform);
 
-if isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable && fh_is_fast(headerFhCfg)
+if isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable
     headerStop = min(numel(txOut), dataStart - 1);
     if headerStart <= headerStop
         [segOut, ~] = fh_modulate_samples(txOut(headerStart:headerStop), headerFhCfg, waveform);
@@ -314,7 +317,7 @@ if isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable
     end
 end
 
-if isstruct(dataFhCfg) && isfield(dataFhCfg, "enable") && dataFhCfg.enable && fh_is_fast(dataFhCfg)
+if isstruct(dataFhCfg) && isfield(dataFhCfg, "enable") && dataFhCfg.enable
     dataStart = min(max(1, dataStart), numel(txOut) + 1);
     if dataStart <= numel(txOut)
         [segOut, ~] = fh_modulate_samples(txOut(dataStart:end), dataFhCfg, waveform);

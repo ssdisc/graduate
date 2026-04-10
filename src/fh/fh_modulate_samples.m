@@ -1,5 +1,5 @@
 function [txHopped, hopInfo] = fh_modulate_samples(txSample, fh, waveform)
-%FH_MODULATE_SAMPLES  Apply true fast FH on sample-domain complex baseband.
+%FH_MODULATE_SAMPLES  Apply sample-domain slow/fast FH on complex baseband.
 
 arguments
     txSample (:,1)
@@ -12,33 +12,12 @@ if ~isfield(fh, "enable") || ~fh.enable
     hopInfo = struct('enable', false);
     return;
 end
-if fh_mode(fh) ~= "fast"
-    error("fh_modulate_samples only supports fh.mode='fast'.");
-end
 if ~(isfield(waveform, "sps") && ~isempty(waveform.sps))
-    error("waveform.sps is required for fast FH modulation.");
+    error("waveform.sps is required for sample-domain FH modulation.");
 end
 
 nSample = numel(txSample);
-hopLenSamples = fh_samples_per_hop(fh, waveform);
-nHops = ceil(nSample / hopLenSamples);
-[freqIdx, pnState] = fh_generate_sequence(nHops, fh);
-freqOffsets = fh.freqSet(freqIdx);
-
-txHopped = complex(zeros(size(txSample)));
-phaseRot = fh_phase_sequence_samples(freqOffsets, hopLenSamples, nSample, waveform);
+hopInfo = fh_sample_hop_info_from_cfg(fh, waveform, nSample);
+phaseRot = fh_phase_sequence_samples(hopInfo.freqOffsets, hopInfo.hopLenSamples, nSample, waveform);
 txHopped = txSample .* phaseRot;
-
-hopInfo = struct();
-hopInfo.enable = true;
-hopInfo.mode = "fast";
-hopInfo.nHops = nHops;
-hopInfo.hopLen = 0;
-hopInfo.hopLenSamples = hopLenSamples;
-hopInfo.freqIdx = freqIdx;
-hopInfo.freqOffsets = freqOffsets;
-hopInfo.pnState = pnState;
-hopInfo.nFreqs = fh.nFreqs;
-hopInfo.freqSet = fh.freqSet;
-hopInfo.phaseContinuous = true;
 end

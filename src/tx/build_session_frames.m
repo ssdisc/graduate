@@ -102,18 +102,18 @@ hopInfo = struct('enable', false);
 if isfield(fhCfg, "enable") && fhCfg.enable && fh_is_fast(fhCfg)
     [dataSymTx, hopInfo] = fh_fast_symbol_expand(dataSymTx, fhCfg);
 elseif isfield(fhCfg, "enable") && fhCfg.enable
-    [dataSymTx, hopInfo] = fh_modulate(dataSymTx, fhCfg);
+    hopInfo = fh_hop_info_from_cfg(fhCfg, numel(dataSymTx));
 end
 
 txSymFrame = [syncSym(:); dataSymTx(:)];
 txSymBasebandForSpectrum = pulse_tx_from_symbol_rate(txSymFrame, waveform);
 txSymForChannel = txSymBasebandForSpectrum;
-if isfield(fhCfg, "enable") && fhCfg.enable && fh_is_fast(fhCfg)
-    txSymForChannel = local_apply_fast_fh_to_session_samples(txSymForChannel, numel(syncSym), fhCfg, waveform);
+if isfield(fhCfg, "enable") && fhCfg.enable
+    txSymForChannel = local_apply_fh_to_session_samples(txSymForChannel, numel(syncSym), fhCfg, waveform);
 end
 end
 
-function txOut = local_apply_fast_fh_to_session_samples(txIn, nSyncSym, fhCfg, waveform)
+function txOut = local_apply_fh_to_session_samples(txIn, nSyncSym, fhCfg, waveform)
 txOut = txIn(:);
 dataStart = local_symbol_boundary_sample_index(nSyncSym, waveform);
 dataStart = min(max(1, dataStart), numel(txOut) + 1);
