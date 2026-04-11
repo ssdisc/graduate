@@ -152,7 +152,7 @@ p.fec.ldpc.multithreaded = false;
 % 7) 交织（块交织器）
 p.interleaver = struct();
 p.interleaver.enable = true;
-p.interleaver.nRows = 64;
+p.interleaver.nRows = 128;
 % p.interleaver.nRows = 64;
 
 
