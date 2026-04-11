@@ -2077,7 +2077,7 @@ elseif fhEnabled && ~sampleFhDataDemod
     r = fh_demodulate(r, hopInfoUsed);
 end
 
-[r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled && ~fastFhEnabled);
+[r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled && ~fastFhEnabled, modCfg);
 relPrep = local_fit_reliability_length_local(relPrep, numel(r));
 if all(relPrep >= 0.999999)
     relPrep = rawReliability;
@@ -2156,7 +2156,7 @@ x = reshape(x(1:needLen), groupLen, nGroups);
 y = mean(x, 1).';
 end
 
-function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled)
+function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled, modCfg)
 r = rIn(:);
 actionName = string(actionName);
 reliability = ones(numel(r), 1);
@@ -2170,6 +2170,14 @@ if actionName == "fh_erasure"
         error("fh_erasure requires enabled FH hop information.");
     end
     [rOut, reliability] = local_apply_fh_erasure_action_local(r, hopInfoUsed, mitigation);
+    return;
+end
+
+if actionName == "ml_fh_erasure"
+    if ~fhEnabled
+        error("ml_fh_erasure requires enabled FH hop information.");
+    end
+    [rOut, reliability] = local_apply_ml_fh_erasure_action_local(r, hopInfoUsed, mitigation, modCfg);
     return;
 end
 
@@ -2300,6 +2308,51 @@ if cfg.attenuateSymbols
 end
 end
 
+function [rOut, reliability] = local_apply_ml_fh_erasure_action_local(rIn, hopInfoUsed, mitigation, modCfg)
+rIn = rIn(:);
+rOut = rIn;
+N = numel(rIn);
+reliability = ones(N, 1);
+if N == 0
+    return;
+end
+cfg = local_require_fh_erasure_cfg_local(mitigation);
+model = local_require_ml_fh_erasure_model_local(mitigation);
+[~, ruleReliability] = local_apply_fh_erasure_action_local(rIn, hopInfoUsed, mitigation);
+[featureMatrix, featureInfo] = ml_extract_fh_erasure_features(rIn, hopInfoUsed, cfg, modCfg);
+[~, pBad, ~, ~] = ml_predict_fh_erasure_reliability(featureMatrix, model, ...
+    "minReliability", cfg.minReliability);
+relHop = local_ml_erasure_reliability_from_probability_local( ...
+    pBad, cfg.mlProbabilityThreshold, cfg.minReliability, cfg.mlProbabilitySlope);
+relHop = double(relHop(:));
+if numel(relHop) ~= double(featureInfo.nHops)
+    error("ml_fh_erasure predicted %d hop reliabilities, expected %d.", numel(relHop), featureInfo.nHops);
+end
+
+hopLen = round(double(featureInfo.hopLen));
+mlReliability = ones(N, 1);
+for hopIdx = 1:double(featureInfo.nHops)
+    startIdx = (hopIdx - 1) * hopLen + 1;
+    stopIdx = min(N, hopIdx * hopLen);
+    mlReliability(startIdx:stopIdx) = relHop(hopIdx);
+end
+ruleReliability = local_fit_reliability_length_local(ruleReliability, N);
+reliability = min(ruleReliability, mlReliability);
+if cfg.attenuateSymbols
+    rOut = reliability .* rIn;
+end
+end
+
+function model = local_require_ml_fh_erasure_model_local(mitigation)
+if ~(isfield(mitigation, "mlFhErasure") && isstruct(mitigation.mlFhErasure))
+    error("mitigation.mlFhErasure is required for ml_fh_erasure.");
+end
+model = mitigation.mlFhErasure;
+if ~(isfield(model, "trained") && logical(model.trained))
+    error("ml_fh_erasure requires a trained FH-erasure model.");
+end
+end
+
 function idx = local_hop_symbol_indices_local(hopIdx, hopLen, totalLen, edgeGuard)
 startIdx = (hopIdx - 1) * hopLen + 1;
 stopIdx = min(totalLen, hopIdx * hopLen);
@@ -2317,6 +2370,24 @@ rel = 1 ./ (1 + double(softSlope) * excess);
 rel = max(double(minReliability), min(1, rel));
 end
 
+function rel = local_ml_erasure_reliability_from_probability_local(pBad, threshold, minReliability, slope)
+pBad = double(pBad(:));
+threshold = double(threshold);
+minReliability = double(minReliability);
+slope = double(slope);
+if ~(isscalar(threshold) && isfinite(threshold) && threshold >= 0 && threshold < 1)
+    error("mitigation.fhErasure.mlProbabilityThreshold must be in [0, 1).");
+end
+if ~(isscalar(slope) && isfinite(slope) && slope > 0)
+    error("mitigation.fhErasure.mlProbabilitySlope must be positive.");
+end
+rel = ones(size(pBad));
+active = isfinite(pBad) & pBad > threshold;
+excess = pBad(active) - threshold;
+rel(active) = 1 ./ (1 + slope .* excess);
+rel = max(minReliability, min(1, rel));
+end
+
 function cfg = local_require_fh_erasure_cfg_local(mitigation)
 if ~(isfield(mitigation, "fhErasure") && isstruct(mitigation.fhErasure))
     error("mitigation.fhErasure is required for fh_erasure.");
@@ -2330,6 +2401,11 @@ cfg.softSlope = local_required_positive_scalar_local(raw, "softSlope", "mitigati
 cfg.maxErasedFreqFraction = local_required_probability_scalar_local(raw, "maxErasedFreqFraction", "mitigation.fhErasure");
 cfg.edgeGuardSymbols = local_required_nonnegative_scalar_local(raw, "edgeGuardSymbols", "mitigation.fhErasure");
 cfg.attenuateSymbols = local_required_logical_scalar_local(raw, "attenuateSymbols", "mitigation.fhErasure");
+cfg.mlProbabilityThreshold = local_required_probability_scalar_local(raw, "mlProbabilityThreshold", "mitigation.fhErasure");
+if cfg.mlProbabilityThreshold >= 1
+    error("mitigation.fhErasure.mlProbabilityThreshold must be < 1.");
+end
+cfg.mlProbabilitySlope = local_required_positive_scalar_local(raw, "mlProbabilitySlope", "mitigation.fhErasure");
 if cfg.freqPowerRatioThreshold < 1 || cfg.hopPowerRatioThreshold < 1
     error("mitigation.fhErasure power-ratio thresholds must be >= 1.");
 end
@@ -2922,7 +2998,7 @@ if any(actionName == ["none" "adaptive_ml_frontend"])
 end
 
 sampleActions = ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard"];
-symbolActions = ["fh_erasure" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"];
+symbolActions = ["fh_erasure" "ml_fh_erasure" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"];
 if any(actionName == sampleActions)
     sampleAction = actionName;
     return;
@@ -3053,7 +3129,7 @@ actionName = string(actionName);
 if nargin < 4 || isempty(headerActionCtx)
     headerActionCtx = local_empty_header_action_ctx_local();
 end
-if any(actionName == ["none" "fh_erasure"])
+if any(actionName == ["none" "fh_erasure" "ml_fh_erasure"])
     hdrSymPrep = hdrSym;
     return;
 end

@@ -21,9 +21,11 @@ generalizedTrainArgs = local_generalized_training_args(p);
 impulseDlTrainArgs = local_impulse_dl_training_args();
 selectorTrainArgs = local_selector_training_args(p);
 narrowbandTrainArgs = local_narrowband_training_args();
+fhErasureTrainArgs = local_fh_erasure_training_args(p);
 requiredModels = local_required_ml_models(activeMethods);
 expectedReloadContext = ml_capture_reload_context(p);
 expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
+expectedFhErasureContext = ml_capture_fh_erasure_reload_context(p);
 impulseTrainingArmed = forceRetrain || local_impulse_training_enabled(p);
 narrowbandTrainingArmed = forceRetrain || local_narrowband_training_enabled(p);
 if impulseTrainingArmed
@@ -208,6 +210,37 @@ else
     fprintf('Skipping narrowband action model load: effective methods do not use ml_narrowband.\n\n');
 end
 
+if requiredModels.fhErasure
+    fhErasureModelPath = fullfile(modelDir, 'fh_erasure_model.mat');
+    if ~forceRetrain
+        [p.mitigation.mlFhErasure, loadedFhErasure, loadedFhErasurePath] = load_pretrained_model( ...
+            fhErasureModelPath, @ml_fh_erasure_model, "expectedContext", expectedFhErasureContext);
+        loadedFhErasure = loadedFhErasure && isfield(p.mitigation.mlFhErasure, 'trained') ...
+            && logical(p.mitigation.mlFhErasure.trained);
+        if ~loadedFhErasure
+            loadedFhErasurePath = "";
+        end
+    else
+        loadedFhErasure = false;
+        loadedFhErasurePath = "";
+    end
+    if loadedFhErasure
+        fprintf('Loaded FH erasure model: %s\n\n', char(loadedFhErasurePath));
+    elseif narrowbandTrainingArmed
+        fprintf('Training FH erasure model...\n');
+        [p.mitigation.mlFhErasure, fhErasureReport] = ml_train_fh_erasure(p, ...
+            fhErasureTrainArgs{:}, ...
+            'saveArtifacts', true, 'saveDir', string(modelDir), ...
+            'saveTag', batchTag, 'savedBy', "run_demo");
+        fprintf('FH erasure model saved (latest): %s\n', char(fhErasureReport.artifacts.latestPath));
+        fprintf('FH erasure model saved (batch): %s\n\n', char(fhErasureReport.artifacts.batchPath));
+    else
+        fprintf('Skipping FH erasure model training: forceRetrain=OFF or narrowband interference is inactive.\n\n');
+    end
+else
+    fprintf('Skipping FH erasure model load: effective methods do not use ml_fh_erasure.\n\n');
+end
+
 p.mitigation.strictModelLoad = true;
 p.mitigation.requireTrainedModels = true;
 if isfield(p, 'eve') && isstruct(p.eve) && isfield(p.eve, 'mitigation')
@@ -300,6 +333,7 @@ required.cnn = any(methods == "ml_cnn" | methods == "ml_cnn_hard");
 required.gru = any(methods == "ml_gru" | methods == "ml_gru_hard" | methods == "adaptive_ml_frontend");
 required.selector = any(methods == "adaptive_ml_frontend");
 required.narrowband = any(methods == "ml_narrowband");
+required.fhErasure = any(methods == "ml_fh_erasure");
 end
 
 function tf = local_impulse_training_enabled(p)
@@ -345,6 +379,24 @@ args = { ...
     'ebN0dBRange', [-4, 16], ...
     'blockLenRange', [96 1024], ...
     'bpskProbability', 0.35, ...
+    'verbose', true};
+end
+
+function args = local_fh_erasure_training_args(p)
+if ~(isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "nFreqs") && double(p.fh.nFreqs) >= 2)
+    error("FH erasure training requires at least two FH frequencies.");
+end
+args = { ...
+    'nBlocks', 450, ...
+    'ebN0dBRange', [-4, 16], ...
+    'hopsPerBlockRange', [64 256], ...
+    'jsrDbRange', [-12, 3], ...
+    'bandwidthFreqPointsRange', [0.6, 1.4], ...
+    'configuredCenterProbability', 0.35, ...
+    'narrowbandProbability', 0.90, ...
+    'epochs', 45, ...
+    'batchSize', 256, ...
+    'lr', 1e-3, ...
     'verbose', true};
 end
 

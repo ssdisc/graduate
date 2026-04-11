@@ -5,7 +5,7 @@ arguments
     opts.strictModelLoad (1,1) logical = true
     opts.requireTrainedMlModels (1,1) logical = true
     opts.allowBatchModelFallback (1,1) logical = true
-    opts.loadMlModels string = ["lr" "cnn" "gru" "selector" "narrowband"]
+    opts.loadMlModels string = ["lr" "cnn" "gru" "selector" "narrowband" "fh_erasure"]
 end
 
 p = struct();
@@ -252,7 +252,7 @@ p.channel.multipath.rayleigh = false;        % 启用瑞利衰落（各径独立
 %% 接收端（RX）
 % 10) 脉冲抑制
 p.mitigation = struct();
-p.mitigation.methods = ["none" "fh_erasure" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" ...
+p.mitigation.methods = ["none" "fh_erasure" "ml_fh_erasure" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" ...
     "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard" "ml_narrowband" "adaptive_ml_frontend"]; % 运行并比较
 % p.mitigation.methods = ["none"]; % 运行并比较
 p.mitigation.thresholdStrategy = "median"; % "median" | "fixed"
@@ -289,6 +289,8 @@ p.mitigation.fhErasure.softSlope = 4.0;               % 超过门限后的软降
 p.mitigation.fhErasure.maxErasedFreqFraction = 0.35;  % 避免低SNR下把过多频点误擦除
 p.mitigation.fhErasure.edgeGuardSymbols = 2;          % hop边界受RRC过渡影响，统计能量时略过边缘
 p.mitigation.fhErasure.attenuateSymbols = true;       % 擦除hop同步衰减，避免PLL被坏hop牵引
+p.mitigation.fhErasure.mlProbabilityThreshold = 0.85; % ML仅在高置信坏hop时补充降权，避免弱干扰误擦除
+p.mitigation.fhErasure.mlProbabilitySlope = 120.0;    % pBad超过门限后的擦除斜率，强窄带快速压到近似擦除
 p.mitigation.stftNotch = struct();
 p.mitigation.stftNotch.windowLength = 128;
 p.mitigation.stftNotch.hopLength = 32;
@@ -331,7 +333,7 @@ p.mitigation.binding = struct();
 p.mitigation.binding.enable = true;
 p.mitigation.binding.impulseMethods = ["none" "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard" "adaptive_ml_frontend"];
 p.mitigation.binding.singleToneMethods = ["none" "fft_notch" "adaptive_notch" "adaptive_ml_frontend"];
-p.mitigation.binding.narrowbandMethods = ["none" "fh_erasure" "fft_bandstop" "adaptive_notch" "ml_narrowband" "adaptive_ml_frontend"];
+p.mitigation.binding.narrowbandMethods = ["none" "fh_erasure" "ml_fh_erasure" "fft_bandstop" "adaptive_notch" "ml_narrowband" "adaptive_ml_frontend"];
 p.mitigation.binding.sweepMethods = ["none" "stft_notch" "adaptive_ml_frontend"];
 p.mitigation.binding.mixedMethods = ["none" "adaptive_ml_frontend"];
 p.mitigation.thresholdCalibration = struct();
@@ -363,7 +365,7 @@ if ~exist(modelDir, 'dir')
 end
 
 requestedMlModels = lower(string(opts.loadMlModels(:).'));
-invalidMlModels = setdiff(requestedMlModels, ["lr" "cnn" "gru" "selector" "narrowband"]);
+invalidMlModels = setdiff(requestedMlModels, ["lr" "cnn" "gru" "selector" "narrowband" "fh_erasure"]);
 if ~isempty(invalidMlModels)
     error("default_params:UnknownMlModelKind", ...
         "Unknown loadMlModels entry: %s", strjoin(cellstr(invalidMlModels), ", "));
@@ -454,6 +456,7 @@ else
 end
 
 expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
+expectedFhErasureContext = ml_capture_fh_erasure_reload_context(p);
 
 if any(requestedMlModels == "narrowband")
     p.mitigation.mlNarrowband = load_pretrained_model( ...
@@ -464,6 +467,17 @@ if any(requestedMlModels == "narrowband")
         "expectedContext", expectedNarrowbandContext);
 else
     p.mitigation.mlNarrowband = ml_narrowband_action_model();
+end
+
+if any(requestedMlModels == "fh_erasure")
+    p.mitigation.mlFhErasure = load_pretrained_model( ...
+        fullfile(modelDir, "fh_erasure_model.mat"), @ml_fh_erasure_model, ...
+        "strict", opts.strictModelLoad, ...
+        "requireTrained", opts.requireTrainedMlModels, ...
+        "allowBatchFallback", opts.allowBatchModelFallback, ...
+        "expectedContext", expectedFhErasureContext);
+else
+    p.mitigation.mlFhErasure = ml_fh_erasure_model();
 end
 
 %% 截获/隐蔽分析
