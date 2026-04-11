@@ -1,5 +1,5 @@
 function dataset = ml_generate_fh_erasure_dataset(p, nBlocks, ebN0dBRange, opts)
-%ML_GENERATE_FH_ERASURE_DATASET  Generate per-hop labels for narrowband FH erasure.
+%ML_GENERATE_FH_ERASURE_DATASET  Generate per-frequency labels for FH erasure.
 
 arguments
     p (1,1) struct
@@ -13,6 +13,9 @@ arguments
     opts.configuredCenterProbability (1,1) double = 0.35
     opts.minOverlapFraction (1,1) double = 0.15
     opts.badHopErrorRateThreshold (1,1) double = 0.22
+    opts.badFreqHopFractionThreshold (1,1) double = 0.35
+    opts.badFreqErrorRateThreshold (1,1) double = 0.28
+    opts.badFreqErrorExcessThreshold (1,1) double = 0.10
     opts.verbose (1,1) logical = true
 end
 
@@ -31,27 +34,36 @@ end
 if ~(opts.configuredCenterProbability >= 0 && opts.configuredCenterProbability <= 1)
     error("configuredCenterProbability must be in [0, 1].");
 end
+if ~(opts.badFreqHopFractionThreshold >= 0 && opts.badFreqHopFractionThreshold <= 1)
+    error("badFreqHopFractionThreshold must be in [0, 1].");
+end
 
 waveform = resolve_waveform_cfg(p);
 hopLen = round(double(p.fh.symbolsPerHop));
+nFreqs = round(double(p.fh.nFreqs));
+if ~(isscalar(nFreqs) && isfinite(nFreqs) && nFreqs >= 2)
+    error("FH-erasure frequency-level training requires p.fh.nFreqs >= 2.");
+end
 hopsPerBlockRange = round(double(opts.hopsPerBlockRange(:).'));
 if hopsPerBlockRange(1) > hopsPerBlockRange(2)
     error("hopsPerBlockRange must be ascending.");
 end
-maxRows = nBlocks * hopsPerBlockRange(2);
+maxRows = nBlocks * nFreqs;
 
-featureNames = ml_fh_erasure_feature_names();
+featureNames = ml_fh_erasure_freq_feature_names();
 classNames = ["good" "bad"];
 featureMatrix = zeros(maxRows, numel(featureNames));
 labelIndex = zeros(maxRows, 1);
 labels = strings(maxRows, 1);
 blockIndex = zeros(maxRows, 1);
-hopIndex = zeros(maxRows, 1);
-ebN0dBPerHop = zeros(maxRows, 1);
-jsrDbPerHop = nan(maxRows, 1);
-overlapFractionPerHop = zeros(maxRows, 1);
-bitErrorRatePerHop = zeros(maxRows, 1);
-scenarioPerHop = strings(maxRows, 1);
+freqIndex = zeros(maxRows, 1);
+ebN0dBPerRow = zeros(maxRows, 1);
+jsrDbPerRow = nan(maxRows, 1);
+overlapFractionPerFreq = zeros(maxRows, 1);
+bitErrorRatePerFreq = zeros(maxRows, 1);
+badHopFractionPerFreq = zeros(maxRows, 1);
+scenarioPerRow = strings(maxRows, 1);
+totalHopCount = 0;
 
 rowCount = 0;
 for blockIdx = 1:nBlocks
@@ -94,9 +106,13 @@ for blockIdx = 1:nBlocks
     rxSym = local_fit_complex_length(rxSym, nSym);
     hopInfoSym = fh_hop_info_from_cfg(p.fh, nSym);
 
-    [features, ~] = ml_extract_fh_erasure_features(rxSym, hopInfoSym, p.mitigation.fhErasure, p.mod);
-    if size(features, 1) ~= nHops
+    [hopFeatures, hopFeatureInfo] = ml_extract_fh_erasure_features(rxSym, hopInfoSym, p.mitigation.fhErasure, p.mod);
+    if size(hopFeatures, 1) ~= nHops
         error("FH-erasure feature rows must equal nHops.");
+    end
+    [freqFeatures, freqFeatureInfo] = ml_extract_fh_erasure_freq_features(hopFeatures, hopFeatureInfo);
+    if size(freqFeatures, 1) ~= nFreqs
+        error("FH-erasure frequency feature rows must equal nFreqs.");
     end
 
     overlapFraction = zeros(nHops, 1);
@@ -105,24 +121,28 @@ for blockIdx = 1:nBlocks
             hopInfoSym, p.fh, waveform, pBlock.channel.narrowband);
     end
     bitErrorRate = local_hop_bit_error_rate(txSym, rxSym, hopLen, p.mod);
-    powerRatio = features(:, ml_fh_erasure_feature_index("hopPowerRatio"));
+    powerRatio = hopFeatures(:, ml_fh_erasure_feature_index("hopPowerRatio"));
     badByError = narrowbandOn ...
         & bitErrorRate >= opts.badHopErrorRateThreshold ...
         & powerRatio >= 0.8 * double(p.mitigation.fhErasure.hopPowerRatioThreshold);
     badHop = (narrowbandOn & overlapFraction >= opts.minOverlapFraction) | badByError;
+    eraseFreq = local_frequency_labels( ...
+        hopInfoSym.freqIdx(:), nFreqs, narrowbandOn, overlapFraction, bitErrorRate, badHop, opts);
 
-    rows = rowCount + (1:nHops);
-    featureMatrix(rows, :) = features;
-    labelIndex(rows) = 1 + double(badHop(:));
+    rows = rowCount + (1:nFreqs);
+    featureMatrix(rows, :) = freqFeatures;
+    labelIndex(rows) = 1 + double(eraseFreq(:));
     labels(rows) = classNames(labelIndex(rows));
     blockIndex(rows) = blockIdx;
-    hopIndex(rows) = (1:nHops).';
-    ebN0dBPerHop(rows) = ebN0dB;
-    jsrDbPerHop(rows) = jsrDb;
-    overlapFractionPerHop(rows) = overlapFraction;
-    bitErrorRatePerHop(rows) = bitErrorRate;
-    scenarioPerHop(rows) = scenarioName;
-    rowCount = rowCount + nHops;
+    freqIndex(rows) = freqFeatureInfo.freqIndex;
+    ebN0dBPerRow(rows) = ebN0dB;
+    jsrDbPerRow(rows) = jsrDb;
+    overlapFractionPerFreq(rows) = local_frequency_stat(hopInfoSym.freqIdx(:), nFreqs, overlapFraction, "max");
+    bitErrorRatePerFreq(rows) = local_frequency_stat(hopInfoSym.freqIdx(:), nFreqs, bitErrorRate, "mean");
+    badHopFractionPerFreq(rows) = local_frequency_stat(hopInfoSym.freqIdx(:), nFreqs, double(badHop), "mean");
+    scenarioPerRow(rows) = scenarioName;
+    rowCount = rowCount + nFreqs;
+    totalHopCount = totalHopCount + nHops;
 end
 
 featureMatrix = featureMatrix(1:rowCount, :);
@@ -131,7 +151,9 @@ labels = labels(1:rowCount);
 
 dataset = struct();
 dataset.nBlocks = nBlocks;
-dataset.nHops = rowCount;
+dataset.nRows = rowCount;
+dataset.nFreqRows = rowCount;
+dataset.nHops = totalHopCount;
 dataset.ebN0dBRange = ebN0dBRange;
 dataset.classNames = classNames;
 dataset.featureNames = featureNames;
@@ -139,17 +161,61 @@ dataset.featureMatrix = featureMatrix;
 dataset.labels = labels;
 dataset.labelIndex = labelIndex;
 dataset.blockIndex = blockIndex(1:rowCount);
-dataset.hopIndex = hopIndex(1:rowCount);
-dataset.ebN0dBPerHop = ebN0dBPerHop(1:rowCount);
-dataset.jsrDbPerHop = jsrDbPerHop(1:rowCount);
-dataset.overlapFractionPerHop = overlapFractionPerHop(1:rowCount);
-dataset.bitErrorRatePerHop = bitErrorRatePerHop(1:rowCount);
-dataset.scenarioPerHop = scenarioPerHop(1:rowCount);
+dataset.freqIndex = freqIndex(1:rowCount);
+dataset.ebN0dBPerRow = ebN0dBPerRow(1:rowCount);
+dataset.jsrDbPerRow = jsrDbPerRow(1:rowCount);
+dataset.overlapFractionPerFreq = overlapFractionPerFreq(1:rowCount);
+dataset.bitErrorRatePerFreq = bitErrorRatePerFreq(1:rowCount);
+dataset.badHopFractionPerFreq = badHopFractionPerFreq(1:rowCount);
+dataset.scenarioPerRow = scenarioPerRow(1:rowCount);
 dataset.classCounts = accumarray(labelIndex(:), 1, [numel(classNames) 1], @sum, 0);
 
 if opts.verbose
-    fprintf("FH-erasure dataset generated: %d blocks, %d hops, bad-hop rate %.3f.\n", ...
+    fprintf("FH-erasure dataset generated: %d blocks, %d frequency rows, bad-frequency rate %.3f.\n", ...
         nBlocks, rowCount, mean(labels == "bad"));
+end
+end
+
+function eraseFreq = local_frequency_labels(freqIdx, nFreqs, narrowbandOn, overlapFraction, bitErrorRate, badHop, opts)
+freqOverlap = local_frequency_stat(freqIdx, nFreqs, overlapFraction, "max");
+freqBitErrorRate = local_frequency_stat(freqIdx, nFreqs, bitErrorRate, "mean");
+freqBadHopFraction = local_frequency_stat(freqIdx, nFreqs, double(badHop), "mean");
+globalErrorRef = median(bitErrorRate(isfinite(bitErrorRate)));
+if isempty(globalErrorRef) || ~isfinite(globalErrorRef)
+    globalErrorRef = 0;
+end
+
+badByGeometry = freqOverlap >= opts.minOverlapFraction;
+badByHopFraction = freqBadHopFraction >= opts.badFreqHopFractionThreshold;
+badByError = freqBitErrorRate >= opts.badFreqErrorRateThreshold ...
+    & freqBitErrorRate >= globalErrorRef + opts.badFreqErrorExcessThreshold;
+eraseFreq = narrowbandOn & (badByGeometry | badByHopFraction | badByError);
+eraseFreq = eraseFreq(:);
+end
+
+function value = local_frequency_stat(freqIdx, nFreqs, x, modeName)
+freqIdx = round(double(freqIdx(:)));
+x = double(x(:));
+if numel(freqIdx) ~= numel(x)
+    error("Frequency statistic input length mismatch.");
+end
+nFreqs = round(double(nFreqs));
+value = zeros(nFreqs, 1);
+modeName = string(modeName);
+for freqNow = 1:nFreqs
+    use = freqIdx == freqNow;
+    if ~any(use)
+        error("Frequency %d has no hop observations for label aggregation.", freqNow);
+    end
+    xNow = x(use);
+    switch modeName
+        case "max"
+            value(freqNow) = max(xNow);
+        case "mean"
+            value(freqNow) = mean(xNow);
+        otherwise
+            error("Unsupported frequency statistic mode: %s.", char(modeName));
+    end
 end
 end
 

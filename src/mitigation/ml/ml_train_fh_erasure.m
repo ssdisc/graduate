@@ -1,5 +1,5 @@
 function [model, report] = ml_train_fh_erasure(p, opts)
-%ML_TRAIN_FH_ERASURE  Train a per-hop ML model for FH soft erasure.
+%ML_TRAIN_FH_ERASURE  Train a per-frequency ML model for FH soft erasure.
 
 arguments
     p (1,1) struct
@@ -13,6 +13,9 @@ arguments
     opts.configuredCenterProbability (1,1) double = 0.35
     opts.minOverlapFraction (1,1) double = 0.15
     opts.badHopErrorRateThreshold (1,1) double = 0.22
+    opts.badFreqHopFractionThreshold (1,1) double = 0.35
+    opts.badFreqErrorRateThreshold (1,1) double = 0.28
+    opts.badFreqErrorExcessThreshold (1,1) double = 0.10
     opts.epochs (1,1) double {mustBeInteger, mustBePositive} = 45
     opts.batchSize (1,1) double {mustBeInteger, mustBePositive} = 128
     opts.lr (1,1) double {mustBePositive} = 0.001
@@ -63,10 +66,13 @@ dataset = ml_generate_fh_erasure_dataset(p, opts.nBlocks, opts.ebN0dBRange, ...
     "configuredCenterProbability", opts.configuredCenterProbability, ...
     "minOverlapFraction", opts.minOverlapFraction, ...
     "badHopErrorRateThreshold", opts.badHopErrorRateThreshold, ...
+    "badFreqHopFractionThreshold", opts.badFreqHopFractionThreshold, ...
+    "badFreqErrorRateThreshold", opts.badFreqErrorRateThreshold, ...
+    "badFreqErrorExcessThreshold", opts.badFreqErrorExcessThreshold, ...
     "verbose", opts.verbose);
-split = ml_split_dataset_indices(dataset.nHops, opts.valFraction, opts.testFraction, opts.splitSeed);
+split = local_split_frequency_rows_by_block(dataset.blockIndex, opts.valFraction, opts.testFraction, opts.splitSeed);
 if split.nVal < 1 || split.nTest < 1
-    error("FH软擦除训练需要独立验证集和测试集，请增大nBlocks或调整val/test占比。");
+    error("FH频点级软擦除训练需要独立验证集和测试集，请增大nBlocks或调整val/test占比。");
 end
 
 XTrain = dataset.featureMatrix(split.trainIdx, :);
@@ -93,7 +99,7 @@ model.minReliability = double(p.mitigation.fhErasure.minReliability);
 
 classCountTrain = accumarray(yTrain(:), 1, [nClasses 1], @sum, 0);
 if any(classCountTrain == 0)
-    error("FH软擦除训练集缺少类别样本，classCounts=%s。", mat2str(classCountTrain(:).'));
+    error("FH频点级软擦除训练集缺少类别样本，classCounts=%s。", mat2str(classCountTrain(:).'));
 end
 classWeights = sum(classCountTrain) ./ max(classCountTrain, 1);
 classWeights = classWeights / mean(classWeights);
@@ -144,7 +150,7 @@ for epoch = 1:opts.epochs
 
     if opts.verbose && (epoch == 1 || mod(epoch, 5) == 0 || epoch == opts.epochs)
         valMetricsNow = local_fh_erasure_metrics(model.net, XVal, yVal, classNames);
-        fprintf("第%d/%d轮：trainLoss=%.4f, valLoss=%.4f, Val Acc=%.3f, Bad Recall=%.3f\n", ...
+        fprintf("第%d/%d轮：trainLoss=%.4f, valLoss=%.4f, Val Acc=%.3f, Bad-Freq Recall=%.3f\n", ...
             epoch, opts.epochs, epochLoss, valLoss, valMetricsNow.accuracy, valMetricsNow.badRecall);
     end
 
@@ -167,6 +173,8 @@ testMetrics = local_fh_erasure_metrics(model.net, XTest, yTest, classNames);
 
 report = struct();
 report.nBlocks = dataset.nBlocks;
+report.nRows = dataset.nRows;
+report.nFreqRows = dataset.nFreqRows;
 report.nHops = dataset.nHops;
 report.ebN0dBRange = dataset.ebN0dBRange;
 report.hopsPerBlockRange = opts.hopsPerBlockRange;
@@ -174,6 +182,9 @@ report.jsrDbRange = opts.jsrDbRange;
 report.bandwidthFreqPointsRange = opts.bandwidthFreqPointsRange;
 report.centerFreqPointsRange = opts.centerFreqPointsRange;
 report.configuredCenterProbability = opts.configuredCenterProbability;
+report.badFreqHopFractionThreshold = opts.badFreqHopFractionThreshold;
+report.badFreqErrorRateThreshold = opts.badFreqErrorRateThreshold;
+report.badFreqErrorExcessThreshold = opts.badFreqErrorExcessThreshold;
 report.rngSeed = rngSeed;
 report.trainingOptions = opts;
 report.trainingContext = ml_capture_fh_erasure_reload_context(p);
@@ -204,9 +215,9 @@ if opts.saveArtifacts
 end
 
 if opts.verbose
-    fprintf("\nFH软擦除模型训练完成。\n");
+    fprintf("\nFH频点级软擦除模型训练完成。\n");
     fprintf("最佳模型来自第%d轮，best val loss=%.4f。\n", bestEpoch, bestValLoss);
-    fprintf("验证集准确率=%.3f，测试集准确率=%.3f，测试Bad Recall=%.3f。\n", ...
+    fprintf("验证集准确率=%.3f，测试集准确率=%.3f，测试Bad-Freq Recall=%.3f。\n", ...
         valMetrics.accuracy, testMetrics.accuracy, testMetrics.badRecall);
 end
 end
@@ -225,6 +236,34 @@ if isa(XBatch, "gpuArray")
 end
 loss = local_cross_entropy_loss(scores, YDl, weightDl);
 gradients = dlgradient(loss, net.Learnables);
+end
+
+function split = local_split_frequency_rows_by_block(blockIndex, valFraction, testFraction, splitSeed)
+blockIndex = round(double(blockIndex(:)));
+if isempty(blockIndex) || any(~isfinite(blockIndex) | blockIndex < 1)
+    error("Frequency-level FH-erasure dataset requires positive finite block indices.");
+end
+blockIds = unique(blockIndex(:), "stable");
+blockSplit = ml_split_dataset_indices(numel(blockIds), valFraction, testFraction, splitSeed);
+trainBlocks = blockIds(blockSplit.trainIdx);
+valBlocks = blockIds(blockSplit.valIdx);
+testBlocks = blockIds(blockSplit.testIdx);
+
+split = struct();
+split.seed = splitSeed;
+split.splitUnit = "block";
+split.trainBlocks = trainBlocks(:);
+split.valBlocks = valBlocks(:);
+split.testBlocks = testBlocks(:);
+split.trainIdx = find(ismember(blockIndex, trainBlocks));
+split.valIdx = find(ismember(blockIndex, valBlocks));
+split.testIdx = find(ismember(blockIndex, testBlocks));
+split.nTrain = numel(split.trainIdx);
+split.nVal = numel(split.valIdx);
+split.nTest = numel(split.testIdx);
+split.trainFraction = split.nTrain / numel(blockIndex);
+split.valFraction = split.nVal / numel(blockIndex);
+split.testFraction = split.nTest / numel(blockIndex);
 end
 
 function loss = local_eval_fh_erasure_loss(net, XVal, yVal, classWeights, nClasses, executionEnvironment)

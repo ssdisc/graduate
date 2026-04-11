@@ -161,6 +161,7 @@ info = struct();
 info.nHops = nHops;
 info.hopLen = hopLen;
 info.freqIdx = freqIdx;
+info.nFreqs = nFreqs;
 info.hopPower = hopPower;
 info.powerRef = powerRef;
 info.freqMedianPower = freqMedianPower;

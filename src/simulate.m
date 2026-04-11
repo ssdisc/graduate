@@ -2319,11 +2319,12 @@ end
 cfg = local_require_fh_erasure_cfg_local(mitigation);
 model = local_require_ml_fh_erasure_model_local(mitigation);
 [~, ruleReliability] = local_apply_fh_erasure_action_local(rIn, hopInfoUsed, mitigation);
-[featureMatrix, featureInfo] = ml_extract_fh_erasure_features(rIn, hopInfoUsed, cfg, modCfg);
-[~, pBad, ~, ~] = ml_predict_fh_erasure_reliability(featureMatrix, model, ...
+[hopFeatureMatrix, featureInfo] = ml_extract_fh_erasure_features(rIn, hopInfoUsed, cfg, modCfg);
+[freqFeatureMatrix, freqFeatureInfo] = ml_extract_fh_erasure_freq_features(hopFeatureMatrix, featureInfo);
+[~, pBadFreq, ~, ~] = ml_predict_fh_erasure_reliability(freqFeatureMatrix, model, ...
     "minReliability", cfg.minReliability);
 relHop = local_ml_erasure_reliability_from_probability_local( ...
-    pBad, cfg.mlProbabilityThreshold, cfg.minReliability, cfg.mlProbabilitySlope);
+    pBadFreq, featureInfo.freqIdx, freqFeatureInfo.nFreqs, cfg);
 relHop = double(relHop(:));
 if numel(relHop) ~= double(featureInfo.nHops)
     error("ml_fh_erasure predicted %d hop reliabilities, expected %d.", numel(relHop), featureInfo.nHops);
@@ -2370,22 +2371,43 @@ rel = 1 ./ (1 + double(softSlope) * excess);
 rel = max(double(minReliability), min(1, rel));
 end
 
-function rel = local_ml_erasure_reliability_from_probability_local(pBad, threshold, minReliability, slope)
-pBad = double(pBad(:));
-threshold = double(threshold);
-minReliability = double(minReliability);
-slope = double(slope);
-if ~(isscalar(threshold) && isfinite(threshold) && threshold >= 0 && threshold < 1)
-    error("mitigation.fhErasure.mlProbabilityThreshold must be in [0, 1).");
+function rel = local_ml_erasure_reliability_from_probability_local(pBadFreq, freqIdx, nFreqs, cfg)
+pBadFreq = double(pBadFreq(:));
+freqIdx = round(double(freqIdx(:)));
+nFreqs = round(double(nFreqs));
+if ~(isscalar(nFreqs) && isfinite(nFreqs) && nFreqs >= 1)
+    error("ml_fh_erasure requires a positive finite nFreqs.");
 end
-if ~(isscalar(slope) && isfinite(slope) && slope > 0)
-    error("mitigation.fhErasure.mlProbabilitySlope must be positive.");
+if numel(pBadFreq) ~= nFreqs
+    error("ml_fh_erasure predicted %d frequency probabilities, expected %d.", numel(pBadFreq), nFreqs);
 end
-rel = ones(size(pBad));
-active = isfinite(pBad) & pBad > threshold;
-excess = pBad(active) - threshold;
-rel(active) = 1 ./ (1 + slope .* excess);
-rel = max(minReliability, min(1, rel));
+if any(~isfinite(freqIdx) | freqIdx < 1 | freqIdx > nFreqs)
+    error("ml_fh_erasure freqIdx must be within [1, nFreqs].");
+end
+
+rel = ones(size(freqIdx));
+freqProb = pBadFreq(:);
+
+candidateFreq = find(isfinite(freqProb) & freqProb >= cfg.mlFreqProbabilityThreshold);
+if ~isempty(candidateFreq)
+    [~, ord] = sort(freqProb(candidateFreq), "descend");
+    maxErasedFreqs = max(1, ceil(cfg.mlMaxErasedFreqFraction * double(nFreqs)));
+    candidateFreq = candidateFreq(ord(1:min(numel(ord), maxErasedFreqs)));
+    for k = 1:numel(candidateFreq)
+        freqNow = candidateFreq(k);
+        freqRel = local_probability_erasure_reliability_local( ...
+            freqProb(freqNow), cfg.mlFreqProbabilityThreshold, cfg.minReliability, cfg.mlProbabilitySlope);
+        rel(freqIdx == freqNow) = min(rel(freqIdx == freqNow), freqRel);
+    end
+end
+rel = max(cfg.minReliability, min(1, rel));
+end
+
+function rel = local_probability_erasure_reliability_local(probability, threshold, minReliability, slope)
+probability = double(probability);
+excess = max(probability - double(threshold), 0);
+rel = 1 ./ (1 + double(slope) .* excess);
+rel = max(double(minReliability), min(1, rel));
 end
 
 function cfg = local_require_fh_erasure_cfg_local(mitigation)
@@ -2401,9 +2423,13 @@ cfg.softSlope = local_required_positive_scalar_local(raw, "softSlope", "mitigati
 cfg.maxErasedFreqFraction = local_required_probability_scalar_local(raw, "maxErasedFreqFraction", "mitigation.fhErasure");
 cfg.edgeGuardSymbols = local_required_nonnegative_scalar_local(raw, "edgeGuardSymbols", "mitigation.fhErasure");
 cfg.attenuateSymbols = local_required_logical_scalar_local(raw, "attenuateSymbols", "mitigation.fhErasure");
-cfg.mlProbabilityThreshold = local_required_probability_scalar_local(raw, "mlProbabilityThreshold", "mitigation.fhErasure");
-if cfg.mlProbabilityThreshold >= 1
-    error("mitigation.fhErasure.mlProbabilityThreshold must be < 1.");
+cfg.mlFreqProbabilityThreshold = local_required_probability_scalar_local(raw, "mlFreqProbabilityThreshold", "mitigation.fhErasure");
+if cfg.mlFreqProbabilityThreshold >= 1
+    error("mitigation.fhErasure.mlFreqProbabilityThreshold must be < 1.");
+end
+cfg.mlMaxErasedFreqFraction = local_required_probability_scalar_local(raw, "mlMaxErasedFreqFraction", "mitigation.fhErasure");
+if cfg.mlMaxErasedFreqFraction <= 0
+    error("mitigation.fhErasure.mlMaxErasedFreqFraction must be > 0.");
 end
 cfg.mlProbabilitySlope = local_required_positive_scalar_local(raw, "mlProbabilitySlope", "mitigation.fhErasure");
 if cfg.freqPowerRatioThreshold < 1 || cfg.hopPowerRatioThreshold < 1

@@ -1,20 +1,20 @@
 function model = ml_fh_erasure_model()
-%ML_FH_ERASURE_MODEL  Return a lightweight per-hop bad-hop classifier.
+%ML_FH_ERASURE_MODEL  Return a lightweight per-frequency FH erasure classifier.
 
-featureNames = ml_fh_erasure_feature_names();
+featureNames = ml_fh_erasure_freq_feature_names();
 classNames = ["good" "bad"];
 
 model = struct();
 model.name = "fh_erasure_mlp";
 model.type = "fh_erasure_mlp";
 model.trained = false;
-model.featureVersion = 2;
-model.trainingLogicVersion = 2;
+model.featureVersion = 3;
+model.trainingLogicVersion = 3;
 model.featureNames = featureNames;
 model.classNames = classNames;
 model.positiveClass = "bad";
 model.inputChannels = numel(featureNames);
-model.hiddenSizes = [48 24];
+model.hiddenSizes = [64 32];
 model.minReliability = 0.02;
 
 layers = [
