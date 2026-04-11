@@ -2165,6 +2165,14 @@ if actionName == "none"
     return;
 end
 
+if actionName == "fh_erasure"
+    if ~fhEnabled
+        error("fh_erasure requires enabled FH hop information.");
+    end
+    [rOut, reliability] = local_apply_fh_erasure_action_local(r, hopInfoUsed, mitigation);
+    return;
+end
+
 if local_action_prefers_per_hop_local(actionName) && fhEnabled ...
         && isstruct(hopInfoUsed) && isfield(hopInfoUsed, "enable") && hopInfoUsed.enable ...
         && isfield(hopInfoUsed, "hopLen") && double(hopInfoUsed.hopLen) > 0
@@ -2192,6 +2200,184 @@ end
 function tf = local_action_prefers_per_hop_local(actionName)
 actionName = lower(string(actionName));
 tf = any(actionName == ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"]);
+end
+
+function [rOut, reliability] = local_apply_fh_erasure_action_local(rIn, hopInfoUsed, mitigation)
+rOut = rIn(:);
+N = numel(rOut);
+reliability = ones(N, 1);
+if N == 0
+    return;
+end
+cfg = local_require_fh_erasure_cfg_local(mitigation);
+if ~(isstruct(hopInfoUsed) && isfield(hopInfoUsed, "enable") && hopInfoUsed.enable)
+    error("fh_erasure requires hopInfo.enable=true.");
+end
+if ~(isfield(hopInfoUsed, "hopLen") && double(hopInfoUsed.hopLen) > 0)
+    error("fh_erasure requires slow-FH hopInfo.hopLen.");
+end
+if ~(isfield(hopInfoUsed, "freqIdx") && ~isempty(hopInfoUsed.freqIdx))
+    error("fh_erasure requires hopInfo.freqIdx.");
+end
+
+hopLen = round(double(hopInfoUsed.hopLen));
+nHops = ceil(double(N) / double(hopLen));
+freqIdx = round(double(hopInfoUsed.freqIdx(:)));
+if numel(freqIdx) < nHops
+    error("fh_erasure needs %d hop frequency indices, got %d.", nHops, numel(freqIdx));
+end
+freqIdx = freqIdx(1:nHops);
+if any(~isfinite(freqIdx)) || any(freqIdx < 1)
+    error("fh_erasure hopInfo.freqIdx must contain positive finite indices.");
+end
+
+nFreqs = max(freqIdx);
+if isfield(hopInfoUsed, "nFreqs") && ~isempty(hopInfoUsed.nFreqs)
+    nFreqs = max(nFreqs, round(double(hopInfoUsed.nFreqs)));
+end
+if ~(isscalar(nFreqs) && isfinite(nFreqs) && nFreqs >= 1)
+    error("fh_erasure requires a positive finite hopInfo.nFreqs.");
+end
+
+hopPower = nan(nHops, 1);
+for hopIdx = 1:nHops
+    idx = local_hop_symbol_indices_local(hopIdx, hopLen, N, cfg.edgeGuardSymbols);
+    if isempty(idx)
+        idx = local_hop_symbol_indices_local(hopIdx, hopLen, N, 0);
+    end
+    hopPower(hopIdx) = mean(abs(rOut(idx)).^2);
+end
+
+validHop = isfinite(hopPower) & hopPower > 0;
+if ~any(validHop)
+    return;
+end
+refPower = median(hopPower(validHop));
+if ~(isfinite(refPower) && refPower > 0)
+    return;
+end
+
+relHop = ones(nHops, 1);
+freqPower = nan(nFreqs, 1);
+for freqNow = 1:nFreqs
+    use = validHop & freqIdx == freqNow;
+    if any(use)
+        freqPower(freqNow) = median(hopPower(use));
+    end
+end
+
+freqRatio = freqPower ./ refPower;
+candidateFreq = find(isfinite(freqRatio) & freqRatio >= cfg.freqPowerRatioThreshold);
+if ~isempty(candidateFreq)
+    [~, ord] = sort(freqRatio(candidateFreq), "descend");
+    maxErasedFreqs = max(1, ceil(cfg.maxErasedFreqFraction * double(nFreqs)));
+    candidateFreq = candidateFreq(ord(1:min(numel(ord), maxErasedFreqs)));
+    for k = 1:numel(candidateFreq)
+        freqNow = candidateFreq(k);
+        freqRel = local_erasure_reliability_from_ratio_local( ...
+            freqRatio(freqNow), cfg.freqPowerRatioThreshold, cfg.minReliability, cfg.softSlope);
+        relHop(freqIdx == freqNow) = min(relHop(freqIdx == freqNow), freqRel);
+    end
+end
+
+hopRatio = hopPower ./ refPower;
+candidateHop = find(isfinite(hopRatio) & hopRatio >= cfg.hopPowerRatioThreshold);
+for k = 1:numel(candidateHop)
+    hopNow = candidateHop(k);
+    hopRel = local_erasure_reliability_from_ratio_local( ...
+        hopRatio(hopNow), cfg.hopPowerRatioThreshold, cfg.minReliability, cfg.softSlope);
+    relHop(hopNow) = min(relHop(hopNow), hopRel);
+end
+
+for hopIdx = 1:nHops
+    startIdx = (hopIdx - 1) * hopLen + 1;
+    stopIdx = min(N, hopIdx * hopLen);
+    reliability(startIdx:stopIdx) = relHop(hopIdx);
+end
+
+if cfg.attenuateSymbols
+    rOut = reliability .* rOut;
+end
+end
+
+function idx = local_hop_symbol_indices_local(hopIdx, hopLen, totalLen, edgeGuard)
+startIdx = (hopIdx - 1) * hopLen + 1;
+stopIdx = min(totalLen, hopIdx * hopLen);
+edgeGuard = max(0, round(double(edgeGuard)));
+startIdx = min(stopIdx + 1, startIdx + edgeGuard);
+stopIdx = max(startIdx - 1, stopIdx - edgeGuard);
+idx = (startIdx:stopIdx).';
+end
+
+function rel = local_erasure_reliability_from_ratio_local(ratio, threshold, minReliability, softSlope)
+ratio = double(ratio);
+threshold = double(threshold);
+excess = max(ratio - threshold, 0);
+rel = 1 ./ (1 + double(softSlope) * excess);
+rel = max(double(minReliability), min(1, rel));
+end
+
+function cfg = local_require_fh_erasure_cfg_local(mitigation)
+if ~(isfield(mitigation, "fhErasure") && isstruct(mitigation.fhErasure))
+    error("mitigation.fhErasure is required for fh_erasure.");
+end
+raw = mitigation.fhErasure;
+cfg = struct();
+cfg.freqPowerRatioThreshold = local_required_positive_scalar_local(raw, "freqPowerRatioThreshold", "mitigation.fhErasure");
+cfg.hopPowerRatioThreshold = local_required_positive_scalar_local(raw, "hopPowerRatioThreshold", "mitigation.fhErasure");
+cfg.minReliability = local_required_probability_scalar_local(raw, "minReliability", "mitigation.fhErasure");
+cfg.softSlope = local_required_positive_scalar_local(raw, "softSlope", "mitigation.fhErasure");
+cfg.maxErasedFreqFraction = local_required_probability_scalar_local(raw, "maxErasedFreqFraction", "mitigation.fhErasure");
+cfg.edgeGuardSymbols = local_required_nonnegative_scalar_local(raw, "edgeGuardSymbols", "mitigation.fhErasure");
+cfg.attenuateSymbols = local_required_logical_scalar_local(raw, "attenuateSymbols", "mitigation.fhErasure");
+if cfg.freqPowerRatioThreshold < 1 || cfg.hopPowerRatioThreshold < 1
+    error("mitigation.fhErasure power-ratio thresholds must be >= 1.");
+end
+end
+
+function value = local_required_positive_scalar_local(cfg, fieldName, label)
+value = local_required_numeric_scalar_local(cfg, fieldName, label);
+if value <= 0
+    error("%s.%s must be positive.", label, fieldName);
+end
+end
+
+function value = local_required_nonnegative_scalar_local(cfg, fieldName, label)
+value = local_required_numeric_scalar_local(cfg, fieldName, label);
+if value < 0
+    error("%s.%s must be nonnegative.", label, fieldName);
+end
+end
+
+function value = local_required_probability_scalar_local(cfg, fieldName, label)
+value = local_required_numeric_scalar_local(cfg, fieldName, label);
+if value < 0 || value > 1
+    error("%s.%s must be in [0, 1].", label, fieldName);
+end
+end
+
+function value = local_required_numeric_scalar_local(cfg, fieldName, label)
+if ~(isfield(cfg, fieldName) && ~isempty(cfg.(fieldName)))
+    error("%s.%s is required.", label, fieldName);
+end
+value = double(cfg.(fieldName));
+if ~(isscalar(value) && isfinite(value))
+    error("%s.%s must be a finite scalar.", label, fieldName);
+end
+end
+
+function value = local_required_logical_scalar_local(cfg, fieldName, label)
+if ~(isfield(cfg, fieldName) && ~isempty(cfg.(fieldName)))
+    error("%s.%s is required.", label, fieldName);
+end
+value = cfg.(fieldName);
+if ~(islogical(value) || isnumeric(value))
+    error("%s.%s must be a logical scalar.", label, fieldName);
+end
+value = logical(value);
+if ~isscalar(value)
+    error("%s.%s must be a logical scalar.", label, fieldName);
+end
 end
 
 function relPrep = local_fit_reliability_length_local(reliability, targetLen)
@@ -2736,7 +2922,7 @@ if any(actionName == ["none" "adaptive_ml_frontend"])
 end
 
 sampleActions = ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" "ml_cnn_hard" "ml_gru_hard"];
-symbolActions = ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"];
+symbolActions = ["fh_erasure" "fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"];
 if any(actionName == sampleActions)
     sampleAction = actionName;
     return;
@@ -2820,17 +3006,25 @@ minFftPeakRatio = local_guard_scalar_local(guard, "minFftPeakRatio", 6.0);
 fftPeakRatio = max(local_metric_scalar_local(metrics, "fftPeakRatio"), max(double(probeInfo.peakRatios)));
 narrowbandLike = bwFrac >= minBw && bwFrac <= maxBw ...
     && fftPeakRatio >= minFftPeakRatio;
+guardAction = local_narrowband_guard_action_local(guard);
 
 if className == "tone" && bwFrac >= toneBw
     className = "narrowband";
-    actionName = "fft_bandstop";
+    actionName = guardAction;
     return;
 end
 
 if any(className == overrideClasses) && narrowbandLike
     className = "narrowband";
-    actionName = "fft_bandstop";
+    actionName = guardAction;
 end
+end
+
+function actionName = local_narrowband_guard_action_local(guard)
+if ~(isfield(guard, "action") && strlength(string(guard.action)) > 0)
+    error("adaptiveFrontend.narrowbandGuard.action is required.");
+end
+actionName = lower(string(guard.action));
 end
 
 function value = local_guard_scalar_local(cfg, fieldName, defaultValue)
@@ -2859,7 +3053,7 @@ actionName = string(actionName);
 if nargin < 4 || isempty(headerActionCtx)
     headerActionCtx = local_empty_header_action_ctx_local();
 end
-if actionName == "none"
+if any(actionName == ["none" "fh_erasure"])
     hdrSymPrep = hdrSym;
     return;
 end
