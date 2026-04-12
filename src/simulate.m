@@ -38,9 +38,13 @@ bobRxSync = p.rxSync;
 bobMitigation = p.mitigation;
 waveform = resolve_waveform_cfg(p);
 local_require_presync_mitigation_cfg_local(bobMitigation, "p.mitigation");
-[methods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(bobMitigation, p.channel);
-bobMitigation.methods = methods;
-p.mitigation.methods = methods;
+[mitigationMethods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(bobMitigation, p.channel);
+bobMitigation.methods = mitigationMethods;
+p.mitigation.methods = mitigationMethods;
+receiverMethodPlan = local_build_receiver_method_plan_local(mitigationMethods, p.channel, bobRxSync);
+methods = receiverMethodPlan.labels;
+methodActions = receiverMethodPlan.mitigationMethods;
+methodEqualizers = receiverMethodPlan.equalizerMethods;
 
 %% 发送端（TRANSMITTER）
 
@@ -175,7 +179,7 @@ eveRxSync = struct();
 eveMitigation = struct();
 eveBudget = struct();
 if eveEnabled
-    eveCfg = local_validate_eve_config_local(p.eve, methods, p.channel);
+    eveCfg = local_validate_eve_config_local(p.eve, mitigationMethods, p.channel);
     eveRxSync = eveCfg.rxSync;
     eveMitigation = eveCfg.mitigation;
     chaosApproxDeltaEve = double(eveCfg.chaosApproxDelta);
@@ -485,6 +489,8 @@ for ie = 1:numel(EbN0dBList)
     frameCtx = struct();
     frameCtx.p = p;
     frameCtx.methods = methods;
+    frameCtx.methodActions = methodActions;
+    frameCtx.methodEqualizers = methodEqualizers;
     frameCtx.txPackets = txPackets;
     frameCtx.txPktIndex = txPktIndex;
     frameCtx.txPayloadBits = txPayloadBits;
@@ -673,6 +679,7 @@ results = struct();
 results.params = p;
 results.ebN0dB = EbN0dBList;
 results.jsrDb = JsrDbList;
+results.receiverMethodPlan = receiverMethodPlan;
 results.scan = struct( ...
     "type", string(linkBudget.scanType), ...
     "ebN0dBList", linkBudget.snrDbList, ...
@@ -1139,7 +1146,8 @@ for pktIdx = 1:nPackets
 end
 
 [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
-    frameCtx.methods, txPackets, frameCtx.txPktIndex, frameCtx.txPayloadBits, frameCtx.sessionFrames, bobRaw, eveRaw, p, waveform, frameCtx.N0, frameCtx.N0Eve, frameCtx.fhEnabled, ...
+    frameCtx.methods, frameCtx.methodActions, frameCtx.methodEqualizers, ...
+    txPackets, frameCtx.txPktIndex, frameCtx.txPayloadBits, frameCtx.sessionFrames, bobRaw, eveRaw, p, waveform, frameCtx.N0, frameCtx.N0Eve, frameCtx.fhEnabled, ...
     frameCtx.packetIndependentBitChaos, frameCtx.chaosEnabled, frameCtx.chaosEncInfo, ...
     frameCtx.packetConcealActive, frameCtx.packetConcealMode, frameCtx.imgTx, frameCtx.meta, frameCtx.totalPayloadBits, ...
     frameCtx.syncCfgUseBob, frameCtx.syncCfgUseEve, frameCtx.bobRxSync, frameCtx.bobMitigation, frameCtx.eveRxSync, frameCtx.eveMitigation, ...
@@ -1161,7 +1169,7 @@ end
 end
 
 function [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
-    methods, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobRaw, eveRaw, p, waveform, N0Bob, N0Eve, fhEnabled, ...
+    methods, methodActions, methodEqualizers, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobRaw, eveRaw, p, waveform, N0Bob, N0Eve, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
     packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
     syncCfgUseBob, syncCfgUseEve, bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
@@ -1169,6 +1177,11 @@ function [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
     captureExample, EbN0dB, EbN0dBEve, useParallelMethods)
 
 nMethods = numel(methods);
+methodActions = string(methodActions(:).');
+methodEqualizers = string(methodEqualizers(:).');
+if numel(methodActions) ~= nMethods || numel(methodEqualizers) ~= nMethods
+    error("receiver method plan length mismatch.");
+end
 nPackets = numel(txPktIndex);
 
 nErrBob = zeros(nMethods, 1);
@@ -1210,21 +1223,25 @@ useParfor = logical(useParallelMethods) && local_has_parallel_pool_local();
 if useParfor
     try
         parfor im = 1:nMethods
+            methodAction = methodActions(im);
+            bobRxSyncNow = local_rxsync_for_equalizer_method_local(bobRxSync, methodEqualizers(im));
             bobNom = local_build_packet_nominal_local( ...
-                bobRaw, txPackets, sessionFrames, methods(im), bobMitigation, ...
-                syncCfgUseBob, bobRxSync, p, waveform, N0Bob, fhEnabled, "known", true);
+                bobRaw, txPackets, sessionFrames, methodAction, bobMitigation, ...
+                syncCfgUseBob, bobRxSyncNow, p, waveform, N0Bob, fhEnabled, "known", true);
             eveNom = struct();
+            eveRxSyncNow = struct();
             if eveEnabled
+                eveRxSyncNow = local_rxsync_for_equalizer_method_local(eveRxSync, methodEqualizers(im));
                 eveNom = local_build_packet_nominal_local( ...
-                    eveRaw, txPackets, sessionFrames, methods(im), eveMitigation, ...
-                    syncCfgUseEve, eveRxSync, p, waveform, N0Eve, fhEnabled, fhAssumptionEve, false);
+                    eveRaw, txPackets, sessionFrames, methodAction, eveMitigation, ...
+                    syncCfgUseEve, eveRxSyncNow, p, waveform, N0Eve, fhEnabled, fhAssumptionEve, false);
             end
 
             [bobRes, eveRes] = local_decode_single_method_local( ...
-                methods(im), txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
+                methodAction, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
                 packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
                 packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
-                bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
+                bobRxSyncNow, bobMitigation, eveRxSyncNow, eveMitigation, ...
                 eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
                 captureExample, EbN0dB, EbN0dBEve, nPackets);
 
@@ -1311,21 +1328,25 @@ end
 
 if ~useParfor
     for im = 1:nMethods
+        methodAction = methodActions(im);
+        bobRxSyncNow = local_rxsync_for_equalizer_method_local(bobRxSync, methodEqualizers(im));
         bobNom = local_build_packet_nominal_local( ...
-            bobRaw, txPackets, sessionFrames, methods(im), bobMitigation, ...
-            syncCfgUseBob, bobRxSync, p, waveform, N0Bob, fhEnabled, "known", true);
+            bobRaw, txPackets, sessionFrames, methodAction, bobMitigation, ...
+            syncCfgUseBob, bobRxSyncNow, p, waveform, N0Bob, fhEnabled, "known", true);
         eveNom = struct();
+        eveRxSyncNow = struct();
         if eveEnabled
+            eveRxSyncNow = local_rxsync_for_equalizer_method_local(eveRxSync, methodEqualizers(im));
             eveNom = local_build_packet_nominal_local( ...
-                eveRaw, txPackets, sessionFrames, methods(im), eveMitigation, ...
-                syncCfgUseEve, eveRxSync, p, waveform, N0Eve, fhEnabled, fhAssumptionEve, false);
+                eveRaw, txPackets, sessionFrames, methodAction, eveMitigation, ...
+                syncCfgUseEve, eveRxSyncNow, p, waveform, N0Eve, fhEnabled, fhAssumptionEve, false);
         end
 
         [bobRes, eveRes] = local_decode_single_method_local( ...
-            methods(im), txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
+            methodAction, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
             packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
-            bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
+            bobRxSyncNow, bobMitigation, eveRxSyncNow, eveMitigation, ...
             eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
             captureExample, EbN0dB, EbN0dBEve, nPackets);
 
@@ -1987,6 +2008,102 @@ try
     tf = ~isempty(gcp("nocreate"));
 catch
     tf = false;
+end
+end
+
+function plan = local_build_receiver_method_plan_local(mitigationMethods, channelCfg, rxSyncCfg)
+baseMethods = string(mitigationMethods(:).');
+if isempty(baseMethods) || any(strlength(baseMethods) == 0)
+    error("receiver method plan requires non-empty mitigation methods.");
+end
+
+compareEq = local_multipath_eq_compare_enabled_local(channelCfg, rxSyncCfg);
+if compareEq
+    eqMethods = local_validate_equalizer_compare_methods_local(rxSyncCfg.multipathEq.compareMethods);
+else
+    eqMethods = "configured";
+end
+
+nBase = numel(baseMethods);
+nEq = numel(eqMethods);
+nRows = nBase * nEq;
+labels = strings(1, nRows);
+actions = strings(1, nRows);
+equalizers = strings(1, nRows);
+
+idx = 0;
+for ib = 1:nBase
+    for ieq = 1:nEq
+        idx = idx + 1;
+        actions(idx) = baseMethods(ib);
+        equalizers(idx) = eqMethods(ieq);
+        if compareEq
+            labels(idx) = baseMethods(ib) + "_eq_" + eqMethods(ieq);
+        else
+            labels(idx) = baseMethods(ib);
+        end
+    end
+end
+
+plan = struct( ...
+    "labels", labels, ...
+    "mitigationMethods", actions, ...
+    "equalizerMethods", equalizers, ...
+    "baseMethods", baseMethods, ...
+    "equalizerCompareEnabled", compareEq, ...
+    "equalizerCompareMethods", eqMethods);
+end
+
+function tf = local_multipath_eq_compare_enabled_local(channelCfg, rxSyncCfg)
+tf = false;
+if ~isstruct(channelCfg) || ~isfield(channelCfg, "multipath") || ~isstruct(channelCfg.multipath) ...
+        || ~isfield(channelCfg.multipath, "enable") || ~channelCfg.multipath.enable
+    return;
+end
+if ~isstruct(rxSyncCfg) || ~isfield(rxSyncCfg, "multipathEq") || ~isstruct(rxSyncCfg.multipathEq)
+    error("rxSync.multipathEq is required when channel.multipath.enable=true.");
+end
+if ~isfield(rxSyncCfg.multipathEq, "compareEnable") || isempty(rxSyncCfg.multipathEq.compareEnable)
+    error("rxSync.multipathEq.compareEnable is required when channel.multipath.enable=true.");
+end
+tf = logical(rxSyncCfg.multipathEq.compareEnable);
+if ~isscalar(tf)
+    error("rxSync.multipathEq.compareEnable must be a logical scalar.");
+end
+end
+
+function methods = local_validate_equalizer_compare_methods_local(rawMethods)
+methods = lower(string(rawMethods(:).'));
+if isempty(methods) || any(strlength(methods) == 0)
+    error("rxSync.multipathEq.compareMethods must be a non-empty string vector.");
+end
+validMethods = ["none" "mmse" "zf"];
+invalid = setdiff(methods, validMethods);
+if ~isempty(invalid)
+    error("Unsupported multipath equalizer compareMethods: %s.", strjoin(cellstr(invalid), ", "));
+end
+if numel(unique(methods, "stable")) ~= numel(methods)
+    error("rxSync.multipathEq.compareMethods must not contain duplicates.");
+end
+end
+
+function rxSyncOut = local_rxsync_for_equalizer_method_local(rxSyncIn, equalizerMethod)
+rxSyncOut = rxSyncIn;
+equalizerMethod = lower(string(equalizerMethod));
+if equalizerMethod == "configured"
+    return;
+end
+if ~isstruct(rxSyncOut) || ~isfield(rxSyncOut, "multipathEq") || ~isstruct(rxSyncOut.multipathEq)
+    error("rxSync.multipathEq is required for equalizer method %s.", equalizerMethod);
+end
+switch equalizerMethod
+    case "none"
+        rxSyncOut.multipathEq.enable = false;
+    case {"mmse", "zf"}
+        rxSyncOut.multipathEq.enable = true;
+        rxSyncOut.multipathEq.method = equalizerMethod;
+    otherwise
+        error("Unsupported equalizer method: %s.", equalizerMethod);
 end
 end
 
