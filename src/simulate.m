@@ -2120,68 +2120,218 @@ end
 tf = true;
 end
 
-function Lh = local_multipath_channel_len_symbols_local(channelCfg, waveform)
+function Lh = local_multipath_channel_len_symbols_local(channelCfg, ~)
 Lh = 1;
 if ~isfield(channelCfg, "multipath") || ~isstruct(channelCfg.multipath) ...
         || ~isfield(channelCfg.multipath, "enable") || ~channelCfg.multipath.enable
     return;
 end
 
-if isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols)
-    dly = double(channelCfg.multipath.pathDelaysSymbols(:));
-    if ~isempty(dly)
-        Lh = max(1, round(max(dly)) + 1);
-    end
+if ~(isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols))
+    error("FH-aware multipath equalizer requires channel.multipath.pathDelaysSymbols.");
+end
+dly = double(channelCfg.multipath.pathDelaysSymbols(:));
+if isempty(dly) || any(~isfinite(dly)) || any(dly < 0) || any(abs(dly - round(dly)) > 1e-12)
+    error("channel.multipath.pathDelaysSymbols must contain nonnegative integer symbol delays.");
+end
+Lh = max(1, round(max(dly)) + 1);
+end
+
+function eq = local_design_multipath_equalizer_local(txPreamble, rxPreamble, eqCfg, N0, chLenSymbols, freqBySymbol)
+eqCfgUse = eqCfg;
+eqCfgUse.frequencyOffsets = local_equalizer_frequency_set_local(freqBySymbol);
+[eq, ok] = multipath_equalizer_from_preamble(txPreamble, rxPreamble, eqCfgUse, N0, chLenSymbols);
+if ~ok
+    error("Multipath equalizer design failed.");
+end
+end
+
+function freqSet = local_equalizer_frequency_set_local(freqBySymbol)
+freqBySymbol = double(freqBySymbol(:).');
+if isempty(freqBySymbol)
+    freqSet = 0;
+    return;
+end
+if any(~isfinite(freqBySymbol))
+    error("Equalizer frequency vector contains non-finite entries.");
+end
+freqSet = unique([0, freqBySymbol], "stable");
+end
+
+function freqBySymbol = local_packet_equalizer_frequency_vector_local(txPacket, fhCaptureCfg, totalLen)
+preLen = numel(txPacket.syncSym);
+hdrLen = numel(txPacket.phyHeaderSymTx);
+dataLen = numel(txPacket.dataSymHop);
+totalLen = round(double(totalLen));
+if totalLen ~= preLen + hdrLen + dataLen
+    error("Packet equalizer length mismatch: totalLen=%d, sync+header+data=%d.", ...
+        totalLen, preLen + hdrLen + dataLen);
+end
+
+freqBySymbol = zeros(totalLen, 1);
+if totalLen == 0
+    return;
+end
+if ~(isstruct(fhCaptureCfg) && isfield(fhCaptureCfg, "enable") && logical(fhCaptureCfg.enable))
     return;
 end
 
-if isfield(channelCfg.multipath, "pathDelays") && ~isempty(channelCfg.multipath.pathDelays)
-    dlySamp = double(channelCfg.multipath.pathDelays(:));
-    if isempty(dlySamp)
-        Lh = 1;
-        return;
-    end
-    if isstruct(waveform) && isfield(waveform, "sps") && waveform.sps > 0
-        dlySym = dlySamp / double(waveform.sps);
-        Lh = max(1, round(max(dlySym)) + 1);
-    else
-        Lh = max(1, round(max(dlySamp)) + 1);
-    end
+if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
+        && isfield(fhCaptureCfg.headerFhCfg, "enable") && logical(fhCaptureCfg.headerFhCfg.enable)
+    freqBySymbol(preLen+1:preLen+hdrLen) = ...
+        local_symbol_frequency_offsets_from_fh_cfg_local(fhCaptureCfg.headerFhCfg, hdrLen);
+end
+if isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
+        && isfield(fhCaptureCfg.dataFhCfg, "enable") && logical(fhCaptureCfg.dataFhCfg.enable)
+    freqBySymbol(preLen+hdrLen+1:end) = ...
+        local_symbol_frequency_offsets_from_fh_cfg_local(fhCaptureCfg.dataFhCfg, dataLen);
 end
 end
 
-function yEq = local_apply_equalizer_block_local(y, eq)
+function freqBySymbol = local_session_equalizer_frequency_vector_local(sessionFrame, fhCaptureCfg, totalLen)
+preLen = numel(sessionFrame.syncSym);
+dataLen = double(sessionFrame.nDataSym);
+totalLen = round(double(totalLen));
+if totalLen ~= preLen + dataLen
+    error("Session equalizer length mismatch: totalLen=%d, sync+data=%d.", ...
+        totalLen, preLen + dataLen);
+end
+
+freqBySymbol = zeros(totalLen, 1);
+if totalLen == 0
+    return;
+end
+if ~(isstruct(fhCaptureCfg) && isfield(fhCaptureCfg, "enable") && logical(fhCaptureCfg.enable))
+    return;
+end
+if isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
+        && isfield(fhCaptureCfg.dataFhCfg, "enable") && logical(fhCaptureCfg.dataFhCfg.enable)
+    freqBySymbol(preLen+1:end) = ...
+        local_symbol_frequency_offsets_from_fh_cfg_local(fhCaptureCfg.dataFhCfg, dataLen);
+end
+end
+
+function freqBySymbol = local_symbol_frequency_offsets_from_fh_cfg_local(fhCfg, nSym)
+nSym = round(double(nSym));
+if ~(isscalar(nSym) && isfinite(nSym) && nSym >= 0)
+    error("FH frequency expansion requires a finite nonnegative symbol count.");
+end
+freqBySymbol = zeros(nSym, 1);
+if nSym == 0
+    return;
+end
+if ~(isstruct(fhCfg) && isfield(fhCfg, "enable") && logical(fhCfg.enable))
+    return;
+end
+if ~(isfield(fhCfg, "freqSet") && ~isempty(fhCfg.freqSet))
+    error("FH-aware equalizer requires fhCfg.freqSet when FH is enabled.");
+end
+
+if fh_is_fast(fhCfg)
+    [freqIdx, ~] = fh_generate_sequence(nSym, fhCfg);
+    freqIdx = round(double(freqIdx(:)));
+    freqSet = double(fhCfg.freqSet(:));
+    if any(freqIdx < 1) || any(freqIdx > numel(freqSet))
+        error("Fast FH frequency index exceeds fhCfg.freqSet.");
+    end
+    freqBySymbol = freqSet(freqIdx);
+    return;
+end
+
+hopInfo = fh_hop_info_from_cfg(fhCfg, nSym);
+freqBySymbol = local_expand_hop_frequency_offsets_local(hopInfo, nSym);
+end
+
+function freqBySymbol = local_expand_hop_frequency_offsets_local(hopInfo, nSym)
+nSym = round(double(nSym));
+if ~(isstruct(hopInfo) && isfield(hopInfo, "enable") && logical(hopInfo.enable))
+    freqBySymbol = zeros(nSym, 1);
+    return;
+end
+if ~(isfield(hopInfo, "hopLen") && ~isempty(hopInfo.hopLen))
+    error("Slow FH equalizer expansion requires hopInfo.hopLen.");
+end
+hopLen = round(double(hopInfo.hopLen));
+if ~(isscalar(hopLen) && isfinite(hopLen) && hopLen >= 1)
+    error("Slow FH equalizer expansion requires a positive finite hopLen.");
+end
+if ~(isfield(hopInfo, "freqOffsets") && ~isempty(hopInfo.freqOffsets))
+    error("FH equalizer expansion requires hopInfo.freqOffsets.");
+end
+nHops = ceil(double(nSym) / double(hopLen));
+freqOffsets = double(hopInfo.freqOffsets(:));
+if numel(freqOffsets) < nHops
+    error("FH equalizer expansion needs %d hop frequencies, got %d.", nHops, numel(freqOffsets));
+end
+freqBySymbol = repelem(freqOffsets(1:nHops), hopLen, 1);
+freqBySymbol = freqBySymbol(1:nSym);
+end
+
+function yEq = local_apply_frequency_aware_equalizer_block_local(y, eq, freqBySymbol)
 y = y(:);
-if isempty(y)
-    yEq = y;
-    return;
-end
-if ~isstruct(eq) || ~isfield(eq, "enabled") || ~eq.enabled || ~isfield(eq, "g") || isempty(eq.g)
-    yEq = y;
-    return;
-end
-
-d = 0;
-if isfield(eq, "delay") && ~isempty(eq.delay)
-    d = max(0, round(double(eq.delay)));
-end
-g = eq.g(:);
 N = numel(y);
-
-% Pad zeros so the delay-compensated slice exists.
-z = conv([y; zeros(d, 1)], g);
-needLen = d + N;
-if numel(z) < needLen
-    z = [z; complex(zeros(needLen - numel(z), 1))];
+freqBySymbol = double(freqBySymbol(:));
+if numel(freqBySymbol) ~= N
+    error("Equalizer frequency vector length %d does not match block length %d.", numel(freqBySymbol), N);
 end
-yEq = z(d+1:d+N);
+if N == 0
+    yEq = y;
+    return;
+end
+if ~(isstruct(eq) && isfield(eq, "enabled") && logical(eq.enabled))
+    error("Frequency-aware multipath equalizer requires eq.enabled=true.");
+end
+if ~(isfield(eq, "gBank") && ~isempty(eq.gBank) && isfield(eq, "frequencyOffsets") && ~isempty(eq.frequencyOffsets))
+    error("Frequency-aware multipath equalizer requires eq.gBank and eq.frequencyOffsets.");
+end
+if ~(isfield(eq, "delay") && isfield(eq, "eqLen"))
+    error("Frequency-aware multipath equalizer requires eq.delay and eq.eqLen.");
+end
+
+d = max(0, round(double(eq.delay)));
+Leq = round(double(eq.eqLen));
+gBank = eq.gBank;
+if size(gBank, 1) ~= Leq
+    error("Equalizer bank row count %d does not match eq.eqLen=%d.", size(gBank, 1), Leq);
+end
+
+bankIdx = local_equalizer_bank_indices_for_freqs_local(eq.frequencyOffsets, freqBySymbol);
+yEq = complex(zeros(N, 1));
+for n = 1:N
+    g = gBank(:, bankIdx(n));
+    acc = complex(0, 0);
+    for tap = 1:Leq
+        srcIdx = n + d - tap + 1;
+        if srcIdx >= 1 && srcIdx <= N
+            acc = acc + g(tap) * y(srcIdx);
+        end
+    end
+    yEq(n) = acc;
+end
+end
+
+function bankIdx = local_equalizer_bank_indices_for_freqs_local(bankFreqs, freqBySymbol)
+bankFreqs = double(bankFreqs(:));
+freqBySymbol = double(freqBySymbol(:));
+if isempty(bankFreqs)
+    error("Equalizer bank frequency list must not be empty.");
+end
+bankIdx = zeros(numel(freqBySymbol), 1);
+tol = 1e-10;
+for k = 1:numel(freqBySymbol)
+    [err, idx] = min(abs(bankFreqs - freqBySymbol(k)));
+    if isempty(idx) || err > tol
+        error("Equalizer bank does not contain normalized frequency %.12g.", freqBySymbol(k));
+    end
+    bankIdx(k) = idx;
+end
 end
 
 function [yPrep, relPrep] = local_prepare_data_symbols_local(rData, rawReliability, rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation)
 % Prepare per-packet data symbols (dehop -> targeted mitigation -> carrier PLL).
 %
-% Multipath equalization has already been applied on the full [preamble; PHY; data]
-% block. Here we only process the payload region.
+% FH-aware multipath equalization has already been applied on the full
+% [preamble; PHY; data] block. Here we only process the payload region.
 r = fit_complex_length_local(rData, rxState.nDataSym);
 rawReliability = local_fit_reliability_length_local(rawReliability, rxState.nDataSym);
 fastFhEnabled = isfield(rxState, "fhCfg") && isstruct(rxState.fhCfg) ...
@@ -3542,10 +3692,9 @@ for pktIdx = 1:nPackets
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
         eqCfg = rxSyncCfg.multipathEq;
-        [eq, eqOk] = multipath_equalizer_from_preamble(syncSymRef, rFull(1:preLen), eqCfg, N0, chLenSymbols);
-        if eqOk
-            rFull = local_apply_equalizer_block_local(rFull, eq);
-        end
+        freqBySymbol = local_packet_equalizer_frequency_vector_local(txPackets(pktIdx), fhCaptureCfg, totalLen);
+        eq = local_design_multipath_equalizer_local(syncSymRef, rFull(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+        rFull = local_apply_frequency_aware_equalizer_block_local(rFull, eq, freqBySymbol);
     end
 
     nom.frontEndOk(pktIdx) = true;
@@ -3627,10 +3776,9 @@ for frameIdx = 1:numel(sessionFrames)
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
         eqCfg = rxSyncCfg.multipathEq;
-        [eq, eqOk] = multipath_equalizer_from_preamble(sessionFrame.syncSym(:), rFull(1:preLen), eqCfg, N0, chLenSymbols);
-        if eqOk
-            rFull = local_apply_equalizer_block_local(rFull, eq);
-        end
+        freqBySymbol = local_session_equalizer_frequency_vector_local(sessionFrame, fhCaptureCfg, totalLen);
+        eq = local_design_multipath_equalizer_local(sessionFrame.syncSym(:), rFull(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+        rFull = local_apply_frequency_aware_equalizer_block_local(rFull, eq, freqBySymbol);
     end
 
     rxStateSession = local_session_rx_state_local(sessionFrame);

@@ -2,14 +2,17 @@
 
 ## 项目概述
 
-本仓库提供一个基于 MATLAB 的端到端参考链路，当前代码主线已经从“单次整图传输基线”演进为“分包传输 + 逐包成帧 + 连续状态重建 + Eve/Warden 联合评估”版本，重点覆盖以下内容：
+本仓库提供一个基于 MATLAB 的端到端参考链路，当前代码主线已经从“单次整图传输基线”演进为“分包传输 + RS 外码 + LDPC + 逐包成帧 + 多径均衡 + 自适应前端 + Eve/Warden 联合评估”版本，重点覆盖以下内容：
 
-- 图像到比特流的完整发送与接收链路
-- Bernoulli-Gaussian 脉冲噪声下的 BER、MSE、PSNR、SSIM 评估
-- FFT/IIR/阈值法与 ML 法的脉冲检测和抑制
-- 混沌跳频、混沌加密、扰码白化的联合保密链路
+- 图像到比特流的完整发送与接收链路（DCT 压缩 + 混沌加密 + 分包 + RS 外码）
+- LDPC 信道编码与块交织
+- 混沌跳频（慢跳 8 频点）、可选 DSSS 直扩
+- RRC 脉冲成型与完整物理层同步链路（分数定时、CFO 估计、载波 PLL、早迟门 DLL）
+- 多径信道建模与 MMSE/ZF 线性均衡
+- 16 种干扰抑制方法对比，含 ML 自适应前端与跳频擦除
+- AWGN + 脉冲/单音/窄带/扫频干扰，Eb/N0 x JSR 双扫描轴
 - Eve 截获仿真：可分别配置扰码、跳频、混沌知识模型
-- Warden 检测仿真：能量检测、跳频窄带扫描、循环平稳检测
+- Warden 隐蔽检测仿真：能量检测、跳频窄带扫描、循环平稳检测（5 层）
 
 当前默认链路以 `src/default_params.m` 为准，不再以 README 中的旧示意为准。
 
@@ -19,22 +22,25 @@
 |------|---------------|
 | 信源 | 灰度图，默认 `images/maodie.png` |
 | 载荷编码 | `DCT` 压缩载荷，`8x8` 块、保留 `4x4` 系数、量化步长 `16` |
-| 分包 | 启用，默认每包 `1024` bit 载荷 |
-| 混沌加密 | 启用；`DCT` 载荷默认“先分包，再逐包独立混沌加密” |
-| 扰码 | 启用，连续 PN 扰码 |
-| FEC | 卷积码 `[171 133]`，码率 `1/2`，软判决 Viterbi |
-| 交织 | 启用，块交织 `64` 行 |
+| 混沌加密 | 启用；`DCT` 载荷默认“先分包，再逐包独立混沌加密”（`packetIndependent=true`） |
+| 分包 | 启用，默认每包 `7200` bit 载荷 |
+| RS 外码 | 启用，每 `12` 数据包附加 `4` 校验包 |
+| 扰码 | 启用，连续 PN 扰码（`x^11 + x^2 + 1`） |
+| FEC | `LDPC`，DVB-S2 短帧，码率 `1/2`，最大迭代 `20` 次，6 位软量化 |
+| 交织 | 启用，块交织 `128` 行（与每跳 `64` 符号 x QPSK `2` bit/sym 对齐） |
 | 调制 | `QPSK` |
-| 跳频 | 启用，默认 `chaos` 序列，`8` 个频点，每跳 `64` 符号 |
-| 波形成型 | 启用 `RRC`，`sps=4`，`rolloff=0.25` |
-| 发射功率 | 由 `p.tx.powerDbList` 配置扫描点，按 `1 sps` 等效功率口径缩放整段发射波形 |
-| 链路预算 | 纯仿真链路预算：`p.tx.powerDbList` 扫描发射功率，`p.linkBudget.noisePsdLin` 给定噪声 PSD |
-| 发射记录 | 发射时长与实测功率只记录和评估，不再作为超限约束 |
-| 同步 | 默认每个分包成帧时都使用长 `PN` 前导重同步 |
-| PHY头 | 默认 `compact_fec` |
-| Session 元数据 | 默认 `session_frame_repeat`，即先发送 3 次 dedicated session frame，再发送数据帧 |
-| Eve | 默认启用，接收端相对 Bob 低 `6 dB`，默认场景是 `scramble=known`、`fh=partial`、`chaos=known` |
-| Warden | 默认启用，主判据为 `energyOptUncertain` |
+| DSSS | 默认关闭（`spreadFactor=4` 可选） |
+| 跳频 | 启用，默认 `chaos` 序列（Logistic），`8` 个频点，每跳 `64` 符号，慢跳频 |
+| 波形成型 | 启用 `RRC`，`sps=10`，`rolloff=0.25`，采样率 `100 kHz` |
+| 链路预算 | `Eb/N0` 主扫描轴 `[4:2:10] dB` + `JSR` 副扫描轴 `[-10 -5 0] dB` 双轴网格 |
+| 多径 | 启用，静态 3 径 `[0 1 2]` 符号，增益 `[0 -12 -18] dB`，无瑞利衰落 |
+| 同步 | 默认每个分包使用长 `PN` 前导（`127` 位）独立重同步 |
+| PHY头 | 默认 `compact_fec`，可选独立跳频（`slow` 模式） |
+| Session 元数据 | 默认 `session_frame_repeat`，即先发送 `3` 次 dedicated session frame，再发送数据帧 |
+| 多径均衡 | 启用 MMSE，`9` 抽头线性 FFE，支持 `none/mmse/zf` 三路对比 |
+| 干扰 | 默认全部关闭（脉冲/单音/窄带/扫频均需手动开启并配置 `weight`） |
+| Eve | 默认关闭（`p.eve.enable=false`）；可配置独立 `rxSync` 和 `mitigation` |
+| Warden | 默认启用，5 层检测，主判据为 `energyOptUncertain` |
 
 ## 术语约定
 
@@ -48,46 +54,55 @@
 
 ```text
 图像
- -> DCT载荷
+ -> DCT压缩编码
  -> 分包
  -> 逐包混沌加密（默认DCT载荷开启）
+ -> RS外码（跨包Reed-Solomon，12+4）
  -> 扰码
- -> 卷积编码
- -> 块交织
- -> QPSK
- -> 混沌跳频
- -> RRC成型
+ -> LDPC编码（DVB-S2 short，码率1/2）
+ -> 块交织（128行）
+ -> QPSK调制
+ -> DSSS扩频（默认关闭）
+ -> 混沌跳频（8频点，慢跳64符号/跳）
+ -> RRC脉冲成型（sps=10, rolloff=0.25）
  -> 逐包成帧并发送 [同步头 | PHY头 | 受保护数据域]
 ```
 
 ### 信道
 
 ```text
-AWGN
-+ Bernoulli-Gaussian 脉冲噪声
-+ 可选单音/窄带噪声/扫频干扰
-+ 可选多径
+AWGN（由Eb/N0驱动）
++ 可选多径（静态/瑞利，整数符号时延）
++ 可选Bernoulli-Gaussian脉冲噪声
++ 可选单音干扰
++ 可选窄带噪声干扰
++ 可选扫频（线性chirp）干扰
 + 可选定时偏移和相位偏移
++ JSR功率预算：各干扰源按weight分配总干扰功率
 ```
 
 ### Bob 接收端
 
 ```text
-匹配滤波
- -> 帧同步 / 分数定时 / CFO补偿 / 可选多径均衡
- -> PHY头译码
+RRC匹配滤波
+ -> 帧同步（PN相关）/ 分数定时估计 / CFO前馈补偿
+ -> 多径信道估计与MSSE/ZF均衡（可选，三路对比）
+ -> PHY头译码（BPSK + 卷积码，可选头部跳频解调）
  -> 根据 packetIndex 重建连续扰码与跳频状态
- -> 解跳
- -> 载波PLL
- -> 脉冲抑制
- -> 软解调
+ -> 跳频解调（采样域解跳）
+ -> 干扰抑制（16种方法，按binding自动过滤）
+ -> DSSS解扩（若启用）
+ -> 载波PLL跟踪
+ -> QPSK软解调（含软可靠性加权）
  -> 解交织
- -> Viterbi译码
+ -> LDPC译码（min-sum + 可选多线程）
  -> 解扰
  -> 包CRC校验 / 会话恢复
+ -> RS外码恢复（跨包擦除纠错）
+ -> 混沌解密（逐包独立）
  -> 图像重组
- -> 丢包补偿（可选）
- -> 图像质量评估
+ -> 丢包补偿（可选，nearest/blend）
+ -> 图像质量评估（PSNR/SSIM/MSE）
 ```
 
 ### Eve 与 Warden
@@ -96,25 +111,37 @@ AWGN
 - Eve 可分别假设自己是否知道扰码密钥、跳频序列、混沌密钥。
 - Warden 默认同时评估多层检测器，不只是一条简单能量检测曲线。
 
-## 当前支持的脉冲抑制方法
+## 当前支持的干扰抑制方法
 
-| 方法 | 说明 | 是否输出软可靠性 |
-|------|------|------------------|
-| `none` | 不做抑制 | 否 |
-| `fft_notch` | FFT 频域峰值检测加陷波 | 否 |
-| `adaptive_notch` | 自适应 IIR 陷波 | 否 |
-| `blanking` | 幅度门限置零 | 否 |
-| `clipping` | 幅度门限削波 | 否 |
-| `ml_blanking` | 逻辑回归检测后置零 | 否 |
-| `ml_cnn` | 1D CNN 检测加软抑制 | 是 |
-| `ml_gru` | GRU 检测加软抑制 | 是 |
+| 方法 | 说明 | 适用干扰类型 | 是否输出软可靠性 |
+|------|------|-------------|------------------|
+| `none` | 不做抑制 | 全部 | 否 |
+| `blanking` | 幅度门限置零 | 脉冲 | 否 |
+| `clipping` | 幅度门限削波 | 脉冲 | 否 |
+| `ml_blanking` | 逻辑回归检测后置零 | 脉冲 | 否 |
+| `ml_cnn` | 1D CNN 检测加软抑制 | 脉冲 | 是 |
+| `ml_gru` | GRU 检测加软抑制 | 脉冲 | 是 |
+| `ml_cnn_hard` | 1D CNN 检测加硬抑制 | 脉冲 | 否 |
+| `ml_gru_hard` | GRU 检测加硬抑制 | 脉冲 | 否 |
+| `fft_notch` | FFT 频域峰值检测加陷波 | 单音 | 否 |
+| `adaptive_notch` | 自适应 IIR 陷波 | 单音/窄带 | 否 |
+| `fft_bandstop` | FFT 频域带通检测加带阻 | 窄带 | 否 |
+| `stft_notch` | STFT 时频域陷波 | 扫频 | 否 |
+| `fh_erasure` | 基于跳频能量统计的软擦除 | 窄带 | 是 |
+| `ml_fh_erasure` | ML 增强的跳频擦除 | 窄带 | 是 |
+| `ml_narrowband` | ML 窄带干扰动作选择 | 窄带 | 否 |
+| `adaptive_ml_frontend` | ML 干扰分类 + 自适应动作选择 | 混合 | 取决于选中的动作 |
 
-默认比较方法集合为：
+默认配置的方法集合为：
 
 ```matlab
-p.mitigation.methods = ["none" "fft_notch" "adaptive_notch" "blanking" ...
-    "clipping" "ml_blanking" "ml_cnn" "ml_gru"];
+p.mitigation.methods = ["none" "fh_erasure" "ml_fh_erasure" "fft_notch" ...
+    "fft_bandstop" "adaptive_notch" "stft_notch" ...
+    "blanking" "clipping" "ml_blanking" "ml_cnn" "ml_gru" ...
+    "ml_cnn_hard" "ml_gru_hard" "ml_narrowband" "adaptive_ml_frontend"];
 ```
+
+**注意：** 实际运行时，`resolve_mitigation_methods` 会根据 `mitigation.binding` 配置和当前启用的干扰类型自动过滤方法列表。例如，当所有干扰都关闭时，只有 `"none"` 会保留。
 
 ## 快速开始
 
@@ -455,9 +482,10 @@ embedded_each_frame:                           [sessionHeader | payload]
 3. 按 `BPSK` 方式提取前导和 PHY头；如启用多径均衡，优先利用前导估计信道以“先救 PHY头”。
 4. 译码并解析 PHY头，得到 `packetIndex`、`packetDataCrc16` 以及当前数据帧是否内嵌会话头等信息。
 5. 根据 `packetIndex` 和当前配置恢复该包的扰码偏移、跳频偏移和数据符号长度。
-6. 按 `p.mod.type` 提取数据段符号，随后进行解跳、载波 PLL、脉冲抑制、软解调、解交织和 Viterbi 译码。
+6. 按 `p.mod.type` 提取数据段符号，随后进行解跳、干扰抑制、DSSS 解扩（若启用）、载波 PLL、QPSK 软解调、解交织和 LDPC 译码。
 7. 对受保护数据域做 CRC 校验；如果本包携带会话头，则进一步解析并更新会话上下文。
-8. 根据 `packetIndex` 和会话层元信息，把当前分包 payload 映射回整图中的正确比特区间。
+8. 所有数据包和校验包解码完成后，使用 RS 外码恢复丢失的数据包。
+9. 根据 `packetIndex` 和会话层元信息，把当前分包 payload 映射回整图中的正确比特区间。
 
 从这个角度看，当前项目中真正负责“逐包寻址和恢复上下文”的，不是一个独立 MAC 层，而是：
 
@@ -497,9 +525,10 @@ embedded_each_frame:                           [sessionHeader | payload]
 
 ### 默认 Eve 场景
 
-`src/default_params.m` 当前默认是：
+`src/default_params.m` 当前默认 Eve **关闭**：
 
 ```matlab
+p.eve.enable = false;
 p.eve.linkGainOffsetDb = -6;
 p.eve.scrambleAssumption = "known";
 p.eve.fhAssumption = "partial";
@@ -507,7 +536,7 @@ p.eve.chaosAssumption = "known";
 p.eve.chaosApproxDelta = 1e-10;
 ```
 
-这个默认场景主要在展示“Eve 只部分知道跳频序列”时的截获失败。
+启用后，默认场景主要在展示“Eve 只部分知道跳频序列”时的截获失败。Eve 拥有独立的 `p.eve.rxSync` 和 `p.eve.mitigation`，默认从 Bob 主链路配置复制。
 
 ### 默认 Warden 场景
 
@@ -579,27 +608,29 @@ p.frame.sessionStrongRepeat = 8;
 
 | 参数 | 作用 |
 |------|------|
-| `p.tx.*` | 发射端配置：当前用于设置发射功率；发射时长只记录不设约束 |
-| `p.tx.powerDbList` | 发射功率扫描点（dB） |
-| `p.linkBudget.*` | 纯仿真链路预算：当前用于配置噪声 PSD |
-| `p.sim.nFramesPerPoint` | 每个链路预算点的帧数 |
-| `p.sim.useParallel` | 主链路是否并行 |
+| `p.linkBudget.ebN0dBList` | Bob 端目标 Eb/N0 扫描点（dB） |
+| `p.linkBudget.jsrDbList` | 目标 J/S 扫描点（dB），与 Eb/N0 构成二维网格 |
+| `p.linkBudget.noisePsdLin` | 背景噪声 PSD（线性值，纯仿真归一化口径） |
+| `p.sim.nFramesPerPoint` | 每个链路预算点的 Monte Carlo 帧数 |
+| `p.sim.useParallel` | 主链路是否并行，支持 `"methods"` 和 `"frames"` 两种模式 |
 | `p.source.*` | 图像路径、缩放、灰度化 |
 | `p.payload.*` | `raw` / `dct` 载荷格式 |
 | `p.packet.*` | 分包长度、丢包补偿 |
+| `p.outerRs.*` | 跨包 Reed-Solomon 外码配置 |
 | `p.chaosEncrypt.*` | 图像或载荷混沌加密 |
-| `p.frame.*` | 成帧相关配置：前导、短同步字、PHY头、session头模式 |
+| `p.frame.*` | 成帧相关配置：前导、短同步字、PHY头、session头模式、PHY头跳频 |
 | `p.scramble.*` | PN 扰码配置 |
-| `p.fec.*` | 卷积码与 Viterbi 参数 |
+| `p.fec.*` | FEC 配置：`"conv"` 卷积码或 `"ldpc"` LDPC，含码率/迭代等子参数 |
 | `p.interleaver.*` | 交织深度 |
 | `p.mod.*` | `BPSK` / `QPSK` / `MSK` |
+| `p.dsss.*` | DSSS 直扩配置（默认关闭） |
 | `p.fh.*` | 跳频序列类型、频点数、每跳长度 |
-| `p.waveform.*` | `RRC` 成型与采样率 |
-| `p.channel.*` | 脉冲干扰、多径、同步失配、窄带/扫频干扰 |
-| `p.rxSync.*` | 细同步、CFO、PLL、多径均衡、DLL |
-| `p.mitigation.*` | 脉冲抑制与 ML 阈值校准 |
+| `p.waveform.*` | `RRC` 成型、采样率、每符号采样数 |
+| `p.channel.*` | 多径、脉冲、单音、窄带、扫频干扰与同步失配 |
+| `p.rxSync.*` | 细同步、CFO、PLL、多径均衡（MMSE/ZF）、DLL |
+| `p.mitigation.*` | 干扰抑制方法、binding 过滤、ML 模型加载与阈值校准 |
 | `p.eve.*` | Eve 假设与独立接收机配置 |
-| `p.covert.warden.*` | Warden 检测参数 |
+| `p.covert.warden.*` | Warden 检测参数（5 层检测器） |
 
 ## 输出结果
 
@@ -688,38 +719,42 @@ graduate/
 ├── README.md
 ├── run_demo.m
 ├── src/
-│   ├── default_params.m
-│   ├── simulate.m
-│   ├── tx/
-│   ├── frame/
-│   ├── payload/
-│   ├── source/
-│   ├── recovery/
-│   ├── security/
-│   ├── coding/
-│   ├── modem/
-│   ├── fh/
-│   ├── sync/
-│   ├── channel/
-│   ├── mitigation/
-│   │   └── ml/
-│   ├── covert/
-│   ├── analysis/
-│   ├── util/
-│   └── io/
-├── models/
-├── results/
-└── docs/
+│   ├── default_params.m      # 全部链路参数的唯一入口
+│   ├── simulate.m             # 端到端仿真主函数
+│   ├── tx/                    # 发送端：分包构建、会话帧、突发测量
+│   ├── frame/                 # 成帧：PHY头、会话头、同步头、分包同步
+│   ├── payload/               # 载荷：DCT编码、图像转比特流
+│   ├── source/                # 信源：图像加载
+│   ├── recovery/              # 接收恢复：丢包补偿（inpaint）
+│   ├── security/              # 安全：混沌加密/解密
+│   ├── coding/                # 编码：FEC（Conv/LDPC）、交织、扰码、RS外码
+│   ├── modem/                 # 调制解调：BPSK/QPSK/MSK、软判决
+│   ├── dsss/                  # DSSS直扩/解扩
+│   ├── fh/                    # 跳频：序列生成、调制/解调、频点规划
+│   ├── sync/                  # 同步：帧捕获、分数定时、CFO估计
+│   ├── channel/               # 信道：AWGN+脉冲+多径+干扰、链路预算
+│   ├── mitigation/            # 干扰抑制：16种方法
+│   │   └── ml/                # ML模型：LR/CNN/GRU/Selector/Narrowband/FH-Erasure
+│   ├── covert/                # 隐蔽通信：Warden 5层检测器
+│   ├── analysis/              # 分析：频谱估计、KL散度
+│   ├── util/                  # 工具函数
+│   └── io/                    # 输入输出：结果保存、表格导出
+├── models/                    # 预训练ML模型（.mat）
+├── images/                    # 测试图像
+├── results/                   # 仿真结果输出
+└── docs/                      # 文档
 ```
 
 ## 注意事项
 
 - 当前代码对关键配置缺失是直接报错，不做回退兼容。
 - `default_params()` 默认要求训练好的 ML 模型存在；最省心的入口仍然是 `run_demo`。
-- 默认启用发射端约束；若整段 burst 发射时间超过 `21 s` 或等效平均功率超过 `1.05`，仿真会直接报错。
 - 默认 `sessionHeaderMode = "session_frame_repeat"`，表示会话元信息先以 dedicated session frame 连续突发 3 次再发送数据帧；如果你只想评估主链路而不想让会话层占用空口，可以改成 `preshared`。
 - 默认 `resyncIntervalPackets = 1`，因此当前主线其实是“每个分包独立成帧且使用长前导”方案，短同步字还不是默认主路径。
 - Eve 如果自定义接收机配置，`p.eve.rxSync` 和 `p.eve.mitigation` 需要是完整结构体，并且 `p.eve.mitigation.methods` 必须与主链路完全一致。
+- 实际运行的抑制方法由 `mitigation.binding` 根据启用的干扰类型自动过滤；如果所有干扰都关闭，只会保留 `"none"`。
+- 多径均衡与跳频同时启用时，均衡器在全带做频域处理可能不匹配分散在各跳频子带上的信号；建议二者不要同时开启。
+- FEC 默认已切换为 `LDPC`；卷积码配置仍然保留，PHY头和会话帧内部独立使用卷积码编码。
 
 ## 许可证
 
