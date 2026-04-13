@@ -497,18 +497,22 @@ for ie = 1:numel(EbN0dBList)
 
     txPacketsWorker = local_compact_tx_packets_for_rx_local(txPackets);
     sessionFramesWorker = local_compact_session_frames_for_rx_local(sessionFrames);
+    pWorker = local_compact_params_for_worker_local(p);
     if useParallelFrames
         fullTxPacketsBytes = local_variable_size_bytes_local(txPackets);
         workerTxPacketsBytes = local_variable_size_bytes_local(txPacketsWorker);
         fullSessionBytes = local_variable_size_bytes_local(sessionFrames);
         workerSessionBytes = local_variable_size_bytes_local(sessionFramesWorker);
-        fprintf('[SIM]     Worker上下文瘦身: txPackets %.2f -> %.2f MB, sessionFrames %.2f -> %.2f MB\n', ...
+        fullParamsBytes = local_variable_size_bytes_local(p);
+        workerParamsBytes = local_variable_size_bytes_local(pWorker);
+        fprintf('[SIM]     Worker上下文瘦身: txPackets %.2f -> %.2f MB, sessionFrames %.2f -> %.2f MB, params %.2f -> %.2f MB\n', ...
             fullTxPacketsBytes / 1024 / 1024, workerTxPacketsBytes / 1024 / 1024, ...
-            fullSessionBytes / 1024 / 1024, workerSessionBytes / 1024 / 1024);
+            fullSessionBytes / 1024 / 1024, workerSessionBytes / 1024 / 1024, ...
+            fullParamsBytes / 1024 / 1024, workerParamsBytes / 1024 / 1024);
     end
 
     frameCtx = struct();
-    frameCtx.p = p;
+    frameCtx.p = pWorker;
     frameCtx.methods = methods;
     frameCtx.methodActions = methodActions;
     frameCtx.methodEqualizers = methodEqualizers;
@@ -518,8 +522,6 @@ for ie = 1:numel(EbN0dBList)
     frameCtx.sessionFrames = sessionFramesWorker;
     frameCtx.waveform = waveform;
     frameCtx.channelSample = channelSample;
-    frameCtx.firstSyncSym = firstSyncSym;
-    frameCtx.shortSyncSym = shortSyncSym;
     frameCtx.linkBudgetBobRxAmplitudeScale = linkBudget.bob.rxAmplitudeScale(ie);
     frameCtx.eveRxAmplitudeScale = eveRxAmplitudeScaleLocal;
     frameCtx.N0 = N0;
@@ -530,7 +532,6 @@ for ie = 1:numel(EbN0dBList)
     frameCtx.packetIndependentBitChaos = packetIndependentBitChaos;
     frameCtx.chaosEnabled = chaosEnabled;
     frameCtx.chaosEncInfo = chaosEncInfo;
-    frameCtx.outerRs = txPlan.outerRs;
     frameCtx.packetConcealActive = packetConcealActive;
     frameCtx.packetConcealMode = packetConcealMode;
     frameCtx.imgTx = imgTx;
@@ -2109,6 +2110,37 @@ function nBytes = local_variable_size_bytes_local(x)
 tmp = x; %#ok<NASGU>
 s = whos("tmp");
 nBytes = double(s.bytes);
+end
+
+function pOut = local_compact_params_for_worker_local(p)
+%LOCAL_COMPACT_PARAMS_FOR_WORKER_LOCAL  仅保留worker帧处理路径所需的p子字段。
+%
+% 删除的大体积字段：
+%   p.mitigation（含全部ML模型权重）— 已作为 bobMitigation/eveMitigation 单独传入
+%   p.rxSync — 已作为 bobRxSync/eveRxSync 单独传入
+%   p.sim, p.source, p.linkBudget, p.tx — 仅外层循环使用
+%   p.eve, p.covert — 已解析提取为独立字段
+%   p.rngSeed — 已转换为 frameSeedBase
+pOut = struct();
+pOut.channel = p.channel;
+pOut.mod = p.mod;
+pOut.fec = p.fec;
+pOut.softMetric = p.softMetric;
+pOut.frame = p.frame;
+pOut.fh = p.fh;
+pOut.interleaver = p.interleaver;
+pOut.scramble = p.scramble;
+pOut.payload = p.payload;
+pOut.packet = p.packet;
+pOut.outerRs = p.outerRs;
+pOut.chaosEncrypt = p.chaosEncrypt;
+pOut.scFde = p.scFde;
+if isfield(p, 'dsss')
+    pOut.dsss = p.dsss;
+end
+if isfield(p, 'waveform')
+    pOut.waveform = p.waveform;
+end
 end
 
 function txSymForChannel = local_rebuild_packet_channel_waveform_local(txPacket, waveform)
