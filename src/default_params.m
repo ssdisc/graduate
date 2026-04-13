@@ -196,15 +196,15 @@ p.fh.freqSet = [];
 % 9.2) payload 单载波块传输：每个慢跳频hop内部加入 CP + 导频，用于 SC-FDE
 p.scFde = struct();
 p.scFde.enable = true;              % payload按每跳做单载波频域均衡块
-p.scFde.cpLenSymbols = 4;           % CP长度；需覆盖主要多径时延扩展
-p.scFde.pilotLength = 4;            % 每跳核心块开头的已知BPSK导频数
+p.scFde.cpLenSymbols = 8;           % 吸收成型滤波跳频瞬态(5)+多径扩展(2)
+p.scFde.pilotLength = 8;            % 加长导频提升瑞利深衰落下的MSE估计稳定性
 p.scFde.pilotPolynomial = [1 0 0 0 1 0 0 1]; % x^7 + x^3 + 1
 p.scFde.pilotInit = [0 0 0 0 0 0 1];
 p.scFde.lambdaFactor = 1.0;         % FDE MMSE正则: lambda=lambdaFactor*N0
 p.scFde.pilotMinAbsGain = 0.05;     % 导频残余标量增益过小时不做除法放大
 p.scFde.pilotMseReference = 0.35;   % 导频残差映射软可靠度的参考MSE
-p.scFde.fdePilotMseThreshold = 0.20; % FDE导频残差低于该值才允许接管FFE保护输出
-p.scFde.fdePilotMseMargin = 0.85;   % FDE导频残差需明显低于FFE保护输出
+p.scFde.fdePilotMseThreshold = 5.00; % 瑞利衰落跳易现高MSE，极大放宽回退阈值
+p.scFde.fdePilotMseMargin = 5.00;   % 防止深衰落跳被误判回退到全包线性FFE
 p.scFde.minReliability = 0.05;      % 单跳导频很差时的最低软可靠度
 
 % 9.5) 波形成型与过采样（复基带）

@@ -39,6 +39,8 @@ cfg.fdePilotMseMargin = local_positive_scalar_field(raw, "fdePilotMseMargin", "p
 cfg.minReliability = local_bounded_scalar_field(raw, "minReliability", "p.scFde.minReliability", 0, 1);
 cfg.pilotPolynomial = local_required_vector_field(raw, "pilotPolynomial", "p.scFde.pilotPolynomial");
 cfg.pilotInit = local_required_vector_field(raw, "pilotInit", "p.scFde.pilotInit");
+cfg.pilotPeriod = local_pn_period(cfg.pilotPolynomial, cfg.pilotInit);
+cfg.pilotCycleBits = pn_generate_bits(cfg.pilotPolynomial, cfg.pilotInit, cfg.pilotPeriod);
 
 if cfg.cpLen >= cfg.hopLen
     error("p.scFde.cpLenSymbols=%d must be smaller than p.fh.symbolsPerHop=%d.", cfg.cpLen, cfg.hopLen);
@@ -53,6 +55,43 @@ if cfg.dataSymbolsPerHop < 1
 end
 
 pn_generate_bits(cfg.pilotPolynomial, cfg.pilotInit, 1);
+end
+
+function period = local_pn_period(polynomial, initState)
+state0 = uint8(initState(:).' ~= 0);
+if ~any(state0)
+    error("p.scFde.pilotInit must not be the all-zero PN state.");
+end
+
+state = state0;
+maxPeriod = 2^numel(state0) - 1;
+for period = 1:maxPeriod
+    state = local_pn_step(polynomial, state);
+    if isequal(state, state0)
+        return;
+    end
+end
+
+error("SC-FDE pilot PN state did not repeat within the maximal LFSR period.");
+end
+
+function nextState = local_pn_step(polynomial, state)
+coeff = uint8(polynomial(:).' ~= 0);
+state = uint8(state(:).' ~= 0);
+m = numel(state);
+if numel(coeff) ~= m + 1
+    error("PN多项式长度应为寄存器长度+1，当前为%d和%d。", numel(coeff), m);
+end
+if coeff(1) ~= 1 || coeff(end) ~= 1
+    error("PN多项式首项和常数项必须为1。");
+end
+
+tapIdx = find(coeff(2:end-1) ~= 0);
+feedback = state(end);
+for t = tapIdx
+    feedback = bitxor(feedback, state(t));
+end
+nextState = [feedback, state(1:end-1)];
 end
 
 function value = local_positive_integer_field(s, fieldName, ownerName)

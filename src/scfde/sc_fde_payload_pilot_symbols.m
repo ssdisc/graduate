@@ -15,11 +15,24 @@ if ~(isfield(cfg, "pilotPolynomial") && ~isempty(cfg.pilotPolynomial) ...
         && isfield(cfg, "pilotInit") && ~isempty(cfg.pilotInit))
     error("SC-FDE pilot PN polynomial/init are required.");
 end
+if ~(isfield(cfg, "pilotPeriod") && ~isempty(cfg.pilotPeriod) ...
+        && isfield(cfg, "pilotCycleBits") && ~isempty(cfg.pilotCycleBits))
+    error("SC-FDE pilot cfg.pilotPeriod/cfg.pilotCycleBits are required.");
+end
 
 pktIdx = max(1, round(double(pktIdx)));
 hopIdx = max(1, round(double(hopIdx)));
-skip = mod((pktIdx - 1) * 4099 + (hopIdx - 1) * pilotLength, 65535);
-init = advance_pn_state(cfg.pilotPolynomial, cfg.pilotInit, skip);
-bits = pn_generate_bits(cfg.pilotPolynomial, init, pilotLength);
+period = round(double(cfg.pilotPeriod));
+if ~(isscalar(period) && isfinite(period) && period >= 1)
+    error("SC-FDE cfg.pilotPeriod must be a positive integer scalar.");
+end
+cycleBits = uint8(cfg.pilotCycleBits(:) ~= 0);
+if numel(cycleBits) ~= period
+    error("SC-FDE cfg.pilotCycleBits length %d does not match pilotPeriod %d.", numel(cycleBits), period);
+end
+
+skip = mod((pktIdx - 1) * 4099 + (hopIdx - 1) * pilotLength, period);
+idx = mod(skip + (0:pilotLength-1), period) + 1;
+bits = cycleBits(idx);
 pilot = complex(1 - 2 * double(bits(:)), 0);
 end
