@@ -354,9 +354,18 @@ if dsssEnabled
 else
     dsssTxt = 'OFF';
 end
-fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, DSSS=%s, Chaos=%s, Pulse=%s, RxSync(B/E)=%s/%s, MP=%s\n', ...
+scFdeEnabled = isfield(p, "scFde") && isstruct(p.scFde) ...
+    && isfield(p.scFde, "enable") && logical(p.scFde.enable);
+if scFdeEnabled
+    scFdeCfgLog = sc_fde_payload_config(p);
+    scFdeTxt = sprintf('ON(cp=%d,pilot=%d,data/hop=%d)', ...
+        scFdeCfgLog.cpLen, scFdeCfgLog.pilotLength, scFdeCfgLog.dataSymbolsPerHop);
+else
+    scFdeTxt = 'OFF';
+end
+fprintf('[SIM] Eve=%s, Warden=%s, FH=%s, DSSS=%s, SC-FDE=%s, Chaos=%s, Pulse=%s, RxSync(B/E)=%s/%s, MP=%s\n', ...
     on_off_text(eveEnabled), on_off_text(wardenEnabled), on_off_text(fhEnabled), ...
-    dsssTxt, on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabledBob), on_off_text(syncEnabledEve), on_off_text(mpEnabled));
+    dsssTxt, scFdeTxt, on_off_text(chaosEnabled), pulseTxt, on_off_text(syncEnabledBob), on_off_text(syncEnabledEve), on_off_text(mpEnabled));
 if simUseParallel || wardenUseParallel
     fprintf('[SIM] Parallel requested: MainLink=%s(mode=%s, workers=%d), Warden=%s(workers=%d)\n', ...
         on_off_text(simUseParallel), char(simParallelMode), simNWorkers, ...
@@ -486,15 +495,27 @@ for ie = 1:numel(EbN0dBList)
         syncCfgUseEve = local_prepare_frame_sync_cfg_local(eveRxSync, p.channel, syncCfgUseBob.maxSearchIndex);
     end
 
+    txPacketsWorker = local_compact_tx_packets_for_rx_local(txPackets);
+    sessionFramesWorker = local_compact_session_frames_for_rx_local(sessionFrames);
+    if useParallelFrames
+        fullTxPacketsBytes = local_variable_size_bytes_local(txPackets);
+        workerTxPacketsBytes = local_variable_size_bytes_local(txPacketsWorker);
+        fullSessionBytes = local_variable_size_bytes_local(sessionFrames);
+        workerSessionBytes = local_variable_size_bytes_local(sessionFramesWorker);
+        fprintf('[SIM]     Worker上下文瘦身: txPackets %.2f -> %.2f MB, sessionFrames %.2f -> %.2f MB\n', ...
+            fullTxPacketsBytes / 1024 / 1024, workerTxPacketsBytes / 1024 / 1024, ...
+            fullSessionBytes / 1024 / 1024, workerSessionBytes / 1024 / 1024);
+    end
+
     frameCtx = struct();
     frameCtx.p = p;
     frameCtx.methods = methods;
     frameCtx.methodActions = methodActions;
     frameCtx.methodEqualizers = methodEqualizers;
-    frameCtx.txPackets = txPackets;
+    frameCtx.txPackets = txPacketsWorker;
     frameCtx.txPktIndex = txPktIndex;
     frameCtx.txPayloadBits = txPayloadBits;
-    frameCtx.sessionFrames = sessionFrames;
+    frameCtx.sessionFrames = sessionFramesWorker;
     frameCtx.waveform = waveform;
     frameCtx.channelSample = channelSample;
     frameCtx.firstSyncSym = firstSyncSym;
@@ -1133,13 +1154,14 @@ end
 
 for pktIdx = 1:nPackets
     pkt = txPackets(pktIdx);
+    txPktChannel = local_rebuild_packet_channel_waveform_local(pkt, waveform);
 
-    tx = [zeros(frameDelay, 1); frameCtx.linkBudgetBobRxAmplitudeScale * pkt.txSymForChannel];
+    tx = [zeros(frameDelay, 1); frameCtx.linkBudgetBobRxAmplitudeScale * txPktChannel];
     rx = channel_bg_impulsive(tx, frameCtx.N0, channelSampleBob);
     bobRaw.rxPackets{pktIdx} = rx;
 
     if eveEnabled
-        txEve = [zeros(frameDelay, 1); frameCtx.eveRxAmplitudeScale * pkt.txSymForChannel];
+        txEve = [zeros(frameDelay, 1); frameCtx.eveRxAmplitudeScale * txPktChannel];
         rxEve = channel_bg_impulsive(txEve, frameCtx.N0Eve, channelSampleEve);
         eveRaw.rxPackets{pktIdx} = rxEve;
     end
@@ -1999,6 +2021,139 @@ else
 end
 end
 
+function txPacketsOut = local_compact_tx_packets_for_rx_local(txPacketsIn)
+txPacketsIn = txPacketsIn(:);
+nPackets = numel(txPacketsIn);
+txPacketsOut = repmat(struct( ...
+    "syncSym", complex(zeros(0, 1)), ...
+    "phyHeaderSymTx", complex(zeros(0, 1)), ...
+    "dataSymHop", complex(zeros(0, 1)), ...
+    "isDataPacket", false, ...
+    "sourcePacketIndex", 0, ...
+    "blockIndex", 0, ...
+    "blockDataCount", 0, ...
+    "blockParityCount", 0, ...
+    "startBit", 0, ...
+    "endBit", 0, ...
+    "phyHeaderFhCfg", struct("enable", false), ...
+    "fhCfg", struct("enable", false)), nPackets, 1);
+for pktIdx = 1:nPackets
+    pkt = txPacketsIn(pktIdx);
+    txPacketsOut(pktIdx).syncSym = pkt.syncSym;
+    txPacketsOut(pktIdx).phyHeaderSymTx = pkt.phyHeaderSymTx;
+    txPacketsOut(pktIdx).dataSymHop = pkt.dataSymHop;
+    txPacketsOut(pktIdx).isDataPacket = pkt.isDataPacket;
+    txPacketsOut(pktIdx).sourcePacketIndex = pkt.sourcePacketIndex;
+    txPacketsOut(pktIdx).blockIndex = pkt.blockIndex;
+    txPacketsOut(pktIdx).blockDataCount = pkt.blockDataCount;
+    txPacketsOut(pktIdx).blockParityCount = pkt.blockParityCount;
+    txPacketsOut(pktIdx).startBit = pkt.startBit;
+    txPacketsOut(pktIdx).endBit = pkt.endBit;
+    txPacketsOut(pktIdx).phyHeaderFhCfg = pkt.phyHeaderFhCfg;
+    txPacketsOut(pktIdx).fhCfg = pkt.fhCfg;
+end
+end
+
+function sessionFramesOut = local_compact_session_frames_for_rx_local(sessionFramesIn)
+sessionFramesIn = sessionFramesIn(:);
+nFrames = numel(sessionFramesIn);
+sessionFramesOut = repmat(struct( ...
+    "txSymForChannel", complex(zeros(0, 1)), ...
+    "syncSym", complex(zeros(0, 1)), ...
+    "nDataSym", 0, ...
+    "nDemodSym", 0, ...
+    "modCfg", struct(), ...
+    "decodeKind", "", ...
+    "hopInfo", struct("enable", false), ...
+    "fhCfg", struct("enable", false), ...
+    "dsssCfg", struct("enable", false), ...
+    "symbolRepeat", 1, ...
+    "infoBitsLen", 0, ...
+    "bitRepeat", 1, ...
+    "fecCfg", struct(), ...
+    "intState", struct()), nFrames, 1);
+for frameIdx = 1:nFrames
+    frame = sessionFramesIn(frameIdx);
+    sessionFramesOut(frameIdx).txSymForChannel = frame.txSymForChannel;
+    sessionFramesOut(frameIdx).syncSym = frame.syncSym;
+    sessionFramesOut(frameIdx).nDataSym = frame.nDataSym;
+    if isfield(frame, "nDemodSym") && ~isempty(frame.nDemodSym)
+        sessionFramesOut(frameIdx).nDemodSym = frame.nDemodSym;
+    else
+        sessionFramesOut(frameIdx).nDemodSym = frame.nDataSym;
+    end
+    sessionFramesOut(frameIdx).modCfg = frame.modCfg;
+    sessionFramesOut(frameIdx).decodeKind = frame.decodeKind;
+    sessionFramesOut(frameIdx).hopInfo = frame.hopInfo;
+    sessionFramesOut(frameIdx).fhCfg = frame.fhCfg;
+    sessionFramesOut(frameIdx).dsssCfg = frame.dsssCfg;
+    if isfield(frame, "symbolRepeat") && ~isempty(frame.symbolRepeat)
+        sessionFramesOut(frameIdx).symbolRepeat = frame.symbolRepeat;
+    end
+    if isfield(frame, "infoBitsLen") && ~isempty(frame.infoBitsLen)
+        sessionFramesOut(frameIdx).infoBitsLen = frame.infoBitsLen;
+    end
+    if isfield(frame, "bitRepeat") && ~isempty(frame.bitRepeat)
+        sessionFramesOut(frameIdx).bitRepeat = frame.bitRepeat;
+    end
+    if isfield(frame, "fecCfg") && ~isempty(frame.fecCfg)
+        sessionFramesOut(frameIdx).fecCfg = frame.fecCfg;
+    end
+    if isfield(frame, "intState") && ~isempty(frame.intState)
+        sessionFramesOut(frameIdx).intState = frame.intState;
+    end
+end
+end
+
+function nBytes = local_variable_size_bytes_local(x)
+tmp = x; %#ok<NASGU>
+s = whos("tmp");
+nBytes = double(s.bytes);
+end
+
+function txSymForChannel = local_rebuild_packet_channel_waveform_local(txPacket, waveform)
+if ~(isstruct(txPacket) && isfield(txPacket, "syncSym") && isfield(txPacket, "phyHeaderSymTx") ...
+        && isfield(txPacket, "dataSymHop") && isfield(txPacket, "phyHeaderFhCfg") && isfield(txPacket, "fhCfg"))
+    error("Worker packet context is missing waveform reconstruction fields.");
+end
+txSymPkt = [txPacket.syncSym(:); txPacket.phyHeaderSymTx(:); txPacket.dataSymHop(:)];
+txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
+headerFhCfg = txPacket.phyHeaderFhCfg;
+dataFhCfg = txPacket.fhCfg;
+if (isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable) ...
+        || (isstruct(dataFhCfg) && isfield(dataFhCfg, "enable") && dataFhCfg.enable)
+    txSymForChannel = local_apply_fh_segments_to_packet_samples_local( ...
+        txSymForChannel, numel(txPacket.syncSym), numel(txPacket.phyHeaderSymTx), headerFhCfg, dataFhCfg, waveform);
+end
+end
+
+function txOut = local_apply_fh_segments_to_packet_samples_local(txIn, nSyncSym, nHeaderSym, headerFhCfg, dataFhCfg, waveform)
+txOut = txIn(:);
+headerStart = local_symbol_boundary_sample_index_rx_local(nSyncSym, waveform);
+dataStart = local_symbol_boundary_sample_index_rx_local(nSyncSym + nHeaderSym, waveform);
+
+if isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable
+    headerStop = min(numel(txOut), dataStart - 1);
+    if headerStart <= headerStop
+        [segOut, ~] = fh_modulate_samples(txOut(headerStart:headerStop), headerFhCfg, waveform);
+        txOut(headerStart:headerStop) = segOut;
+    end
+end
+
+if isstruct(dataFhCfg) && isfield(dataFhCfg, "enable") && dataFhCfg.enable
+    dataStart = min(max(1, dataStart), numel(txOut) + 1);
+    if dataStart <= numel(txOut)
+        [segOut, ~] = fh_modulate_samples(txOut(dataStart:end), dataFhCfg, waveform);
+        txOut(dataStart:end) = segOut;
+    end
+end
+end
+
+function sampleIdx = local_symbol_boundary_sample_index_rx_local(nLeadingSym, waveform)
+nLeadingSym = max(0, round(double(nLeadingSym)));
+sampleIdx = nLeadingSym * round(double(waveform.sps)) + 1;
+end
+
 function tf = local_has_parallel_pool_local()
 tf = false;
 if exist("gcp", "file") ~= 2
@@ -2117,7 +2272,7 @@ methods = lower(string(rawMethods(:).'));
 if isempty(methods) || any(strlength(methods) == 0)
     error("rxSync.multipathEq.compareMethods must be a non-empty string vector.");
 end
-validMethods = ["none" "mmse" "zf" "ml_ridge" "ml_mlp"];
+validMethods = ["none" "mmse" "zf" "ml_ridge" "ml_mlp" "sc_fde_mmse"];
 invalid = setdiff(methods, validMethods);
 if ~isempty(invalid)
     error("Unsupported multipath equalizer compareMethods: %s.", strjoin(cellstr(invalid), ", "));
@@ -2139,7 +2294,7 @@ end
 switch equalizerMethod
     case "none"
         rxSyncOut.multipathEq.enable = false;
-    case {"mmse", "zf", "ml_ridge", "ml_mlp"}
+    case {"mmse", "zf", "ml_ridge", "ml_mlp", "sc_fde_mmse"}
         rxSyncOut.multipathEq.enable = true;
         rxSyncOut.multipathEq.method = equalizerMethod;
     otherwise
@@ -2179,10 +2334,17 @@ end
 
 function eq = local_design_multipath_equalizer_local(txPreamble, rxPreamble, eqCfg, N0, chLenSymbols, freqBySymbol)
 eqCfgUse = eqCfg;
+requestedMethod = lower(string(eqCfgUse.method));
+if requestedMethod == "sc_fde_mmse"
+    eqCfgUse.method = "mmse";
+end
 eqCfgUse.frequencyOffsets = local_equalizer_frequency_set_local(freqBySymbol);
 [eq, ok] = multipath_equalizer_from_preamble(txPreamble, rxPreamble, eqCfgUse, N0, chLenSymbols);
 if ~ok
     error("Multipath equalizer design failed.");
+end
+if requestedMethod == "sc_fde_mmse"
+    eq.method = "sc_fde_mmse";
 end
 end
 
@@ -2488,6 +2650,10 @@ else
     relPrep = min(relPrep, rawReliability);
 end
 
+if local_rx_state_sc_fde_enabled_local(rxState)
+    [r, relPrep] = local_prepare_sc_fde_payload_local(r, relPrep, rxState, rxSyncCfg);
+end
+
 if isfield(rxState, "dsssCfg") && isstruct(rxState.dsssCfg)
     [r, relPrep] = dsss_despread(r, rxState.dsssCfg, relPrep);
 end
@@ -2557,6 +2723,215 @@ if numel(x) < needLen
 end
 x = reshape(x(1:needLen), groupLen, nGroups);
 y = mean(x, 1).';
+end
+
+function [rOut, relOut] = local_prepare_sc_fde_payload_local(rIn, relIn, rxState, rxSyncCfg)
+if ~(isstruct(rxState) && isfield(rxState, "scFdePlan") && isstruct(rxState.scFdePlan) ...
+        && isfield(rxState.scFdePlan, "enable") && logical(rxState.scFdePlan.enable))
+    error("SC-FDE payload preparation requires rxState.scFdePlan.enable=true.");
+end
+plan = rxState.scFdePlan;
+cfg = rxState.scFdeCfg;
+r = fit_complex_length_local(rIn, plan.nTxSymbols);
+rel = local_fit_reliability_length_local(relIn, plan.nTxSymbols);
+
+if local_sc_fde_equalizer_method_local(rxSyncCfg)
+    [rOut, relOut] = local_apply_sc_fde_mmse_payload_local(r, rel, rxState, cfg, plan);
+else
+    [rOut, relOut] = local_strip_sc_fde_payload_local(r, rel, rxState, cfg, plan);
+end
+rOut = fit_complex_length_local(rOut, plan.nInputSymbols);
+relOut = local_fit_reliability_length_local(relOut, plan.nInputSymbols);
+end
+
+function [dataOut, relOut] = local_strip_sc_fde_payload_local(r, rel, rxState, cfg, plan)
+dataOutFull = complex(zeros(plan.nHops * plan.dataSymbolsPerHop, 1));
+relOutFull = ones(plan.nHops * plan.dataSymbolsPerHop, 1);
+for hopIdx = 1:plan.nHops
+    [core, relCore] = local_sc_fde_core_from_physical_hop_local(r, rel, hopIdx, plan);
+    dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
+    dataOutFull(dataIdx) = core(plan.pilotLength + 1:end);
+    relOutFull(dataIdx) = relCore(plan.pilotLength + 1:end);
+    sc_fde_payload_pilot_symbols(cfg, rxState.packetIndex, hopIdx);
+end
+dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
+relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
+end
+
+function [dataOut, relOut] = local_apply_sc_fde_mmse_payload_local(r, rel, rxState, cfg, plan)
+if ~(isfield(rxState, "scFdeEq") && isstruct(rxState.scFdeEq))
+    error("SC-FDE MMSE requires rxState.scFdeEq.");
+end
+eq = rxState.scFdeEq;
+if ~(isfield(eq, "hBank") && ~isempty(eq.hBank) && isfield(eq, "frequencyOffsets") && ~isempty(eq.frequencyOffsets))
+    error("SC-FDE MMSE requires eq.hBank and eq.frequencyOffsets.");
+end
+if ~(isfield(rxState, "hopInfo") && isstruct(rxState.hopInfo))
+    error("SC-FDE MMSE requires rxState.hopInfo.");
+end
+N0 = 0;
+if isfield(rxState, "scFdeN0") && ~isempty(rxState.scFdeN0)
+    N0 = double(rxState.scFdeN0);
+elseif isfield(eq, "N0") && ~isempty(eq.N0)
+    N0 = double(eq.N0);
+end
+if ~(isscalar(N0) && isfinite(N0) && N0 >= 0)
+    error("SC-FDE MMSE requires a finite nonnegative N0.");
+end
+
+dataOutFull = complex(zeros(plan.nHops * plan.dataSymbolsPerHop, 1));
+relOutFull = ones(plan.nHops * plan.dataSymbolsPerHop, 1);
+lambda = double(cfg.lambdaFactor) * N0;
+if ~(isscalar(lambda) && isfinite(lambda) && lambda >= 0)
+    error("SC-FDE lambda must be finite and nonnegative.");
+end
+
+hopFreqs = local_sc_fde_hop_frequencies_local(rxState.hopInfo, plan.nHops);
+bankIdx = local_equalizer_bank_indices_for_freqs_local(eq.frequencyOffsets, hopFreqs);
+fallbackSymbols = complex(zeros(0, 1));
+fallbackReliability = zeros(0, 1);
+fallbackAvailable = isfield(rxState, "scFdeFallbackSymbols") && ~isempty(rxState.scFdeFallbackSymbols);
+if fallbackAvailable
+    fallbackSymbols = fit_complex_length_local(rxState.scFdeFallbackSymbols, plan.nTxSymbols);
+    if isfield(rxState, "scFdeFallbackReliability") && ~isempty(rxState.scFdeFallbackReliability)
+        fallbackReliability = local_fit_reliability_length_local(rxState.scFdeFallbackReliability, plan.nTxSymbols);
+    else
+        fallbackReliability = ones(plan.nTxSymbols, 1);
+    end
+end
+
+for hopIdx = 1:plan.nHops
+    [core, relCore] = local_sc_fde_core_from_physical_hop_local(r, rel, hopIdx, plan);
+    h = eq.hBank(:, bankIdx(hopIdx));
+    if numel(h) - 1 > plan.cpLen
+        error("SC-FDE CP length %d is shorter than estimated channel memory %d.", plan.cpLen, numel(h) - 1);
+    end
+    if numel(h) > plan.coreLen
+        error("SC-FDE core length %d is shorter than estimated channel length %d.", plan.coreLen, numel(h));
+    end
+
+    H = fft([h(:); complex(zeros(plan.coreLen - numel(h), 1))]);
+    denom = abs(H).^2 + lambda;
+    if any(~isfinite(denom)) || any(denom <= 0)
+        error("SC-FDE MMSE denominator is invalid.");
+    end
+    xCore = ifft(conj(H) ./ denom .* fft(core));
+
+    pilot = sc_fde_payload_pilot_symbols(cfg, rxState.packetIndex, hopIdx);
+    maxPilotShift = min(plan.cpLen, max(0, numel(h) - 1));
+    [xCore, hopReliability, fdeMse] = local_sc_fde_apply_pilot_scalar_local(xCore, pilot, cfg, maxPilotShift);
+    relCore = min(relCore, hopReliability);
+
+    if fallbackAvailable
+        [fallbackCoreRaw, fallbackRelCore] = local_sc_fde_core_from_physical_hop_local( ...
+            fallbackSymbols, fallbackReliability, hopIdx, plan);
+        [~, ~, fallbackMse] = local_sc_fde_apply_pilot_scalar_local( ...
+            fallbackCoreRaw, pilot, cfg, maxPilotShift);
+        useFde = fdeMse <= double(cfg.fdePilotMseThreshold) ...
+            && fdeMse <= double(cfg.fdePilotMseMargin) * fallbackMse;
+        if ~useFde
+            xCore = fallbackCoreRaw;
+            relCore = fallbackRelCore;
+        end
+    end
+
+    dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
+    dataOutFull(dataIdx) = xCore(plan.pilotLength + 1:end);
+    relOutFull(dataIdx) = relCore(plan.pilotLength + 1:end);
+end
+
+dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
+relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
+end
+
+function [core, relCore] = local_sc_fde_core_from_physical_hop_local(r, rel, hopIdx, plan)
+blockIdx = (hopIdx - 1) * plan.hopLen + (1:plan.hopLen);
+if blockIdx(end) > numel(r)
+    error("SC-FDE hop %d exceeds received payload length.", hopIdx);
+end
+block = r(blockIdx);
+relBlock = rel(blockIdx);
+core = block(plan.cpLen + 1:end);
+relCore = relBlock(plan.cpLen + 1:end);
+if numel(core) ~= plan.coreLen || numel(relCore) ~= plan.coreLen
+    error("SC-FDE core extraction length mismatch.");
+end
+end
+
+function hopFreqs = local_sc_fde_hop_frequencies_local(hopInfo, nHops)
+nHops = max(0, round(double(nHops)));
+hopFreqs = zeros(nHops, 1);
+if nHops == 0
+    return;
+end
+if ~(isfield(hopInfo, "enable") && logical(hopInfo.enable))
+    return;
+end
+if ~(isfield(hopInfo, "freqOffsets") && ~isempty(hopInfo.freqOffsets))
+    error("SC-FDE MMSE requires hopInfo.freqOffsets when FH is enabled.");
+end
+freqOffsets = double(hopInfo.freqOffsets(:));
+if numel(freqOffsets) < nHops
+    error("SC-FDE MMSE needs %d hop frequencies, got %d.", nHops, numel(freqOffsets));
+end
+hopFreqs = freqOffsets(1:nHops);
+end
+
+function [xCoreOut, reliability, mse] = local_sc_fde_apply_pilot_scalar_local(xCore, pilot, cfg, maxShift)
+xCore = xCore(:);
+pilot = pilot(:);
+if nargin < 4 || isempty(maxShift)
+    maxShift = 0;
+end
+maxShift = max(0, round(double(maxShift)));
+if numel(xCore) < numel(pilot)
+    error("SC-FDE pilot length exceeds equalized core length.");
+end
+den = sum(abs(pilot).^2);
+if den <= 0
+    error("SC-FDE pilot energy is zero.");
+end
+
+bestMse = inf;
+bestCore = xCore;
+bestPilotRx = xCore(1:numel(pilot));
+for shiftNow = -maxShift:maxShift
+    cand = circshift(xCore, shiftNow);
+    pilotRxNow = cand(1:numel(pilot));
+    alpha = sum(conj(pilot) .* pilotRxNow) / den;
+    if abs(alpha) >= double(cfg.pilotMinAbsGain)
+        candUse = cand ./ alpha;
+        pilotUse = pilotRxNow ./ alpha;
+    else
+        candUse = cand;
+        pilotUse = pilotRxNow;
+    end
+    mseNow = mean(abs(pilotUse - pilot).^2);
+    if isfinite(mseNow) && mseNow < bestMse
+        bestMse = mseNow;
+        bestCore = candUse;
+        bestPilotRx = pilotUse;
+    end
+end
+xCoreOut = bestCore;
+mse = mean(abs(bestPilotRx - pilot).^2);
+if ~(isscalar(mse) && isfinite(mse) && mse >= 0)
+    error("SC-FDE pilot residual MSE is invalid.");
+end
+reliability = 1 / (1 + mse / max(double(cfg.pilotMseReference), eps));
+reliability = max(double(cfg.minReliability), min(1, reliability));
+end
+
+function tf = local_rx_state_sc_fde_enabled_local(rxState)
+tf = isstruct(rxState) && isfield(rxState, "scFdePlan") && isstruct(rxState.scFdePlan) ...
+    && isfield(rxState.scFdePlan, "enable") && logical(rxState.scFdePlan.enable);
+end
+
+function tf = local_sc_fde_equalizer_method_local(rxSyncCfg)
+tf = isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq) ...
+    && isfield(rxSyncCfg.multipathEq, "enable") && logical(rxSyncCfg.multipathEq.enable) ...
+    && isfield(rxSyncCfg.multipathEq, "method") ...
+    && lower(string(rxSyncCfg.multipathEq.method)) == "sc_fde_mmse";
 end
 
 function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled, modCfg)
@@ -3948,22 +4323,34 @@ for pktIdx = 1:nPackets
     nom.adaptiveConfidence(pktIdx) = double(decision.confidence);
 
     multipathEqReliabilityFull = [];
+    multipathEq = [];
+    rFullForHeader = rFull;
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
         eqCfg = rxSyncCfg.multipathEq;
         freqBySymbol = local_packet_equalizer_frequency_vector_local(txPackets(pktIdx), fhCaptureCfg, totalLen);
         eq = local_design_multipath_equalizer_local(syncSymRef, rFull(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+        multipathEq = eq;
         multipathEqReliabilityFull = local_multipath_equalizer_reliability_vector_local(eq, freqBySymbol, mitigation);
-        rFull = local_apply_frequency_aware_equalizer_block_local(rFull, eq, freqBySymbol);
+        if local_sc_fde_equalizer_method_local(rxSyncCfg)
+            rFullEqGuard = local_apply_frequency_aware_equalizer_block_local(rFull, eq, freqBySymbol);
+            headerEqLen = preLen + hdrLen;
+            if headerEqLen > 0
+                rFullForHeader(1:headerEqLen) = rFullEqGuard(1:headerEqLen);
+            end
+        else
+            rFull = local_apply_frequency_aware_equalizer_block_local(rFull, eq, freqBySymbol);
+            rFullForHeader = rFull;
+        end
     end
 
     nom.frontEndOk(pktIdx) = true;
-    nom.preambleRx{pktIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
+    nom.preambleRx{pktIdx} = fit_complex_length_local(rFullForHeader(1:preLen), preLen);
     nom.preambleRef{pktIdx} = syncSymRef;
 
     actionName = string(decision.symbolAction);
     [phy, headerOk] = local_try_decode_header_local( ...
-        rFull, preLen, hdrLen, actionName, mitigation, p.frame, p.fh, p.fec, p.softMetric, ...
+        rFullForHeader, preLen, hdrLen, actionName, mitigation, p.frame, p.fh, p.fec, p.softMetric, ...
         local_header_sample_fh_demod_enabled_local(fhCaptureCfg));
     nom.headerOk(pktIdx) = headerOk;
     if ~headerOk
@@ -3976,6 +4363,15 @@ for pktIdx = 1:nPackets
     if ~isempty(multipathEqReliabilityFull)
         rxState.multipathEqReliability = local_fit_reliability_length_local( ...
             multipathEqReliabilityFull(preLen+hdrLen+1:end), rxState.nDataSym);
+    end
+    if local_sc_fde_equalizer_method_local(rxSyncCfg)
+        if isempty(multipathEq)
+            error("SC-FDE receiver branch requires a preamble-derived channel estimate.");
+        end
+        rxState.scFdeEq = multipathEq;
+        rxState.scFdeN0 = double(N0);
+        rxState.scFdeFallbackSymbols = fit_complex_length_local(rFullEqGuard(preLen+hdrLen+1:end), rxState.nDataSym);
+        rxState.scFdeFallbackReliability = local_fit_reliability_length_local(reliabilityFull(preLen+hdrLen+1:end), rxState.nDataSym);
     end
     symbolFhEnabled = fhEnabled && ~fh_is_fast(rxState.fhCfg);
     if symbolFhEnabled
@@ -4444,10 +4840,16 @@ nDemodSym = ceil(numel(codedBitsInt) / bitsPerSym);
 offsets = derive_packet_state_offsets(p, pktIdx);
 dsssCfg = derive_packet_dsss_cfg(p.dsss, pktIdx, offsets.dsssOffsetChips, nDemodSym);
 nDataSymBase = dsss_symbol_count(nDemodSym, dsssCfg);
-fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, offsets.fhOffsetHops, nDataSymBase);
-nDataSym = nDataSymBase;
+scFdeCfg = sc_fde_payload_config(p);
+scFdePlan = sc_fde_payload_plan(nDataSymBase, scFdeCfg);
+nFhInputSym = nDataSymBase;
+if scFdePlan.enable
+    nFhInputSym = scFdePlan.nTxSymbols;
+end
+fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, offsets.fhOffsetHops, nFhInputSym);
+nDataSym = nFhInputSym;
 if isfield(fhCfg, "enable") && fhCfg.enable && fh_is_fast(fhCfg)
-    nDataSym = nDataSymBase * fh_hops_per_symbol(fhCfg);
+    nDataSym = nFhInputSym * fh_hops_per_symbol(fhCfg);
 end
 
 state = struct();
@@ -4458,13 +4860,16 @@ state.fecCodedBitsLen = fecCodedBitsLen;
 state.codedBitsLen = numel(codedBitsInt);
 state.nDemodSym = nDemodSym;
 state.nDataSymBase = nDataSymBase;
+state.nFhInputSym = nFhInputSym;
 state.nDataSym = nDataSym;
 state.intState = intState;
 state.stateOffsets = offsets;
 state.scrambleCfg = derive_packet_scramble_cfg(p.scramble, pktIdx, offsets.scrambleOffsetBits);
 state.dsssCfg = dsssCfg;
 state.fhCfg = fhCfg;
-state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nDataSymBase);
+state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nFhInputSym);
+state.scFdeCfg = scFdeCfg;
+state.scFdePlan = scFdePlan;
 end
 
 function [payloadPktRx, sessionOut, packetInfo, ok] = recover_payload_packet_local(packetDataBitsRx, phyHeader, sessionIn, p)

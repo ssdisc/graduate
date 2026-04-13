@@ -19,6 +19,7 @@ nominalPayloadBits = local_nominal_payload_bits(p);
 sessionHeaderLenBits = local_session_header_length_bits(p.frame);
 bitsPerSym = local_bits_per_symbol(p.mod);
 fhEnabled = local_fh_enabled(p);
+scFdeCfg = sc_fde_payload_config(p);
 
 scrambleOffsetBits = 0;
 dsssOffsetChips = 0;
@@ -36,7 +37,7 @@ for prevIdx = 1:(pktIdx - 1)
         [codedBitsInt, ~] = interleave_bits(zeros(codedBitsLen, 1, "uint8"), p.interleaver);
         nBaseSymPrev = ceil(numel(codedBitsInt) / bitsPerSym);
         nSymPrev = dsss_symbol_count(nBaseSymPrev, p.dsss);
-        fhOffsetHops = fhOffsetHops + local_packet_fh_hop_count(p.fh, p.waveform, nSymPrev);
+        fhOffsetHops = fhOffsetHops + local_packet_fh_hop_count(p.fh, p.waveform, nSymPrev, scFdeCfg);
         dsssOffsetChips = dsssOffsetChips + nSymPrev;
     elseif isfield(p, "dsss") && isstruct(p.dsss)
         codedBitsLen = local_coded_bits_length(prevPacketBits, p.fec);
@@ -84,10 +85,15 @@ function tf = local_fh_enabled(p)
 tf = isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable;
 end
 
-function nHops = local_packet_fh_hop_count(fhCfg, ~, nSym)
+function nHops = local_packet_fh_hop_count(fhCfg, ~, nSym, scFdeCfg)
 nSym = max(0, round(double(nSym)));
 if nSym <= 0
     nHops = 0;
+    return;
+end
+if nargin >= 4 && isstruct(scFdeCfg) && isfield(scFdeCfg, "enable") && logical(scFdeCfg.enable)
+    scFdePlan = sc_fde_payload_plan(nSym, scFdeCfg);
+    nHops = double(scFdePlan.nHops);
     return;
 end
 if fh_is_fast(fhCfg)

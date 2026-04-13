@@ -66,6 +66,7 @@ phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
 [~, shortSyncSym] = make_packet_sync(p.frame, 2);
 
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
+scFdeCfg = sc_fde_payload_config(p);
 phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh, p.fec);
 dsssEnable = isfield(p, 'dsss') && isfield(p.dsss, 'enable') && p.dsss.enable ...
     && dsss_effective_spread_factor(p.dsss) > 1;
@@ -87,7 +88,7 @@ else
 end
 maxPacketDataSym = n_symbols_for_info_bits_local(p, maxPacketDataBits);
 packetStrideBits = maxPacketDataBits;
-packetStrideHops = packet_stride_hops_local(p, maxPacketDataSym);
+packetStrideHops = packet_stride_hops_local(p, maxPacketDataSym, scFdeCfg);
 
 txPackets = repmat(struct(), nPackets, 1);
 txBurstChannelParts = cell(nPackets, 1);
@@ -156,20 +157,33 @@ for pktIdx = 1:nPackets
     [dataSymTx, dsssInfo] = dsss_spread(dataSymTxBase, dsssCfgPkt);
     modInfo.spreadFactor = dsssInfo.spreadFactor;
     modInfo.bitLoad = modInfo.bitsPerSymbol * modInfo.codeRate / dsssInfo.spreadFactor;
+    scFdeInfo = sc_fde_payload_plan(numel(dataSymTx), scFdeCfg);
+    dataSymForFh = dataSymTx;
+    if scFdeInfo.enable
+        [dataSymForFh, scFdeInfo] = sc_fde_payload_pack(dataSymTx, scFdeCfg, pktIdx);
+        overheadFactor = double(scFdeInfo.hopLen) / double(scFdeInfo.dataSymbolsPerHop);
+        modInfo.scFdeEnable = true;
+        modInfo.scFdeOverheadFactor = overheadFactor;
+        modInfo.spreadFactor = double(modInfo.spreadFactor) * overheadFactor;
+        modInfo.bitLoad = modInfo.bitsPerSymbol * modInfo.codeRate / modInfo.spreadFactor;
+    else
+        modInfo.scFdeEnable = false;
+        modInfo.scFdeOverheadFactor = 1.0;
+    end
     modInfoRef = modInfo;
 
     dataFast = false;
     if fhEnabled
-        fhCfgPkt = derive_packet_fh_cfg(p.fh, pktIdx, offsetsPkt.fhOffsetHops, numel(dataSymTx));
+        fhCfgPkt = derive_packet_fh_cfg(p.fh, pktIdx, offsetsPkt.fhOffsetHops, numel(dataSymForFh));
         dataFast = fh_is_fast(fhCfgPkt);
         if dataFast
-            [dataSymHop, hopInfo] = fh_fast_symbol_expand(dataSymTx, fhCfgPkt);
+            [dataSymHop, hopInfo] = fh_fast_symbol_expand(dataSymForFh, fhCfgPkt);
         else
-            dataSymHop = dataSymTx;
+            dataSymHop = dataSymForFh;
             hopInfo = fh_hop_info_from_cfg(fhCfgPkt, numel(dataSymHop));
         end
     else
-        dataSymHop = dataSymTx;
+        dataSymHop = dataSymForFh;
         hopInfo = struct('enable', false);
         fhCfgPkt = struct('enable', false);
     end
@@ -219,6 +233,8 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).dsssInfo = dsssInfo;
     txPackets(pktIdx).dataSymBaseTx = dataSymTxBase;
     txPackets(pktIdx).dataSymTx = dataSymTx;
+    txPackets(pktIdx).dataSymScFdeTx = dataSymForFh;
+    txPackets(pktIdx).scFdeInfo = scFdeInfo;
     txPackets(pktIdx).dataSymHop = dataSymHop;
     txPackets(pktIdx).nDemodSym = numel(dataSymTxBase);
     txPackets(pktIdx).nDataSymBase = numel(dataSymTx);
@@ -247,6 +263,8 @@ plan.packetStrideBits = packetStrideBits;
 plan.packetStrideHops = packetStrideHops;
 plan.fhEnabled = fhEnabled;
 plan.dsssEnable = dsssEnable;
+plan.scFdeEnable = scFdeCfg.enable;
+plan.scFdeCfg = scFdeCfg;
 plan.packetChaosEnable = packetChaosEnable;
 plan.waveform = waveform;
 plan.modInfo = modInfoRef;
@@ -266,9 +284,14 @@ nBaseSym = ceil(numel(codedBitsInt) / bitsPerSym);
 nSym = dsss_symbol_count(nBaseSym, p.dsss);
 end
 
-function nHops = packet_stride_hops_local(p, nSym)
+function nHops = packet_stride_hops_local(p, nSym, scFdeCfg)
 if ~isfield(p, "fh") || ~isstruct(p.fh) || ~isfield(p.fh, "enable") || ~p.fh.enable
     nHops = 0;
+    return;
+end
+if nargin >= 3 && isstruct(scFdeCfg) && isfield(scFdeCfg, "enable") && logical(scFdeCfg.enable)
+    scFdePlan = sc_fde_payload_plan(nSym, scFdeCfg);
+    nHops = scFdePlan.nHops;
     return;
 end
 if fh_is_fast(p.fh)
