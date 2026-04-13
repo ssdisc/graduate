@@ -104,8 +104,16 @@ if nGroups <= 0
     y = complex(zeros(0, 1));
     return;
 end
-x = reshape(x(1:nGroups * repeat), repeat, nGroups);
-y = sum(x, 1).';
+if local_phy_header_repeat_interleaved()
+    x = reshape(x(1:nGroups * repeat), nGroups, repeat);
+    y = sum(x, 2);
+else
+    y = sum(x, 1).';
+end
+end
+
+function tf = local_phy_header_repeat_interleaved()
+tf = true;
 end
 
 function memoryBits = local_conv_memory_bits(trellis)

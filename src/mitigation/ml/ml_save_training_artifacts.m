@@ -50,6 +50,9 @@ report.artifacts = artifacts;
 if isfield(report, "trainingContext") && ~isempty(report.trainingContext)
     model.trainingContext = report.trainingContext;
 end
+if isfield(report, "reloadContext") && ~isempty(report.reloadContext)
+    model.reloadContext = report.reloadContext;
+end
 meta = struct( ...
     "batchTag", char(batchTag), ...
     "savedBy", char(savedBy), ...

@@ -173,7 +173,7 @@ phyMeta.packetDataBytes = uint16(packetDataBytes);
 phyMeta.packetDataCrc16 = crc16_ccitt_bits(packetDataBits);
 [phyHeaderBits, ~] = build_phy_header_bits(phyMeta, p.frame);
 phyHeaderSym = encode_phy_header_symbols(phyHeaderBits, p.frame, p.fec);
-phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh);
+phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh, p.fec);
 phyHeaderFast = phyHeaderFhCfg.enable && fh_is_fast(phyHeaderFhCfg);
 if phyHeaderFast
     [phyHeaderSym, ~] = fh_fast_symbol_expand(phyHeaderSym, phyHeaderFhCfg);

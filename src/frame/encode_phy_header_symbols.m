@@ -12,16 +12,28 @@ switch mode
     case "compact_fec"
         pilotSym = phy_header_pilot_symbols(frameCfg);
         coded = local_compact_fec_encode(bits, fec);
-        bodySym = 1 - 2 * double(repelem(coded(:), repeat));
+        bodySym = 1 - 2 * double(local_repeat_interleave(coded(:), repeat));
         bodySym = local_compact_header_dsss_spread(bodySym, frameCfg);
-        sym = [pilotSym(:); bodySym(:)];
+        singleSym = [pilotSym(:); bodySym(:)];
+        sym = repmat(singleSym(:), phy_header_diversity_copies(frameCfg), 1);
         sym = sym(:);
     case "legacy_repeat"
         sym = 1 - 2 * double(repelem(bits, repeat));
+        sym = repmat(sym(:), phy_header_diversity_copies(frameCfg), 1);
         sym = sym(:);
     otherwise
         error("Unsupported phyHeaderMode: %s", string(mode));
 end
+end
+
+function out = local_repeat_interleave(bits, repeat)
+bits = uint8(bits(:) ~= 0);
+repeat = max(1, round(double(repeat)));
+if repeat <= 1
+    out = bits;
+    return;
+end
+out = repmat(bits, repeat, 1);
 end
 
 function mode = local_phy_header_mode(frameCfg)

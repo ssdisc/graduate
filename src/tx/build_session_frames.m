@@ -93,7 +93,11 @@ modInfo = local_session_header_mod_info(numel(sessionHeaderBits), numel(dataSymB
 end
 
 function fhCfg = local_session_header_fh_cfg(p)
-fhCfg = phy_header_fh_cfg(p.frame, p.fh);
+frameCfg = p.frame;
+if isfield(frameCfg, "phyHeaderDiversity") && isstruct(frameCfg.phyHeaderDiversity)
+    frameCfg.phyHeaderDiversity.enable = false;
+end
+fhCfg = phy_header_fh_cfg(frameCfg, p.fh);
 end
 
 function [dataSymTx, hopInfo, txSymBasebandForSpectrum, txSymForChannel] = local_build_session_header_path(syncSym, dataSymBaseTx, fhCfg, waveform)

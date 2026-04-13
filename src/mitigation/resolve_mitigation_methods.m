@@ -14,7 +14,7 @@ if ~isfield(mitigationCfg, "binding") || ~isstruct(mitigationCfg.binding)
 end
 
 binding = mitigationCfg.binding;
-requiredBindingFields = ["enable" "impulseMethods" "singleToneMethods" "narrowbandMethods" "sweepMethods" "mixedMethods"];
+requiredBindingFields = ["enable" "impulseMethods" "singleToneMethods" "narrowbandMethods" "sweepMethods" "multipathMethods" "mixedMethods"];
 for k = 1:numel(requiredBindingFields)
     fieldName = requiredBindingFields(k);
     if ~isfield(binding, fieldName)
@@ -49,6 +49,8 @@ else
                 allowedMethods = [allowedMethods, local_method_vector(binding.narrowbandMethods, "mitigation.binding.narrowbandMethods")]; %#ok<AGROW>
             case "sweep"
                 allowedMethods = [allowedMethods, local_method_vector(binding.sweepMethods, "mitigation.binding.sweepMethods")]; %#ok<AGROW>
+            case "multipath"
+                allowedMethods = [allowedMethods, local_method_vector(binding.multipathMethods, "mitigation.binding.multipathMethods")]; %#ok<AGROW>
             otherwise
                 error("Unsupported active interference type: %s", typeNow);
         end
@@ -83,6 +85,9 @@ if local_nested_enable_with_weight(channelCfg, "narrowband")
 end
 if local_nested_enable_with_weight(channelCfg, "sweep")
     activeTypes(end + 1) = "sweep"; %#ok<AGROW>
+end
+if local_multipath_enabled(channelCfg)
+    activeTypes(end + 1) = "multipath"; %#ok<AGROW>
 end
 end
 
@@ -121,6 +126,25 @@ if ~isscalar(weight) || ~isfinite(weight)
     error("channel.%s.weight must be a finite scalar.", fieldName);
 end
 tf = enable && weight > 0;
+end
+
+function tf = local_multipath_enabled(channelCfg)
+if ~isfield(channelCfg, "multipath") || ~isstruct(channelCfg.multipath)
+    error("channel.multipath is required.");
+end
+cfg = channelCfg.multipath;
+if ~isfield(cfg, "enable")
+    error("channel.multipath.enable is required.");
+end
+enable = cfg.enable;
+if ~(islogical(enable) || isnumeric(enable))
+    error("channel.multipath.enable must be a logical scalar.");
+end
+enable = logical(enable);
+if ~isscalar(enable)
+    error("channel.multipath.enable must be a logical scalar.");
+end
+tf = enable;
 end
 
 function methods = local_method_vector(raw, label)

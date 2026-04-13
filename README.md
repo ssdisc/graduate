@@ -33,11 +33,11 @@
 | 跳频 | 启用，默认 `chaos` 序列（Logistic），`8` 个频点，每跳 `64` 符号，慢跳频 |
 | 波形成型 | 启用 `RRC`，`sps=10`，`rolloff=0.25`，采样率 `100 kHz` |
 | 链路预算 | `Eb/N0` 主扫描轴 `[4:2:10] dB` + `JSR` 副扫描轴 `[-10 -5 0] dB` 双轴网格 |
-| 多径 | 启用，静态 3 径 `[0 1 2]` 符号，增益 `[0 -12 -18] dB`，无瑞利衰落 |
+| 多径 | 启用，3 径 `[0 1 2]` 符号，平均增益 `[0 -12 -18] dB`，默认瑞利衰落 |
 | 同步 | 默认每个分包使用长 `PN` 前导（`127` 位）独立重同步 |
-| PHY头 | 默认 `compact_fec`，可选独立跳频（`slow` 模式） |
+| PHY头 | 默认 `compact_fec`，3 份完整头部分集，副本分布到不同跳频频点并逐份 CRC/magic 判决 |
 | Session 元数据 | 默认 `session_frame_repeat`，即先发送 `3` 次 dedicated session frame，再发送数据帧 |
-| 多径均衡 | 启用 MMSE，`9` 抽头线性 FFE，支持 `none/mmse/zf` 三路对比 |
+| 多径均衡 | 启用跳频感知 MMSE，`9` 抽头线性 FFE；`run_demo` 会额外训练/加载离线残差式 `ml_mlp` 均衡器并加入对比 |
 | 干扰 | 默认全部关闭（脉冲/单音/窄带/扫频均需手动开启并配置 `weight`） |
 | Eve | 默认关闭（`p.eve.enable=false`）；可配置独立 `rxSync` 和 `mitigation` |
 | Warden | 默认启用，5 层检测，主判据为 `energyOptUncertain` |
@@ -627,7 +627,7 @@ p.frame.sessionStrongRepeat = 8;
 | `p.fh.*` | 跳频序列类型、频点数、每跳长度 |
 | `p.waveform.*` | `RRC` 成型、采样率、每符号采样数 |
 | `p.channel.*` | 多径、脉冲、单音、窄带、扫频干扰与同步失配 |
-| `p.rxSync.*` | 细同步、CFO、PLL、多径均衡（MMSE/ZF）、DLL |
+| `p.rxSync.*` | 细同步、CFO、PLL、多径均衡（MMSE/ZF/ML ridge/离线 MLP）、DLL |
 | `p.mitigation.*` | 干扰抑制方法、binding 过滤、ML 模型加载与阈值校准 |
 | `p.eve.*` | Eve 假设与独立接收机配置 |
 | `p.covert.warden.*` | Warden 检测参数（5 层检测器） |
@@ -753,7 +753,8 @@ graduate/
 - 默认 `resyncIntervalPackets = 1`，因此当前主线其实是“每个分包独立成帧且使用长前导”方案，短同步字还不是默认主路径。
 - Eve 如果自定义接收机配置，`p.eve.rxSync` 和 `p.eve.mitigation` 需要是完整结构体，并且 `p.eve.mitigation.methods` 必须与主链路完全一致。
 - 实际运行的抑制方法由 `mitigation.binding` 根据启用的干扰类型自动过滤；如果所有干扰都关闭，只会保留 `"none"`。
-- 多径均衡与跳频同时启用时，均衡器在全带做频域处理可能不匹配分散在各跳频子带上的信号；建议二者不要同时开启。
+- PHY头默认发送 3 份完整副本，每份占用一个分散的已知跳频频点；接收端逐份解码，任一副本通过 magic/CRC 即采用该头部。头部内部的 compact FEC 重复采用交织重复，避免相邻重复落入同一个瑞利深衰落或脉冲干扰段。
+- 多径均衡与跳频同时启用时，接收机会按 hop 频点选择跳频感知均衡器；`run_demo` 默认会把离线训练的残差式 `ml_mlp` 加入 `none/mmse/zf/ml_ridge` 对比，模型保存为 `models/multipath_equalizer_model.mat`。`ml_mlp` 使用前导估计信道训练，并按每帧前导 MSE 门控残差强度。
 - FEC 默认已切换为 `LDPC`；卷积码配置仍然保留，PHY头和会话帧内部独立使用卷积码编码。
 
 ## 许可证

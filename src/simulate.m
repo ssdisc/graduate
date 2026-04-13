@@ -2024,23 +2024,20 @@ else
     eqMethods = "configured";
 end
 
+labels = strings(1, 0);
+actions = strings(1, 0);
+equalizers = strings(1, 0);
 nBase = numel(baseMethods);
-nEq = numel(eqMethods);
-nRows = nBase * nEq;
-labels = strings(1, nRows);
-actions = strings(1, nRows);
-equalizers = strings(1, nRows);
 
-idx = 0;
 for ib = 1:nBase
-    for ieq = 1:nEq
-        idx = idx + 1;
-        actions(idx) = baseMethods(ib);
-        equalizers(idx) = eqMethods(ieq);
+    eqForBase = local_equalizer_methods_for_action_compare_local(baseMethods(ib), eqMethods, channelCfg, rxSyncCfg, compareEq);
+    for ieq = 1:numel(eqForBase)
+        actions(end + 1) = baseMethods(ib); %#ok<AGROW>
+        equalizers(end + 1) = eqForBase(ieq); %#ok<AGROW>
         if compareEq
-            labels(idx) = baseMethods(ib) + "_eq_" + eqMethods(ieq);
+            labels(end + 1) = baseMethods(ib) + "_eq_" + eqForBase(ieq); %#ok<AGROW>
         else
-            labels(idx) = baseMethods(ib);
+            labels(end + 1) = baseMethods(ib); %#ok<AGROW>
         end
     end
 end
@@ -2052,6 +2049,49 @@ plan = struct( ...
     "baseMethods", baseMethods, ...
     "equalizerCompareEnabled", compareEq, ...
     "equalizerCompareMethods", eqMethods);
+end
+
+function eqMethods = local_equalizer_methods_for_action_compare_local(actionName, compareEqMethods, channelCfg, rxSyncCfg, compareEq)
+eqMethods = compareEqMethods;
+if ~logical(compareEq) || lower(string(actionName)) == "none"
+    return;
+end
+if ~local_channel_is_multipath_only_local(channelCfg)
+    return;
+end
+if ~(isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq))
+    error("rxSync.multipathEq is required for multipath mitigation compare branches.");
+end
+if ~isfield(rxSyncCfg.multipathEq, "mitigationCompareEqualizers") || isempty(rxSyncCfg.multipathEq.mitigationCompareEqualizers)
+    error("rxSync.multipathEq.mitigationCompareEqualizers is required for pure multipath non-baseline actions.");
+end
+eqMethods = local_validate_mitigation_compare_equalizers_local( ...
+    rxSyncCfg.multipathEq.mitigationCompareEqualizers, compareEqMethods);
+end
+
+function tf = local_channel_is_multipath_only_local(channelCfg)
+tf = false;
+if ~(isstruct(channelCfg) && isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
+        && isfield(channelCfg.multipath, "enable") && logical(channelCfg.multipath.enable))
+    return;
+end
+tf = ~local_channel_has_enabled_jammer_local(channelCfg);
+end
+
+function methods = local_validate_mitigation_compare_equalizers_local(rawMethods, compareEqMethods)
+methods = lower(string(rawMethods(:).'));
+if isempty(methods) || any(strlength(methods) == 0)
+    error("rxSync.multipathEq.mitigationCompareEqualizers must be a non-empty string vector.");
+end
+compareEqMethods = lower(string(compareEqMethods(:).'));
+invalid = setdiff(methods, compareEqMethods);
+if ~isempty(invalid)
+    error("mitigationCompareEqualizers contains methods not present in compareMethods: %s.", ...
+        strjoin(cellstr(invalid), ", "));
+end
+if numel(unique(methods, "stable")) ~= numel(methods)
+    error("rxSync.multipathEq.mitigationCompareEqualizers must not contain duplicates.");
+end
 end
 
 function tf = local_multipath_eq_compare_enabled_local(channelCfg, rxSyncCfg)
@@ -2077,7 +2117,7 @@ methods = lower(string(rawMethods(:).'));
 if isempty(methods) || any(strlength(methods) == 0)
     error("rxSync.multipathEq.compareMethods must be a non-empty string vector.");
 end
-validMethods = ["none" "mmse" "zf"];
+validMethods = ["none" "mmse" "zf" "ml_ridge" "ml_mlp"];
 invalid = setdiff(methods, validMethods);
 if ~isempty(invalid)
     error("Unsupported multipath equalizer compareMethods: %s.", strjoin(cellstr(invalid), ", "));
@@ -2099,7 +2139,7 @@ end
 switch equalizerMethod
     case "none"
         rxSyncOut.multipathEq.enable = false;
-    case {"mmse", "zf"}
+    case {"mmse", "zf", "ml_ridge", "ml_mlp"}
         rxSyncOut.multipathEq.enable = true;
         rxSyncOut.multipathEq.method = equalizerMethod;
     otherwise
@@ -2281,6 +2321,21 @@ end
 if ~(isstruct(eq) && isfield(eq, "enabled") && logical(eq.enabled))
     error("Frequency-aware multipath equalizer requires eq.enabled=true.");
 end
+if isfield(eq, "method") && string(eq.method) == "ml_mlp"
+    if ~(isfield(eq, "mlMlp") && isstruct(eq.mlMlp) && isfield(eq, "hBank") && isfield(eq, "frequencyOffsets") && isfield(eq, "N0"))
+        error("ML MLP multipath equalizer requires eq.mlMlp, eq.hBank, eq.frequencyOffsets and eq.N0.");
+    end
+    [yEqMl, mlInfo] = ml_predict_multipath_equalizer_symbols(y, freqBySymbol, eq.hBank, double(eq.frequencyOffsets(:)), double(eq.N0), eq.mlMlp);
+    if ~(isfield(mlInfo, "baseline") && numel(mlInfo.baseline) == numel(yEqMl) && isfield(eq, "mlMlpBlend"))
+        error("ML MLP multipath equalizer requires baseline info and eq.mlMlpBlend.");
+    end
+    blend = double(eq.mlMlpBlend);
+    if ~(isscalar(blend) && isfinite(blend) && blend >= 0 && blend <= 1)
+        error("eq.mlMlpBlend must be a finite scalar in [0, 1].");
+    end
+    yEq = mlInfo.baseline(:) + blend * (yEqMl(:) - mlInfo.baseline(:));
+    return;
+end
 if ~(isfield(eq, "gBank") && ~isempty(eq.gBank) && isfield(eq, "frequencyOffsets") && ~isempty(eq.frequencyOffsets))
     error("Frequency-aware multipath equalizer requires eq.gBank and eq.frequencyOffsets.");
 end
@@ -2308,6 +2363,84 @@ for n = 1:N
     end
     yEq(n) = acc;
 end
+end
+
+function reliability = local_multipath_equalizer_reliability_vector_local(eq, freqBySymbol, mitigation)
+freqBySymbol = double(freqBySymbol(:));
+reliability = ones(numel(freqBySymbol), 1);
+if isempty(freqBySymbol)
+    return;
+end
+cfg = local_require_fh_erasure_cfg_local(mitigation);
+if ~cfg.multipathFadeEnable
+    return;
+end
+if ~(isstruct(eq) && isfield(eq, "enabled") && logical(eq.enabled))
+    error("Multipath fade erasure requires an enabled equalizer.");
+end
+if isfield(eq, "method") && lower(string(eq.method)) == "ml_mlp"
+    return;
+end
+if ~(isfield(eq, "gBank") && ~isempty(eq.gBank) ...
+        && isfield(eq, "hBank") && ~isempty(eq.hBank) ...
+        && isfield(eq, "frequencyOffsets") && ~isempty(eq.frequencyOffsets) ...
+        && isfield(eq, "delay") && isfield(eq, "N0"))
+    error("Multipath fade erasure requires eq.gBank, eq.hBank, eq.frequencyOffsets, eq.delay and eq.N0.");
+end
+
+gBank = eq.gBank;
+hBank = eq.hBank;
+if size(gBank, 2) ~= numel(eq.frequencyOffsets) || size(hBank, 2) ~= numel(eq.frequencyOffsets)
+    error("Multipath fade erasure bank dimensions do not match eq.frequencyOffsets.");
+end
+
+nBank = numel(eq.frequencyOffsets);
+noiseGain = sum(abs(gBank).^2, 1).';
+sinrDb = nan(nBank, 1);
+mainIdx = round(double(eq.delay)) + 1;
+N0 = double(eq.N0);
+if ~(isscalar(N0) && isfinite(N0) && N0 >= 0)
+    error("eq.N0 must be a finite nonnegative scalar for multipath fade erasure.");
+end
+for k = 1:nBank
+    c = conv(hBank(:, k), gBank(:, k));
+    if mainIdx < 1 || mainIdx > numel(c)
+        error("Equalizer delay index is outside the effective channel response.");
+    end
+    mainPower = abs(c(mainIdx)).^2;
+    isiPower = max(sum(abs(c).^2) - mainPower, 0);
+    denom = isiPower + N0 * noiseGain(k);
+    sinrDb(k) = 10 * log10(max(mainPower, eps) / max(denom, eps));
+end
+
+validNoise = isfinite(noiseGain) & noiseGain > 0;
+validSinr = isfinite(sinrDb);
+if ~any(validNoise) || ~any(validSinr)
+    error("Multipath fade erasure could not derive finite equalizer reliability.");
+end
+noiseRef = median(noiseGain(validNoise));
+sinrRefDb = median(sinrDb(validSinr));
+if ~(isfinite(noiseRef) && noiseRef > 0 && isfinite(sinrRefDb))
+    error("Multipath fade erasure reference metrics are invalid.");
+end
+
+noiseRatio = noiseGain ./ noiseRef;
+relNoise = local_erasure_reliability_from_ratio_local( ...
+    noiseRatio, cfg.multipathNoiseGainRatioThreshold, cfg.minReliability, cfg.multipathSoftSlope);
+
+sinrTriggerDb = sinrRefDb - cfg.multipathSinrDropDbThreshold;
+sinrDeficit = max(sinrTriggerDb - sinrDb, 0);
+sinrRatio = 1 + sinrDeficit ./ max(cfg.multipathSinrDropDbThreshold, 1);
+relSinr = local_erasure_reliability_from_ratio_local( ...
+    sinrRatio, 1, cfg.minReliability, cfg.multipathSoftSlope);
+
+relBank = min(relNoise, relSinr);
+relBank(~isfinite(relBank)) = 1;
+relBank = max(cfg.minReliability, min(1, relBank));
+
+bankIdx = local_equalizer_bank_indices_for_freqs_local(eq.frequencyOffsets, freqBySymbol);
+reliability = relBank(bankIdx);
+reliability = max(cfg.minReliability, min(1, reliability(:)));
 end
 
 function bankIdx = local_equalizer_bank_indices_for_freqs_local(bankFreqs, freqBySymbol)
@@ -2346,6 +2479,9 @@ end
 
 [r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled && ~fastFhEnabled, modCfg);
 relPrep = local_fit_reliability_length_local(relPrep, numel(r));
+if any(actionName == ["fh_erasure" "ml_fh_erasure"])
+    [r, relPrep] = local_apply_multipath_fade_erasure_local(r, relPrep, rxState, mitigation);
+end
 if all(relPrep >= 0.999999)
     relPrep = rawReliability;
 else
@@ -2436,7 +2572,7 @@ if actionName == "fh_erasure"
     if ~fhEnabled
         error("fh_erasure requires enabled FH hop information.");
     end
-    [rOut, reliability] = local_apply_fh_erasure_action_local(r, hopInfoUsed, mitigation);
+    [rOut, reliability] = local_apply_fh_erasure_action_local(r, hopInfoUsed, mitigation, modCfg);
     return;
 end
 
@@ -2458,6 +2594,23 @@ end
 [rOut, reliability] = mitigate_impulses(r, actionName, mitigation);
 end
 
+function [rOut, reliabilityOut] = local_apply_multipath_fade_erasure_local(rIn, reliabilityIn, rxState, mitigation)
+rOut = rIn(:);
+reliabilityOut = local_fit_reliability_length_local(reliabilityIn, numel(rOut));
+cfg = local_require_fh_erasure_cfg_local(mitigation);
+if ~cfg.multipathFadeEnable
+    return;
+end
+if ~(isstruct(rxState) && isfield(rxState, "multipathEqReliability") && ~isempty(rxState.multipathEqReliability))
+    return;
+end
+eqReliability = local_fit_reliability_length_local(rxState.multipathEqReliability, numel(rOut));
+reliabilityOut = min(reliabilityOut, eqReliability);
+if cfg.attenuateSymbols
+    rOut = eqReliability .* rOut;
+end
+end
+
 function [rOut, reliability] = local_apply_action_per_hop_local(rIn, actionName, mitigation, hopLen)
 r = rIn(:);
 hopLen = max(1, round(double(hopLen)));
@@ -2477,7 +2630,7 @@ actionName = lower(string(actionName));
 tf = any(actionName == ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"]);
 end
 
-function [rOut, reliability] = local_apply_fh_erasure_action_local(rIn, hopInfoUsed, mitigation)
+function [rOut, reliability] = local_apply_fh_erasure_action_local(rIn, hopInfoUsed, mitigation, modCfg)
 rOut = rIn(:);
 N = numel(rOut);
 reliability = ones(N, 1);
@@ -2515,12 +2668,17 @@ if ~(isscalar(nFreqs) && isfinite(nFreqs) && nFreqs >= 1)
 end
 
 hopPower = nan(nHops, 1);
+hopConstellationMse = nan(nHops, 1);
 for hopIdx = 1:nHops
     idx = local_hop_symbol_indices_local(hopIdx, hopLen, N, cfg.edgeGuardSymbols);
     if isempty(idx)
         idx = local_hop_symbol_indices_local(hopIdx, hopLen, N, 0);
     end
-    hopPower(hopIdx) = mean(abs(rOut(idx)).^2);
+    seg = rOut(idx);
+    hopPower(hopIdx) = mean(abs(seg).^2);
+    if cfg.constellationMseEnable
+        hopConstellationMse(hopIdx) = local_constellation_mse_for_erasure_local(seg, modCfg);
+    end
 end
 
 validHop = isfinite(hopPower) & hopPower > 0;
@@ -2554,6 +2712,20 @@ if ~isempty(candidateFreq)
         relHop(freqIdx == freqNow) = min(relHop(freqIdx == freqNow), freqRel);
     end
 end
+if cfg.lowPowerFadeEnable
+    candidateFreqLow = find(isfinite(freqRatio) & freqRatio <= cfg.lowFreqPowerRatioThreshold);
+    if ~isempty(candidateFreqLow)
+        [~, ord] = sort(freqRatio(candidateFreqLow), "ascend");
+        maxErasedFreqs = max(1, ceil(cfg.maxErasedFreqFraction * double(nFreqs)));
+        candidateFreqLow = candidateFreqLow(ord(1:min(numel(ord), maxErasedFreqs)));
+        for k = 1:numel(candidateFreqLow)
+            freqNow = candidateFreqLow(k);
+            freqRel = local_erasure_reliability_from_low_ratio_local( ...
+                freqRatio(freqNow), cfg.lowFreqPowerRatioThreshold, cfg.minReliability, cfg.lowPowerSoftSlope);
+            relHop(freqIdx == freqNow) = min(relHop(freqIdx == freqNow), freqRel);
+        end
+    end
+end
 
 hopRatio = hopPower ./ refPower;
 candidateHop = find(isfinite(hopRatio) & hopRatio >= cfg.hopPowerRatioThreshold);
@@ -2562,6 +2734,24 @@ for k = 1:numel(candidateHop)
     hopRel = local_erasure_reliability_from_ratio_local( ...
         hopRatio(hopNow), cfg.hopPowerRatioThreshold, cfg.minReliability, cfg.softSlope);
     relHop(hopNow) = min(relHop(hopNow), hopRel);
+end
+if cfg.lowPowerFadeEnable
+    candidateHopLow = find(isfinite(hopRatio) & hopRatio <= cfg.lowHopPowerRatioThreshold);
+    for k = 1:numel(candidateHopLow)
+        hopNow = candidateHopLow(k);
+        hopRel = local_erasure_reliability_from_low_ratio_local( ...
+            hopRatio(hopNow), cfg.lowHopPowerRatioThreshold, cfg.minReliability, cfg.lowPowerSoftSlope);
+        relHop(hopNow) = min(relHop(hopNow), hopRel);
+    end
+end
+if cfg.constellationMseEnable
+    candidateHopMse = find(isfinite(hopConstellationMse) & hopConstellationMse >= cfg.constellationMseThreshold);
+    for k = 1:numel(candidateHopMse)
+        hopNow = candidateHopMse(k);
+        hopRel = local_erasure_reliability_from_ratio_local( ...
+            hopConstellationMse(hopNow), cfg.constellationMseThreshold, cfg.minReliability, cfg.constellationMseSoftSlope);
+        relHop(hopNow) = min(relHop(hopNow), hopRel);
+    end
 end
 
 for hopIdx = 1:nHops
@@ -2585,7 +2775,14 @@ if N == 0
 end
 cfg = local_require_fh_erasure_cfg_local(mitigation);
 model = local_require_ml_fh_erasure_model_local(mitigation);
-[~, ruleReliability] = local_apply_fh_erasure_action_local(rIn, hopInfoUsed, mitigation);
+[~, ruleReliability] = local_apply_fh_erasure_action_local(rIn, hopInfoUsed, mitigation, modCfg);
+if cfg.mlRequirePowerEvidence && all(ruleReliability >= 0.999999)
+    reliability = ruleReliability;
+    if cfg.attenuateSymbols
+        rOut = reliability .* rIn;
+    end
+    return;
+end
 [hopFeatureMatrix, featureInfo] = ml_extract_fh_erasure_features(rIn, hopInfoUsed, cfg, modCfg);
 [freqFeatureMatrix, freqFeatureInfo] = ml_extract_fh_erasure_freq_features(hopFeatureMatrix, featureInfo);
 [~, pBadFreq, ~, ~] = ml_predict_fh_erasure_reliability(freqFeatureMatrix, model, ...
@@ -2636,6 +2833,40 @@ threshold = double(threshold);
 excess = max(ratio - threshold, 0);
 rel = 1 ./ (1 + double(softSlope) * excess);
 rel = max(double(minReliability), min(1, rel));
+end
+
+function rel = local_erasure_reliability_from_low_ratio_local(ratio, threshold, minReliability, softSlope)
+ratio = max(double(ratio), eps);
+threshold = double(threshold);
+deficit = max(threshold ./ ratio - 1, 0);
+rel = 1 ./ (1 + double(softSlope) .* deficit);
+rel = max(double(minReliability), min(1, rel));
+end
+
+function mse = local_constellation_mse_for_erasure_local(seg, modCfg)
+seg = seg(:);
+if isempty(seg)
+    mse = 0;
+    return;
+end
+switch upper(string(modCfg.type))
+    case "BPSK"
+        dec = sign(real(seg));
+        dec(dec == 0) = 1;
+        ref = complex(dec, 0);
+    case {"QPSK", "MSK"}
+        decI = sign(real(seg));
+        decQ = sign(imag(seg));
+        decI(decI == 0) = 1;
+        decQ(decQ == 0) = 1;
+        ref = (decI + 1j * decQ) / sqrt(2);
+    otherwise
+        error("Unsupported modulation for FH-erasure constellation MSE: %s.", char(string(modCfg.type)));
+end
+mse = mean(abs(seg - ref).^2) / max(mean(abs(seg).^2), eps);
+if ~(isscalar(mse) && isfinite(mse))
+    mse = 0;
+end
 end
 
 function rel = local_ml_erasure_reliability_from_probability_local(pBadFreq, freqIdx, nFreqs, cfg)
@@ -2690,6 +2921,13 @@ cfg.softSlope = local_required_positive_scalar_local(raw, "softSlope", "mitigati
 cfg.maxErasedFreqFraction = local_required_probability_scalar_local(raw, "maxErasedFreqFraction", "mitigation.fhErasure");
 cfg.edgeGuardSymbols = local_required_nonnegative_scalar_local(raw, "edgeGuardSymbols", "mitigation.fhErasure");
 cfg.attenuateSymbols = local_required_logical_scalar_local(raw, "attenuateSymbols", "mitigation.fhErasure");
+cfg.lowPowerFadeEnable = local_required_logical_scalar_local(raw, "lowPowerFadeEnable", "mitigation.fhErasure");
+cfg.lowFreqPowerRatioThreshold = local_required_probability_scalar_local(raw, "lowFreqPowerRatioThreshold", "mitigation.fhErasure");
+cfg.lowHopPowerRatioThreshold = local_required_probability_scalar_local(raw, "lowHopPowerRatioThreshold", "mitigation.fhErasure");
+cfg.lowPowerSoftSlope = local_required_positive_scalar_local(raw, "lowPowerSoftSlope", "mitigation.fhErasure");
+cfg.constellationMseEnable = local_required_logical_scalar_local(raw, "constellationMseEnable", "mitigation.fhErasure");
+cfg.constellationMseThreshold = local_required_positive_scalar_local(raw, "constellationMseThreshold", "mitigation.fhErasure");
+cfg.constellationMseSoftSlope = local_required_positive_scalar_local(raw, "constellationMseSoftSlope", "mitigation.fhErasure");
 cfg.mlFreqProbabilityThreshold = local_required_probability_scalar_local(raw, "mlFreqProbabilityThreshold", "mitigation.fhErasure");
 if cfg.mlFreqProbabilityThreshold >= 1
     error("mitigation.fhErasure.mlFreqProbabilityThreshold must be < 1.");
@@ -2699,8 +2937,19 @@ if cfg.mlMaxErasedFreqFraction <= 0
     error("mitigation.fhErasure.mlMaxErasedFreqFraction must be > 0.");
 end
 cfg.mlProbabilitySlope = local_required_positive_scalar_local(raw, "mlProbabilitySlope", "mitigation.fhErasure");
+cfg.mlRequirePowerEvidence = local_required_logical_scalar_local(raw, "mlRequirePowerEvidence", "mitigation.fhErasure");
+cfg.multipathFadeEnable = local_required_logical_scalar_local(raw, "multipathFadeEnable", "mitigation.fhErasure");
+cfg.multipathNoiseGainRatioThreshold = local_required_positive_scalar_local(raw, "multipathNoiseGainRatioThreshold", "mitigation.fhErasure");
+cfg.multipathSinrDropDbThreshold = local_required_nonnegative_scalar_local(raw, "multipathSinrDropDbThreshold", "mitigation.fhErasure");
+cfg.multipathSoftSlope = local_required_positive_scalar_local(raw, "multipathSoftSlope", "mitigation.fhErasure");
 if cfg.freqPowerRatioThreshold < 1 || cfg.hopPowerRatioThreshold < 1
     error("mitigation.fhErasure power-ratio thresholds must be >= 1.");
+end
+if cfg.lowPowerFadeEnable && (cfg.lowFreqPowerRatioThreshold <= 0 || cfg.lowHopPowerRatioThreshold <= 0)
+    error("mitigation.fhErasure low-power thresholds must be in (0, 1].");
+end
+if cfg.multipathNoiseGainRatioThreshold < 1
+    error("mitigation.fhErasure.multipathNoiseGainRatioThreshold must be >= 1.");
 end
 end
 
@@ -3552,31 +3801,40 @@ rFull = rFull(:);
 hdrRaw = rFull(preLen+1:preLen+hdrLen);
 [hdrRaw, headerHopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg, sampleFhDehopped);
 actions = local_header_action_candidates_local(primaryAction, mitigation);
+copyLen = phy_header_single_symbol_length(frameCfg, fecCfg);
+copies = phy_header_diversity_copies(frameCfg);
+if hdrLen ~= copyLen * copies
+    error("PHY-header diversity length mismatch: hdrLen=%d, copyLen=%d, copies=%d.", hdrLen, copyLen, copies);
+end
 for actionName = actions
-    headerBlock = [complex(zeros(preLen, 1)); hdrRaw];
-    headerActionCtx = local_build_header_action_ctx_local(headerBlock, preLen, hdrLen, actionName, mitigation);
-    if isstruct(headerHopInfo) && isfield(headerHopInfo, "enable") && headerHopInfo.enable ...
-            && isfield(headerHopInfo, "hopLen") && double(headerHopInfo.hopLen) > 0
-        headerActionCtx.usePerHop = true;
-        headerActionCtx.hopLen = round(double(headerHopInfo.hopLen));
-        if isfield(headerActionCtx, "bandstopCfg") && isstruct(headerActionCtx.bandstopCfg)
-            headerActionCtx.bandstopCfg.forcedFreqBounds = zeros(0, 2);
+    for copyIdx = 1:copies
+        copyRange = (copyIdx - 1) * copyLen + (1:copyLen);
+        hdrCopyRaw = hdrRaw(copyRange);
+        headerBlock = [complex(zeros(preLen, 1)); hdrCopyRaw];
+        headerActionCtx = local_build_header_action_ctx_local(headerBlock, preLen, copyLen, actionName, mitigation);
+        if isstruct(headerHopInfo) && isfield(headerHopInfo, "enable") && headerHopInfo.enable ...
+                && isfield(headerHopInfo, "hopLen") && double(headerHopInfo.hopLen) > 0
+            headerActionCtx.usePerHop = true;
+            headerActionCtx.hopLen = min(copyLen, round(double(headerHopInfo.hopLen)));
+            if isfield(headerActionCtx, "bandstopCfg") && isstruct(headerActionCtx.bandstopCfg)
+                headerActionCtx.bandstopCfg.forcedFreqBounds = zeros(0, 2);
+            end
         end
-    end
-    hdrSym = local_prepare_header_symbols_local(hdrRaw, actionName, mitigation, headerActionCtx);
-    hdrBits = decode_phy_header_symbols(hdrSym, frameCfg, fecCfg, softCfg);
-    [phyNow, okNow] = parse_phy_header_bits(hdrBits, frameCfg);
-    if okNow
-        phy = phyNow;
-        headerOk = true;
-        return;
+        hdrSym = local_prepare_header_symbols_local(hdrCopyRaw, actionName, mitigation, headerActionCtx);
+        hdrBits = decode_phy_header_symbols(hdrSym, frameCfg, fecCfg, softCfg);
+        [phyNow, okNow] = parse_phy_header_bits(hdrBits, frameCfg);
+        if okNow
+            phy = phyNow;
+            headerOk = true;
+            return;
+        end
     end
 end
 end
 
 function [hdrRaw, hopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg, sampleFhDehopped)
 hdrRaw = hdrRaw(:);
-fhCfg = phy_header_fh_cfg(frameCfg, fhCfgBase);
+fhCfg = phy_header_fh_cfg(frameCfg, fhCfgBase, fecCfg);
 hopInfo = struct('enable', false);
 if ~fhCfg.enable
     return;
@@ -3689,11 +3947,13 @@ for pktIdx = 1:nPackets
     nom.adaptiveBootstrapPath(pktIdx) = string(front.bootstrapPath);
     nom.adaptiveConfidence(pktIdx) = double(decision.confidence);
 
+    multipathEqReliabilityFull = [];
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
         eqCfg = rxSyncCfg.multipathEq;
         freqBySymbol = local_packet_equalizer_frequency_vector_local(txPackets(pktIdx), fhCaptureCfg, totalLen);
         eq = local_design_multipath_equalizer_local(syncSymRef, rFull(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+        multipathEqReliabilityFull = local_multipath_equalizer_reliability_vector_local(eq, freqBySymbol, mitigation);
         rFull = local_apply_frequency_aware_equalizer_block_local(rFull, eq, freqBySymbol);
     end
 
@@ -3713,6 +3973,10 @@ for pktIdx = 1:nPackets
     rxState = derive_rx_packet_state_local( ...
         p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
     rxState.sampleFhDataDemod = local_data_sample_fh_demod_enabled_local(fhCaptureCfg);
+    if ~isempty(multipathEqReliabilityFull)
+        rxState.multipathEqReliability = local_fit_reliability_length_local( ...
+            multipathEqReliabilityFull(preLen+hdrLen+1:end), rxState.nDataSym);
+    end
     symbolFhEnabled = fhEnabled && ~fh_is_fast(rxState.fhCfg);
     if symbolFhEnabled
         hopInfoUsed = local_nominal_hop_info_local(rxState, fhAssumption);

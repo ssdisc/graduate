@@ -66,7 +66,7 @@ phyHeaderSymLen = phy_header_symbol_length(p.frame, p.fec);
 [~, shortSyncSym] = make_packet_sync(p.frame, 2);
 
 fhEnabled = isfield(p, 'fh') && isfield(p.fh, 'enable') && p.fh.enable;
-phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh);
+phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh, p.fec);
 dsssEnable = isfield(p, 'dsss') && isfield(p.dsss, 'enable') && p.dsss.enable ...
     && dsss_effective_spread_factor(p.dsss) > 1;
 packetChaosEnable = packetIndependentBitChaos && isfield(p, "chaosEncrypt") ...

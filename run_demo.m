@@ -9,6 +9,7 @@ p = default_params( ...
     "loadMlModels", strings(1, 0));
 [activeMethods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(p.mitigation, p.channel);
 p.mitigation.methods = activeMethods;
+p = local_enable_offline_multipath_eq_compare(p);
 
 modelDir = fullfile(pwd, 'models');
 if ~exist(modelDir, 'dir')
@@ -22,12 +23,15 @@ impulseDlTrainArgs = local_impulse_dl_training_args();
 selectorTrainArgs = local_selector_training_args(p);
 narrowbandTrainArgs = local_narrowband_training_args();
 fhErasureTrainArgs = local_fh_erasure_training_args(p);
-requiredModels = local_required_ml_models(activeMethods);
+multipathEqTrainArgs = local_multipath_eq_training_args();
+requiredModels = local_required_ml_models(activeMethods, p);
 expectedReloadContext = ml_capture_reload_context(p);
 expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
 expectedFhErasureContext = ml_capture_fh_erasure_reload_context(p);
+expectedMultipathEqContext = ml_capture_multipath_equalizer_reload_context(p);
 impulseTrainingArmed = forceRetrain || local_impulse_training_enabled(p);
 narrowbandTrainingArmed = forceRetrain || local_narrowband_training_enabled(p);
+fhErasureTrainingArmed = forceRetrain || requiredModels.fhErasure;
 if impulseTrainingArmed
     expectedImpulseReloadContext = expectedReloadContext;
 else
@@ -40,6 +44,7 @@ fprintf('========================================\n');
 fprintf('Active interference types: %s\n', local_list_text(activeInterferenceTypes));
 fprintf('Allowed methods after binding: %s\n', local_list_text(allowedMethods));
 fprintf('Methods: %s\n', strjoin(cellstr(p.mitigation.methods), ', '));
+fprintf('Equalizers: %s\n', strjoin(cellstr(string(p.rxSync.multipathEq.compareMethods(:).')), ', '));
 fprintf('Eb/N0 points: %s dB\n', mat2str(double(p.linkBudget.ebN0dBList)));
 fprintf('JSR points: %s dB\n', mat2str(double(p.linkBudget.jsrDbList)));
 fprintf('Noise PSD: %.4g\n', double(p.linkBudget.noisePsdLin));
@@ -52,6 +57,8 @@ fprintf('Impulse model retrain armed: %s (forceRetrain=%s, impulseProb=%.6g)\n\n
 fprintf('Narrowband model retrain armed: %s (forceRetrain=%s, narrowbandEnable=%s, narrowbandWeight=%.6g)\n\n', ...
     local_on_off_text(narrowbandTrainingArmed), local_on_off_text(forceRetrain), ...
     local_on_off_text(local_narrowband_enable_flag(p)), double(p.channel.narrowband.weight));
+fprintf('FH erasure model retrain armed: %s (requiredByMethods=%s)\n\n', ...
+    local_on_off_text(fhErasureTrainingArmed), local_on_off_text(requiredModels.fhErasure));
 
 fprintf('========================================\n');
 fprintf('Loading or training required ML models...\n');
@@ -226,7 +233,7 @@ if requiredModels.fhErasure
     end
     if loadedFhErasure
         fprintf('Loaded FH erasure model: %s\n\n', char(loadedFhErasurePath));
-    elseif narrowbandTrainingArmed
+    elseif fhErasureTrainingArmed
         fprintf('Training FH erasure model...\n');
         [p.mitigation.mlFhErasure, fhErasureReport] = ml_train_fh_erasure(p, ...
             fhErasureTrainArgs{:}, ...
@@ -235,10 +242,39 @@ if requiredModels.fhErasure
         fprintf('FH erasure model saved (latest): %s\n', char(fhErasureReport.artifacts.latestPath));
         fprintf('FH erasure model saved (batch): %s\n\n', char(fhErasureReport.artifacts.batchPath));
     else
-        fprintf('Skipping FH erasure model training: forceRetrain=OFF or narrowband interference is inactive.\n\n');
+        fprintf('Skipping FH erasure model training: current methods do not require ml_fh_erasure.\n\n');
     end
 else
     fprintf('Skipping FH erasure model load: effective methods do not use ml_fh_erasure.\n\n');
+end
+
+if requiredModels.multipathEq
+    multipathEqModelPath = fullfile(modelDir, 'multipath_equalizer_model.mat');
+    if ~forceRetrain
+        [p.rxSync.multipathEq.mlMlp, loadedMultipathEq, loadedMultipathEqPath] = load_pretrained_model( ...
+            multipathEqModelPath, @ml_multipath_equalizer_model, "expectedContext", expectedMultipathEqContext);
+        loadedMultipathEq = loadedMultipathEq && isfield(p.rxSync.multipathEq.mlMlp, 'trained') ...
+            && logical(p.rxSync.multipathEq.mlMlp.trained);
+        if ~loadedMultipathEq
+            loadedMultipathEqPath = "";
+        end
+    else
+        loadedMultipathEq = false;
+        loadedMultipathEqPath = "";
+    end
+    if loadedMultipathEq
+        fprintf('Loaded multipath equalizer model: %s\n\n', char(loadedMultipathEqPath));
+    else
+        fprintf('Training multipath equalizer model...\n');
+        [p.rxSync.multipathEq.mlMlp, multipathEqReport] = ml_train_multipath_equalizer(p, ...
+            multipathEqTrainArgs{:}, ...
+            'saveArtifacts', true, 'saveDir', string(modelDir), ...
+            'saveTag', batchTag, 'savedBy', "run_demo");
+        fprintf('Multipath equalizer model saved (latest): %s\n', char(multipathEqReport.artifacts.latestPath));
+        fprintf('Multipath equalizer model saved (batch): %s\n\n', char(multipathEqReport.artifacts.batchPath));
+    end
+else
+    fprintf('Skipping multipath equalizer model load: compareMethods does not use ml_mlp.\n\n');
 end
 
 p.mitigation.strictModelLoad = true;
@@ -325,7 +361,7 @@ args = { ...
     'lr', 1e-3};
 end
 
-function required = local_required_ml_models(methods)
+function required = local_required_ml_models(methods, p)
 methods = lower(string(methods(:).'));
 required = struct();
 required.lr = any(methods == "ml_blanking");
@@ -334,6 +370,40 @@ required.gru = any(methods == "ml_gru" | methods == "ml_gru_hard" | methods == "
 required.selector = any(methods == "adaptive_ml_frontend");
 required.narrowband = any(methods == "ml_narrowband");
 required.fhErasure = any(methods == "ml_fh_erasure");
+required.multipathEq = local_multipath_eq_offline_requested(p);
+end
+
+function p = local_enable_offline_multipath_eq_compare(p)
+if ~(isfield(p, "channel") && isstruct(p.channel) ...
+        && isfield(p.channel, "multipath") && isstruct(p.channel.multipath) ...
+        && isfield(p.channel.multipath, "enable") && logical(p.channel.multipath.enable))
+    return;
+end
+if ~(isfield(p, "rxSync") && isstruct(p.rxSync) ...
+        && isfield(p.rxSync, "multipathEq") && isstruct(p.rxSync.multipathEq) ...
+        && isfield(p.rxSync.multipathEq, "compareEnable") && logical(p.rxSync.multipathEq.compareEnable))
+    return;
+end
+methods = lower(string(p.rxSync.multipathEq.compareMethods(:).'));
+if ~any(methods == "ml_mlp")
+    p.rxSync.multipathEq.compareMethods = [methods, "ml_mlp"];
+end
+end
+
+function tf = local_multipath_eq_offline_requested(p)
+tf = false;
+if ~(isfield(p, "rxSync") && isstruct(p.rxSync) ...
+        && isfield(p.rxSync, "multipathEq") && isstruct(p.rxSync.multipathEq))
+    return;
+end
+eqCfg = p.rxSync.multipathEq;
+if isfield(eqCfg, "method") && lower(string(eqCfg.method)) == "ml_mlp"
+    tf = true;
+    return;
+end
+if isfield(eqCfg, "compareMethods") && ~isempty(eqCfg.compareMethods)
+    tf = any(lower(string(eqCfg.compareMethods(:).')) == "ml_mlp");
+end
 end
 
 function tf = local_impulse_training_enabled(p)
@@ -396,6 +466,20 @@ args = { ...
     'narrowbandProbability', 0.90, ...
     'epochs', 45, ...
     'batchSize', 256, ...
+    'lr', 1e-3, ...
+    'verbose', true};
+end
+
+function args = local_multipath_eq_training_args()
+args = { ...
+    'nChannels', 2500, ...
+    'samplesPerChannel', 32, ...
+    'blockLen', 192, ...
+    'ebN0dBRange', [6, 14], ...
+    'rayleighProbability', 0.85, ...
+    'bpskProbability', 0.35, ...
+    'epochs', 45, ...
+    'batchSize', 512, ...
     'lr', 1e-3, ...
     'verbose', true};
 end

@@ -133,7 +133,12 @@ reason = "";
 expectedContext = local_canonicalize_context(expectedContext);
 candidateContext = [];
 
-if isfield(candidate, "trainingContext") && ~isempty(candidate.trainingContext)
+if isfield(candidate, "reloadContext") && ~isempty(candidate.reloadContext)
+    candidateContext = candidate.reloadContext;
+elseif isfield(loadedData, "report") && isstruct(loadedData.report) ...
+        && isfield(loadedData.report, "reloadContext") && ~isempty(loadedData.report.reloadContext)
+    candidateContext = loadedData.report.reloadContext;
+elseif isfield(candidate, "trainingContext") && ~isempty(candidate.trainingContext)
     candidateContext = candidate.trainingContext;
 elseif isfield(loadedData, "report") && isstruct(loadedData.report) ...
         && isfield(loadedData.report, "trainingContext") && ~isempty(loadedData.report.trainingContext)
