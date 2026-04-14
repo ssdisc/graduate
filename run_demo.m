@@ -9,7 +9,6 @@ p = default_params( ...
     "loadMlModels", strings(1, 0));
 [activeMethods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(p.mitigation, p.channel);
 p.mitigation.methods = activeMethods;
-p = local_enable_offline_multipath_eq_compare(p);
 
 modelDir = fullfile(pwd, 'models');
 if ~exist(modelDir, 'dir')
@@ -50,6 +49,8 @@ fprintf('JSR points: %s dB\n', mat2str(double(p.linkBudget.jsrDbList)));
 fprintf('Noise PSD: %.4g\n', double(p.linkBudget.noisePsdLin));
 fprintf('Frames per point: %d\n', p.sim.nFramesPerPoint);
 fprintf('Parallel: %s\n', local_on_off_text(p.sim.useParallel));
+fprintf('Bob RX diversity: %s, nRx=%d, combine=%s\n', ...
+    local_on_off_text(p.rxDiversity.enable), double(p.rxDiversity.nRx), char(p.rxDiversity.combineMethod));
 fprintf('Eve: %s, Warden: %s\n\n', ...
     local_on_off_text(p.eve.enable), local_on_off_text(p.covert.enable && p.covert.warden.enable));
 fprintf('Impulse model retrain armed: %s (forceRetrain=%s, impulseProb=%.6g)\n\n', ...
@@ -371,23 +372,6 @@ required.selector = any(methods == "adaptive_ml_frontend");
 required.narrowband = any(methods == "ml_narrowband");
 required.fhErasure = any(methods == "ml_fh_erasure");
 required.multipathEq = local_multipath_eq_offline_requested(p);
-end
-
-function p = local_enable_offline_multipath_eq_compare(p)
-if ~(isfield(p, "channel") && isstruct(p.channel) ...
-        && isfield(p.channel, "multipath") && isstruct(p.channel.multipath) ...
-        && isfield(p.channel.multipath, "enable") && logical(p.channel.multipath.enable))
-    return;
-end
-if ~(isfield(p, "rxSync") && isstruct(p.rxSync) ...
-        && isfield(p.rxSync, "multipathEq") && isstruct(p.rxSync.multipathEq) ...
-        && isfield(p.rxSync.multipathEq, "compareEnable") && logical(p.rxSync.multipathEq.compareEnable))
-    return;
-end
-methods = lower(string(p.rxSync.multipathEq.compareMethods(:).'));
-if ~any(methods == "ml_mlp")
-    p.rxSync.multipathEq.compareMethods = [methods, "ml_mlp"];
-end
 end
 
 function tf = local_multipath_eq_offline_requested(p)

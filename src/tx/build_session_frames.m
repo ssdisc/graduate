@@ -97,7 +97,7 @@ frameCfg = p.frame;
 if isfield(frameCfg, "phyHeaderDiversity") && isstruct(frameCfg.phyHeaderDiversity)
     frameCfg.phyHeaderDiversity.enable = false;
 end
-fhCfg = phy_header_fh_cfg(frameCfg, p.fh);
+fhCfg = phy_header_fh_cfg(frameCfg, p.fh, p.fec);
 end
 
 function [dataSymTx, hopInfo, txSymBasebandForSpectrum, txSymForChannel] = local_build_session_header_path(syncSym, dataSymBaseTx, fhCfg, waveform)

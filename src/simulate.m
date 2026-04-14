@@ -168,6 +168,7 @@ klSym = nan(1, numel(EbN0dBList)); % 对称KL
 
 example = repmat(struct("EbN0dB", NaN, "methods", struct()), 1, numel(EbN0dBList));
 
+bobRxDiversity = local_validate_rx_diversity_cfg_local(p.rxDiversity, "p.rxDiversity");
 eveEnabled = isfield(p, "eve") && isfield(p.eve, "enable") && p.eve.enable;
 scrambleAssumptionEve = "";
 fhAssumptionEve = "";
@@ -176,11 +177,13 @@ chaosApproxDeltaEve = NaN;
 chaosEncInfoEve = struct('enabled', false, 'mode', "none");
 eveEbN0dBList = [];
 eveRxSync = struct();
+eveRxDiversity = local_disabled_rx_diversity_cfg_local();
 eveMitigation = struct();
 eveBudget = struct();
 if eveEnabled
     eveCfg = local_validate_eve_config_local(p.eve, mitigationMethods, p.channel);
     eveRxSync = eveCfg.rxSync;
+    eveRxDiversity = eveCfg.rxDiversity;
     eveMitigation = eveCfg.mitigation;
     chaosApproxDeltaEve = double(eveCfg.chaosApproxDelta);
     local_require_presync_mitigation_cfg_local(eveMitigation, "eve.mitigation");
@@ -538,8 +541,10 @@ for ie = 1:numel(EbN0dBList)
     frameCtx.meta = meta;
     frameCtx.totalPayloadBits = totalPayloadBits;
     frameCtx.bobRxSync = bobRxSync;
+    frameCtx.bobRxDiversity = bobRxDiversity;
     frameCtx.bobMitigation = bobMitigation;
     frameCtx.eveRxSync = eveRxSync;
+    frameCtx.eveRxDiversity = eveRxDiversity;
     frameCtx.eveMitigation = eveMitigation;
     frameCtx.eveEnabled = eveEnabled;
     frameCtx.scrambleAssumptionEve = scrambleAssumptionEve;
@@ -732,6 +737,10 @@ results.packetDiagnostics.bob = struct( ...
         "actionCounts", adaptiveActionBobVals, ...
         "pathCounts", adaptivePathBobVals, ...
         "meanConfidence", adaptiveMeanConfidenceBobVals));
+results.receiver = struct( ...
+    "rxSync", local_pack_rx_sync_summary_local(bobRxSync), ...
+    "rxDiversity", local_pack_rx_diversity_summary_local(bobRxDiversity), ...
+    "mitigation", local_pack_mitigation_summary_local(bobMitigation));
 results.packetConceal = struct("configured", packetConcealEnable, "active", packetConcealActive, "mode", packetConcealMode);
 results.imageMetrics = struct();
 results.imageMetrics.communication = struct("mse", mseCommVals, "psnr", psnrCommVals, "ssim", ssimCommVals);
@@ -790,6 +799,7 @@ if eveEnabled
         "chaosApproxDelta", chaosApproxDeltaEve);
     results.eve.receiver = struct( ...
         "rxSync", local_pack_rx_sync_summary_local(eveRxSync), ...
+        "rxDiversity", local_pack_rx_diversity_summary_local(eveRxDiversity), ...
         "mitigation", local_pack_mitigation_summary_local(eveMitigation));
     results.eve.imageMetrics = struct();
     results.eve.imageMetrics.communication = struct("mse", mseCommEveVals, "psnr", psnrCommEveVals, "ssim", ssimCommEveVals);
@@ -1129,27 +1139,27 @@ waveform = frameCtx.waveform;
 eveEnabled = logical(frameCtx.eveEnabled);
 txPackets = frameCtx.txPackets;
 nPackets = numel(txPackets);
-bobRaw = local_init_raw_capture_local(nPackets, numel(frameCtx.sessionFrames));
+bobRaw = local_init_raw_capture_local(nPackets, numel(frameCtx.sessionFrames), frameCtx.bobRxDiversity);
 eveRaw = struct();
 if eveEnabled
-    eveRaw = local_init_raw_capture_local(nPackets, numel(frameCtx.sessionFrames));
+    eveRaw = local_init_raw_capture_local(nPackets, numel(frameCtx.sessionFrames), frameCtx.eveRxDiversity);
 end
 
 frameDelaySym = randi([0, p.channel.maxDelaySymbols], 1, 1);
 frameDelay = round(double(frameDelaySym) * waveform.sps);
-channelSampleBob = local_freeze_channel_realization_local(frameCtx.channelSample);
+bobChannelBank = local_freeze_rx_diversity_channel_bank_local(frameCtx.channelSample, frameCtx.bobRxDiversity);
 if eveEnabled
-    channelSampleEve = local_freeze_channel_realization_local(frameCtx.channelSample);
+    eveChannelBank = local_freeze_rx_diversity_channel_bank_local(frameCtx.channelSample, frameCtx.eveRxDiversity);
 end
 
 if ~isempty(frameCtx.sessionFrames)
     bobRaw.sessionRx = local_capture_session_frames_raw_local( ...
-        frameCtx.sessionFrames, frameCtx.linkBudgetBobRxAmplitudeScale, frameCtx.N0, channelSampleBob, frameDelay, ...
-        waveform);
+        frameCtx.sessionFrames, frameCtx.linkBudgetBobRxAmplitudeScale, frameCtx.N0, bobChannelBank, frameDelay, ...
+        waveform, frameCtx.bobRxDiversity);
     if eveEnabled
         eveRaw.sessionRx = local_capture_session_frames_raw_local( ...
-            frameCtx.sessionFrames, frameCtx.eveRxAmplitudeScale, frameCtx.N0Eve, channelSampleEve, frameDelay, ...
-            waveform);
+            frameCtx.sessionFrames, frameCtx.eveRxAmplitudeScale, frameCtx.N0Eve, eveChannelBank, frameDelay, ...
+            waveform, frameCtx.eveRxDiversity);
     end
 end
 
@@ -1158,13 +1168,11 @@ for pktIdx = 1:nPackets
     txPktChannel = local_rebuild_packet_channel_waveform_local(pkt, waveform);
 
     tx = [zeros(frameDelay, 1); frameCtx.linkBudgetBobRxAmplitudeScale * txPktChannel];
-    rx = channel_bg_impulsive(tx, frameCtx.N0, channelSampleBob);
-    bobRaw.rxPackets{pktIdx} = rx;
+    bobRaw.rxPackets{pktIdx} = local_capture_rx_diversity_waveforms_local(tx, frameCtx.N0, bobChannelBank, frameCtx.bobRxDiversity);
 
     if eveEnabled
         txEve = [zeros(frameDelay, 1); frameCtx.eveRxAmplitudeScale * txPktChannel];
-        rxEve = channel_bg_impulsive(txEve, frameCtx.N0Eve, channelSampleEve);
-        eveRaw.rxPackets{pktIdx} = rxEve;
+        eveRaw.rxPackets{pktIdx} = local_capture_rx_diversity_waveforms_local(txEve, frameCtx.N0Eve, eveChannelBank, frameCtx.eveRxDiversity);
     end
 end
 
@@ -2380,6 +2388,89 @@ if requestedMethod == "sc_fde_mmse"
 end
 end
 
+function candidates = local_build_header_decode_candidates_local(rFullRaw, rFullConfigured, txPreamble, rxSyncCfg, N0, chLenSymbols, freqBySymbol)
+rFullRaw = rFullRaw(:);
+rFullConfigured = rFullConfigured(:);
+if numel(rFullRaw) ~= numel(rFullConfigured)
+    error("Header decode equalizer candidates require raw/configured blocks with identical lengths.");
+end
+
+requestedMethods = local_header_decode_equalizer_methods_local(rxSyncCfg);
+configuredMethod = local_configured_multipath_equalizer_method_local(rxSyncCfg);
+candidates = repmat(struct("method", "", "rFull", complex(zeros(0, 1))), 0, 1);
+actualMethods = strings(1, 0);
+
+for requestedMethod = requestedMethods
+    if requestedMethod == "configured"
+        actualMethod = configuredMethod;
+    else
+        actualMethod = requestedMethod;
+    end
+    if any(actualMethods == actualMethod)
+        continue;
+    end
+
+    if actualMethod == "none"
+        rFullNow = rFullRaw;
+    elseif actualMethod == configuredMethod
+        rFullNow = rFullConfigured;
+    else
+        eqCfgNow = rxSyncCfg.multipathEq;
+        eqCfgNow.method = actualMethod;
+        eqNow = local_design_multipath_equalizer_local( ...
+            txPreamble, rFullRaw(1:numel(txPreamble)), eqCfgNow, N0, chLenSymbols, freqBySymbol);
+        rFullNow = local_apply_frequency_aware_equalizer_block_local(rFullRaw, eqNow, freqBySymbol);
+    end
+
+    candidates(end + 1) = struct("method", actualMethod, "rFull", rFullNow); %#ok<AGROW>
+    actualMethods(end + 1) = actualMethod; %#ok<AGROW>
+end
+
+if isempty(candidates)
+    error("Header decode equalizer diversity produced no candidates.");
+end
+end
+
+function candidates = local_single_header_decode_candidate_local(methodName, rFull)
+candidates = struct("method", string(methodName), "rFull", rFull(:));
+end
+
+function methods = local_header_decode_equalizer_methods_local(rxSyncCfg)
+if ~(isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq))
+    error("rxSync.multipathEq is required for PHY-header equalizer diversity.");
+end
+if ~(isfield(rxSyncCfg.multipathEq, "headerDecodeMethods") && ~isempty(rxSyncCfg.multipathEq.headerDecodeMethods))
+    error("rxSync.multipathEq.headerDecodeMethods is required when multipath equalization is enabled.");
+end
+
+methods = lower(string(rxSyncCfg.multipathEq.headerDecodeMethods(:).'));
+if isempty(methods) || any(strlength(methods) == 0)
+    error("rxSync.multipathEq.headerDecodeMethods must be a non-empty string vector.");
+end
+validMethods = ["configured" "none" "mmse" "zf"];
+invalid = setdiff(methods, validMethods);
+if ~isempty(invalid)
+    error("Unsupported rxSync.multipathEq.headerDecodeMethods entries: %s.", strjoin(cellstr(invalid), ", "));
+end
+if numel(unique(methods, "stable")) ~= numel(methods)
+    error("rxSync.multipathEq.headerDecodeMethods must not contain duplicates.");
+end
+end
+
+function method = local_configured_multipath_equalizer_method_local(rxSyncCfg)
+if ~(isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq))
+    error("rxSync.multipathEq is required.");
+end
+if ~(isfield(rxSyncCfg.multipathEq, "method") && strlength(string(rxSyncCfg.multipathEq.method)) > 0)
+    error("rxSync.multipathEq.method is required.");
+end
+method = lower(string(rxSyncCfg.multipathEq.method));
+validMethods = ["mmse" "zf" "ml_ridge" "ml_mlp" "sc_fde_mmse"];
+if ~any(method == validMethods)
+    error("Unsupported configured multipath equalizer method for PHY-header decode: %s.", char(method));
+end
+end
+
 function freqSet = local_equalizer_frequency_set_local(freqBySymbol)
 freqBySymbol = double(freqBySymbol(:).');
 if isempty(freqBySymbol)
@@ -2659,8 +2750,33 @@ function [yPrep, relPrep] = local_prepare_data_symbols_local(rData, rawReliabili
 %
 % FH-aware multipath equalization has already been applied on the full
 % [preamble; PHY; data] block. Here we only process the payload region.
+if local_sc_fde_equalizer_method_local(rxSyncCfg) && local_rx_state_sc_fde_diversity_enabled_local(rxState)
+    [r, relPrep] = local_prepare_sc_fde_diversity_data_symbols_local( ...
+        rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation);
+else
+    [r, relPrep] = local_prepare_data_symbols_prescfde_local( ...
+        rData, rawReliability, rxState, hopInfoUsed, modCfg, fhEnabled, actionName, mitigation);
+    if local_rx_state_sc_fde_enabled_local(rxState)
+        [r, relPrep] = local_prepare_sc_fde_payload_local(r, relPrep, rxState, rxSyncCfg);
+    end
+end
+
+if isfield(rxState, "dsssCfg") && isstruct(rxState.dsssCfg)
+    [r, relPrep] = dsss_despread(r, rxState.dsssCfg, relPrep);
+end
+
+if isfield(rxSyncCfg, "carrierPll") && isfield(rxSyncCfg.carrierPll, "enable") ...
+        && rxSyncCfg.carrierPll.enable
+    r = carrier_pll_sync(r, modCfg, rxSyncCfg.carrierPll);
+end
+
+yPrep = r;
+relPrep = local_fit_reliability_length_local(relPrep, local_rx_demod_symbol_count_local(rxState));
+end
+
+function [r, relPrep, rawReliability] = local_prepare_data_symbols_prescfde_local(rData, rawReliabilityIn, rxState, hopInfoUsed, modCfg, fhEnabled, actionName, mitigation)
 r = fit_complex_length_local(rData, rxState.nDataSym);
-rawReliability = local_fit_reliability_length_local(rawReliability, rxState.nDataSym);
+rawReliability = local_fit_reliability_length_local(rawReliabilityIn, rxState.nDataSym);
 fastFhEnabled = isfield(rxState, "fhCfg") && isstruct(rxState.fhCfg) ...
     && isfield(rxState.fhCfg, "enable") && rxState.fhCfg.enable && fh_is_fast(rxState.fhCfg);
 sampleFhDataDemod = isfield(rxState, "sampleFhDataDemod") && logical(rxState.sampleFhDataDemod);
@@ -2681,22 +2797,33 @@ if all(relPrep >= 0.999999)
 else
     relPrep = min(relPrep, rawReliability);
 end
-
-if local_rx_state_sc_fde_enabled_local(rxState)
-    [r, relPrep] = local_prepare_sc_fde_payload_local(r, relPrep, rxState, rxSyncCfg);
 end
 
-if isfield(rxState, "dsssCfg") && isstruct(rxState.dsssCfg)
-    [r, relPrep] = dsss_despread(r, rxState.dsssCfg, relPrep);
+function [rOut, relOut] = local_prepare_sc_fde_diversity_data_symbols_local(rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation)
+if ~local_sc_fde_equalizer_method_local(rxSyncCfg)
+    error("SC-FDE diversity payload preparation requires rxSync.multipathEq.method=""sc_fde_mmse"".");
+end
+divState = local_require_sc_fde_diversity_state_local(rxState);
+nBranches = double(divState.nBranches);
+branchSymbols = cell(nBranches, 1);
+branchReliability = cell(nBranches, 1);
+fallbackSymbols = cell(nBranches, 1);
+fallbackReliability = cell(nBranches, 1);
+fallbackAvailable = logical(divState.fallbackEnable);
+
+for branchIdx = 1:nBranches
+    [branchSymbols{branchIdx}, branchReliability{branchIdx}] = local_prepare_data_symbols_prescfde_local( ...
+        divState.payloadBranches{branchIdx}, divState.reliabilityBranches{branchIdx}, ...
+        rxState, hopInfoUsed, modCfg, fhEnabled, actionName, mitigation);
+    if fallbackAvailable
+        [fallbackSymbols{branchIdx}, fallbackReliability{branchIdx}] = local_prepare_data_symbols_prescfde_local( ...
+            divState.fallbackBranches{branchIdx}, divState.fallbackReliabilityBranches{branchIdx}, ...
+            rxState, hopInfoUsed, modCfg, fhEnabled, actionName, mitigation);
+    end
 end
 
-if isfield(rxSyncCfg, "carrierPll") && isfield(rxSyncCfg.carrierPll, "enable") ...
-        && rxSyncCfg.carrierPll.enable
-    r = carrier_pll_sync(r, modCfg, rxSyncCfg.carrierPll);
-end
-
-yPrep = r;
-relPrep = local_fit_reliability_length_local(relPrep, local_rx_demod_symbol_count_local(rxState));
+[rOut, relOut] = local_apply_sc_fde_mmse_payload_diversity_local( ...
+    branchSymbols, branchReliability, fallbackSymbols, fallbackReliability, rxState, rxSyncCfg);
 end
 
 function [rOut, relOut] = local_fast_fh_symbol_prepare_local(rIn, relIn, hopInfoUsed, rxState)
@@ -2847,7 +2974,7 @@ for hopIdx = 1:plan.nHops
     if any(~isfinite(denom)) || any(denom <= 0)
         error("SC-FDE MMSE denominator is invalid.");
     end
-    xCore = ifft(conj(H) ./ denom .* fft(core));
+    xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, plan);
 
     pilot = sc_fde_payload_pilot_symbols(cfg, rxState.packetIndex, hopIdx);
     maxPilotShift = min(plan.cpLen, max(0, numel(h) - 1));
@@ -2874,6 +3001,347 @@ end
 
 dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
 relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
+end
+
+function [dataOut, relOut] = local_apply_sc_fde_mmse_payload_diversity_local(branchSymbols, branchReliability, fallbackSymbols, fallbackReliability, rxState, rxSyncCfg)
+if ~local_sc_fde_equalizer_method_local(rxSyncCfg)
+    error("SC-FDE diversity MMSE combining requires rxSync.multipathEq.method=""sc_fde_mmse"".");
+end
+divState = local_require_sc_fde_diversity_state_local(rxState);
+plan = rxState.scFdePlan;
+cfg = rxState.scFdeCfg;
+nBranches = double(divState.nBranches);
+if ~(iscell(branchSymbols) && iscell(branchReliability) ...
+        && numel(branchSymbols) == nBranches && numel(branchReliability) == nBranches)
+    error("SC-FDE diversity payload branches must match rxState.scFdeDiversity.nBranches.");
+end
+
+eqBranches = divState.eqBranches;
+if ~(iscell(eqBranches) && numel(eqBranches) == nBranches)
+    error("SC-FDE diversity state must provide one equalizer per branch.");
+end
+
+N0 = local_sc_fde_noise_power_local(rxState, eqBranches{1});
+lambda = double(cfg.lambdaFactor) * N0;
+if ~(isscalar(lambda) && isfinite(lambda) && lambda >= 0)
+    error("SC-FDE diversity lambda must be finite and nonnegative.");
+end
+
+hopFreqs = local_sc_fde_hop_frequencies_local(rxState.hopInfo, plan.nHops);
+bankIdx = cell(nBranches, 1);
+for branchIdx = 1:nBranches
+    eqBranch = eqBranches{branchIdx};
+    if ~(isstruct(eqBranch) && isfield(eqBranch, "hBank") && ~isempty(eqBranch.hBank) ...
+            && isfield(eqBranch, "frequencyOffsets") && ~isempty(eqBranch.frequencyOffsets))
+        error("SC-FDE diversity branch %d requires hBank and frequencyOffsets.", branchIdx);
+    end
+    bankIdx{branchIdx} = local_equalizer_bank_indices_for_freqs_local(eqBranch.frequencyOffsets, hopFreqs);
+    branchSymbols{branchIdx} = fit_complex_length_local(branchSymbols{branchIdx}, plan.nTxSymbols);
+    branchReliability{branchIdx} = local_fit_reliability_length_local(branchReliability{branchIdx}, plan.nTxSymbols);
+end
+
+fallbackAvailable = logical(divState.fallbackEnable);
+if fallbackAvailable
+    if ~(iscell(fallbackSymbols) && iscell(fallbackReliability) ...
+            && numel(fallbackSymbols) == nBranches && numel(fallbackReliability) == nBranches)
+        error("SC-FDE diversity fallback branches must match rxState.scFdeDiversity.nBranches.");
+    end
+    for branchIdx = 1:nBranches
+        fallbackSymbols{branchIdx} = fit_complex_length_local(fallbackSymbols{branchIdx}, plan.nTxSymbols);
+        fallbackReliability{branchIdx} = local_fit_reliability_length_local(fallbackReliability{branchIdx}, plan.nTxSymbols);
+    end
+end
+
+dataOutFull = complex(zeros(plan.nHops * plan.dataSymbolsPerHop, 1));
+relOutFull = ones(plan.nHops * plan.dataSymbolsPerHop, 1);
+
+for hopIdx = 1:plan.nHops
+    pilot = sc_fde_payload_pilot_symbols(cfg, rxState.packetIndex, hopIdx);
+    eqCoreList = cell(nBranches, 1);
+    eqRelList = cell(nBranches, 1);
+    eqGainList = ones(nBranches, 1);
+    eqScoreList = zeros(nBranches, 1);
+    maxPilotShiftList = zeros(nBranches, 1);
+
+    for branchIdx = 1:nBranches
+        [core, relCore] = local_sc_fde_core_from_physical_hop_local( ...
+            branchSymbols{branchIdx}, branchReliability{branchIdx}, hopIdx, plan);
+        eqBranch = eqBranches{branchIdx};
+        h = eqBranch.hBank(:, bankIdx{branchIdx}(hopIdx));
+        if numel(h) - 1 > plan.cpLen
+            error("SC-FDE diversity CP length %d is shorter than branch %d channel memory %d at hop %d.", ...
+                plan.cpLen, branchIdx, numel(h) - 1, hopIdx);
+        end
+        maxPilotShift = min(plan.cpLen, max(0, numel(h) - 1));
+        maxPilotShiftList(branchIdx) = maxPilotShift;
+        xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, plan);
+        [~, eqCoreList{branchIdx}, hopRel] = local_sc_fde_align_core_to_pilot_local( ...
+            xCore, pilot, cfg, maxPilotShift);
+        eqRelList{branchIdx} = min(relCore, hopRel);
+        eqScoreList(branchIdx) = double(hopRel);
+    end
+
+    eqScoreList = local_sc_fde_gate_branch_scores_local( ...
+        eqScoreList, sprintf("SC-FDE diversity equalized hop %d", hopIdx));
+    [xCoreCombRaw, relCoreComb] = local_sc_fde_mrc_combine_branch_cores_local( ...
+        eqCoreList, eqRelList, eqGainList, eqScoreList, sprintf("SC-FDE diversity equalized hop %d", hopIdx));
+    [xCoreComb, hopReliabilityComb, fdeMse] = local_sc_fde_apply_pilot_scalar_local(xCoreCombRaw, pilot, cfg, 0);
+    relCoreComb = min(relCoreComb, hopReliabilityComb);
+
+    if fallbackAvailable
+        fallbackCoreList = cell(nBranches, 1);
+        fallbackRelList = cell(nBranches, 1);
+        fallbackGainList = ones(nBranches, 1);
+        fallbackScoreList = zeros(nBranches, 1);
+        for branchIdx = 1:nBranches
+            [fallbackCoreRaw, fallbackRelCore] = local_sc_fde_core_from_physical_hop_local( ...
+                fallbackSymbols{branchIdx}, fallbackReliability{branchIdx}, hopIdx, plan);
+            [~, fallbackCoreList{branchIdx}, fallbackHopRel] = local_sc_fde_align_core_to_pilot_local( ...
+                fallbackCoreRaw, pilot, cfg, maxPilotShiftList(branchIdx));
+            fallbackRelList{branchIdx} = min(fallbackRelCore, fallbackHopRel);
+            fallbackScoreList(branchIdx) = double(fallbackHopRel);
+        end
+
+        fallbackScoreList = local_sc_fde_gate_branch_scores_local( ...
+            fallbackScoreList, sprintf("SC-FDE diversity fallback hop %d", hopIdx));
+        [fallbackCombRaw, fallbackRelComb] = local_sc_fde_mrc_combine_branch_cores_local( ...
+            fallbackCoreList, fallbackRelList, fallbackGainList, fallbackScoreList, sprintf("SC-FDE diversity fallback hop %d", hopIdx));
+        [fallbackComb, fallbackHopReliability, fallbackMse] = local_sc_fde_apply_pilot_scalar_local( ...
+            fallbackCombRaw, pilot, cfg, 0);
+        fallbackRelComb = min(fallbackRelComb, fallbackHopReliability);
+
+        useFde = fdeMse <= double(cfg.fdePilotMseThreshold) ...
+            && fdeMse <= double(cfg.fdePilotMseMargin) * fallbackMse;
+        if ~useFde
+            xCoreComb = fallbackComb;
+            relCoreComb = fallbackRelComb;
+        end
+    end
+
+    dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
+    dataOutFull(dataIdx) = xCoreComb(plan.pilotLength + 1:end);
+    relOutFull(dataIdx) = relCoreComb(plan.pilotLength + 1:end);
+end
+
+dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
+relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
+end
+
+function xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, plan)
+core = core(:);
+h = h(:);
+if numel(h) > plan.coreLen
+    error("SC-FDE core length %d is shorter than estimated channel length %d.", plan.coreLen, numel(h));
+end
+H = fft([h; complex(zeros(plan.coreLen - numel(h), 1))]);
+denom = abs(H).^2 + lambda;
+if any(~isfinite(denom)) || any(denom <= 0)
+    error("SC-FDE MMSE denominator is invalid.");
+end
+xCore = ifft(conj(H) ./ denom .* fft(core));
+end
+
+function xCore = local_apply_sc_fde_mmse_simo_core_local(coreList, hList, lambda, plan, scoreWeights, ownerName)
+if nargin < 5 || isempty(scoreWeights)
+    scoreWeights = ones(numel(coreList), 1);
+end
+if nargin < 6 || strlength(string(ownerName)) == 0
+    ownerName = "SC-FDE diversity SIMO MMSE";
+end
+if ~(iscell(coreList) && iscell(hList) && numel(coreList) == numel(hList) ...
+        && numel(scoreWeights) == numel(coreList))
+    error("%s requires matched core/channel/weight lists.", char(ownerName));
+end
+
+scoreWeights = double(scoreWeights(:));
+numer = complex(zeros(plan.coreLen, 1));
+denom = lambda * ones(plan.coreLen, 1);
+validCount = 0;
+for branchIdx = 1:numel(coreList)
+    coreNow = coreList{branchIdx};
+    hNow = hList{branchIdx};
+    scoreNow = scoreWeights(branchIdx);
+    if isempty(coreNow) || isempty(hNow)
+        error("%s branch %d is empty.", char(ownerName), branchIdx);
+    end
+    if ~(isfinite(scoreNow) && scoreNow > 0)
+        continue;
+    end
+    coreNow = coreNow(:);
+    hNow = hNow(:);
+    if numel(coreNow) ~= plan.coreLen
+        error("%s branch %d core length mismatch.", char(ownerName), branchIdx);
+    end
+    if numel(hNow) > plan.coreLen
+        error("%s branch %d channel length exceeds SC-FDE core length.", char(ownerName), branchIdx);
+    end
+    H = fft([hNow; complex(zeros(plan.coreLen - numel(hNow), 1))]);
+    Y = fft(coreNow);
+    numer = numer + scoreNow * conj(H) .* Y;
+    denom = denom + scoreNow * abs(H).^2;
+    validCount = validCount + 1;
+end
+if validCount == 0
+    error("%s produced no valid branches.", char(ownerName));
+end
+if any(~isfinite(denom)) || any(denom <= 0)
+    error("%s denominator is invalid.", char(ownerName));
+end
+xCore = ifft(numer ./ denom);
+end
+
+function N0 = local_sc_fde_noise_power_local(rxState, eq)
+N0 = 0;
+if isfield(rxState, "scFdeN0") && ~isempty(rxState.scFdeN0)
+    N0 = double(rxState.scFdeN0);
+elseif nargin >= 2 && isstruct(eq) && isfield(eq, "N0") && ~isempty(eq.N0)
+    N0 = double(eq.N0);
+end
+if ~(isscalar(N0) && isfinite(N0) && N0 >= 0)
+    error("SC-FDE MMSE requires a finite nonnegative N0.");
+end
+end
+
+function [coreOut, relOut] = local_sc_fde_mrc_combine_branch_cores_local(coreList, relList, gains, scoreWeights, ownerName)
+if nargin < 4 || isempty(scoreWeights)
+    scoreWeights = ones(numel(coreList), 1);
+end
+if nargin < 5 || strlength(string(ownerName)) == 0
+    ownerName = "SC-FDE diversity combining";
+end
+if ~(iscell(coreList) && iscell(relList) && numel(coreList) == numel(relList) ...
+        && numel(gains) == numel(coreList) && numel(scoreWeights) == numel(coreList))
+    error("%s requires matched core/reliability/gain lists.", char(ownerName));
+end
+
+scoreWeights = double(scoreWeights(:));
+
+validMask = false(numel(coreList), 1);
+coreLen = [];
+for branchIdx = 1:numel(coreList)
+    coreNow = coreList{branchIdx};
+    relNow = relList{branchIdx};
+    if isempty(coreNow) || isempty(relNow)
+        error("%s branch %d is empty.", char(ownerName), branchIdx);
+    end
+    coreNow = coreNow(:);
+    relNow = local_fit_reliability_length_local(relNow, numel(coreNow));
+    coreList{branchIdx} = coreNow;
+    relList{branchIdx} = relNow;
+    gainNow = gains(branchIdx);
+    scoreNow = scoreWeights(branchIdx);
+    if ~(isfinite(gainNow) && abs(gainNow) > 0 && isfinite(scoreNow) && scoreNow > 0)
+        continue;
+    end
+    validMask(branchIdx) = true;
+    if isempty(coreLen)
+        coreLen = numel(coreNow);
+    elseif numel(coreNow) ~= coreLen
+        error("%s branch lengths are inconsistent.", char(ownerName));
+    end
+end
+if ~any(validMask)
+    error("%s produced no valid branch gains.", char(ownerName));
+end
+
+usedIdx = find(validMask);
+coreMat = complex(zeros(coreLen, numel(usedIdx)));
+relMat = zeros(coreLen, numel(usedIdx));
+gainUse = complex(zeros(numel(usedIdx), 1));
+scoreUse = zeros(numel(usedIdx), 1);
+for k = 1:numel(usedIdx)
+    branchIdx = usedIdx(k);
+    coreMat(:, k) = coreList{branchIdx};
+    relMat(:, k) = relList{branchIdx};
+    gainUse(k) = gains(branchIdx);
+    scoreUse(k) = scoreWeights(branchIdx);
+end
+powerWeights = abs(gainUse).^2 .* scoreUse;
+denom = sum(powerWeights);
+if ~(isfinite(denom) && denom > 0)
+    error("%s denominator is invalid.", char(ownerName));
+end
+combineWeights = conj(gainUse) .* scoreUse;
+coreOut = (coreMat * combineWeights) / denom;
+relOut = (relMat * powerWeights) / denom;
+end
+
+function scoreOut = local_sc_fde_gate_branch_scores_local(scoreIn, ownerName)
+if nargin < 2 || strlength(string(ownerName)) == 0
+    ownerName = "SC-FDE diversity branch gating";
+end
+scoreIn = double(scoreIn(:));
+if isempty(scoreIn)
+    error("%s requires a non-empty score vector.", char(ownerName));
+end
+if any(~isfinite(scoreIn) | scoreIn < 0)
+    error("%s scores must be finite and nonnegative.", char(ownerName));
+end
+
+[bestScore, bestIdx] = max(scoreIn);
+if ~(isfinite(bestScore) && bestScore > 0)
+    error("%s requires at least one positive branch score.", char(ownerName));
+end
+
+if bestScore < 0.20
+    keepMask = false(size(scoreIn));
+    keepMask(bestIdx) = true;
+else
+    keepMask = scoreIn >= 0.85 * bestScore;
+    if ~any(keepMask)
+        keepMask(bestIdx) = true;
+    end
+end
+
+scoreOut = zeros(size(scoreIn));
+scoreOut(keepMask) = scoreIn(keepMask);
+end
+
+function relOut = local_sc_fde_combine_branch_reliability_local(relList, scoreWeights, ownerName)
+if nargin < 3 || strlength(string(ownerName)) == 0
+    ownerName = "SC-FDE diversity reliability combine";
+end
+if ~(iscell(relList) && numel(relList) == numel(scoreWeights))
+    error("%s requires matched reliability/weight lists.", char(ownerName));
+end
+
+scoreWeights = double(scoreWeights(:));
+validMask = false(numel(relList), 1);
+coreLen = [];
+for branchIdx = 1:numel(relList)
+    relNow = relList{branchIdx};
+    if isempty(relNow)
+        error("%s branch %d reliability is empty.", char(ownerName), branchIdx);
+    end
+    relNow = relNow(:);
+    relList{branchIdx} = relNow;
+    if ~(isfinite(scoreWeights(branchIdx)) && scoreWeights(branchIdx) > 0)
+        continue;
+    end
+    validMask(branchIdx) = true;
+    if isempty(coreLen)
+        coreLen = numel(relNow);
+    elseif numel(relNow) ~= coreLen
+        error("%s branch reliability lengths are inconsistent.", char(ownerName));
+    end
+end
+if ~any(validMask)
+    error("%s produced no valid branch weights.", char(ownerName));
+end
+
+usedIdx = find(validMask);
+relMat = zeros(coreLen, numel(usedIdx));
+scoreUse = zeros(numel(usedIdx), 1);
+for k = 1:numel(usedIdx)
+    branchIdx = usedIdx(k);
+    relMat(:, k) = local_fit_reliability_length_local(relList{branchIdx}, coreLen);
+    scoreUse(k) = scoreWeights(branchIdx);
+end
+denom = sum(scoreUse);
+if ~(isfinite(denom) && denom > 0)
+    error("%s denominator is invalid.", char(ownerName));
+end
+relOut = (relMat * scoreUse) / denom;
 end
 
 function [core, relCore] = local_sc_fde_core_from_physical_hop_local(r, rel, hopIdx, plan)
@@ -2910,6 +3378,12 @@ hopFreqs = freqOffsets(1:nHops);
 end
 
 function [xCoreOut, reliability, mse] = local_sc_fde_apply_pilot_scalar_local(xCore, pilot, cfg, maxShift)
+xCoreOut = complex(zeros(0, 1));
+[~, xCoreNorm, reliability, mse] = local_sc_fde_align_core_to_pilot_local(xCore, pilot, cfg, maxShift);
+xCoreOut = xCoreNorm;
+end
+
+function [xCoreRawOut, xCoreNormOut, reliability, mse, alphaOut] = local_sc_fde_align_core_to_pilot_local(xCore, pilot, cfg, maxShift)
 xCore = xCore(:);
 pilot = pilot(:);
 if nargin < 4 || isempty(maxShift)
@@ -2925,8 +3399,10 @@ if den <= 0
 end
 
 bestMse = inf;
-bestCore = xCore;
+bestCoreRaw = xCore;
+bestCoreNorm = xCore;
 bestPilotRx = xCore(1:numel(pilot));
+bestAlpha = complex(1, 0);
 for shiftNow = -maxShift:maxShift
     cand = circshift(xCore, shiftNow);
     pilotRxNow = cand(1:numel(pilot));
@@ -2941,22 +3417,64 @@ for shiftNow = -maxShift:maxShift
     mseNow = mean(abs(pilotUse - pilot).^2);
     if isfinite(mseNow) && mseNow < bestMse
         bestMse = mseNow;
-        bestCore = candUse;
+        bestCoreRaw = cand;
+        bestCoreNorm = candUse;
         bestPilotRx = pilotUse;
+        bestAlpha = alpha;
     end
 end
-xCoreOut = bestCore;
+xCoreRawOut = bestCoreRaw;
+xCoreNormOut = bestCoreNorm;
 mse = mean(abs(bestPilotRx - pilot).^2);
 if ~(isscalar(mse) && isfinite(mse) && mse >= 0)
     error("SC-FDE pilot residual MSE is invalid.");
 end
 reliability = 1 / (1 + mse / max(double(cfg.pilotMseReference), eps));
 reliability = max(double(cfg.minReliability), min(1, reliability));
+alphaOut = bestAlpha;
+if ~isfinite(alphaOut)
+    error("SC-FDE pilot gain estimate is invalid.");
+end
 end
 
 function tf = local_rx_state_sc_fde_enabled_local(rxState)
 tf = isstruct(rxState) && isfield(rxState, "scFdePlan") && isstruct(rxState.scFdePlan) ...
     && isfield(rxState.scFdePlan, "enable") && logical(rxState.scFdePlan.enable);
+end
+
+function tf = local_rx_state_sc_fde_diversity_enabled_local(rxState)
+tf = isstruct(rxState) && isfield(rxState, "scFdeDiversity") && isstruct(rxState.scFdeDiversity) ...
+    && isfield(rxState.scFdeDiversity, "enable") && logical(rxState.scFdeDiversity.enable);
+end
+
+function divState = local_disabled_sc_fde_diversity_state_local()
+divState = struct( ...
+    "enable", false, ...
+    "nBranches", 0, ...
+    "payloadBranches", {cell(0, 1)}, ...
+    "reliabilityBranches", {cell(0, 1)}, ...
+    "eqBranches", {cell(0, 1)}, ...
+    "fallbackEnable", false, ...
+    "fallbackBranches", {cell(0, 1)}, ...
+    "fallbackReliabilityBranches", {cell(0, 1)});
+end
+
+function divState = local_require_sc_fde_diversity_state_local(rxState)
+if ~local_rx_state_sc_fde_diversity_enabled_local(rxState)
+    error("SC-FDE diversity state is required.");
+end
+divState = rxState.scFdeDiversity;
+requiredFields = ["nBranches", "payloadBranches", "reliabilityBranches", "eqBranches", ...
+    "fallbackEnable", "fallbackBranches", "fallbackReliabilityBranches"];
+local_require_struct_fields_local(divState, requiredFields, "rxState.scFdeDiversity");
+divState.nBranches = round(double(divState.nBranches));
+if ~(isscalar(divState.nBranches) && isfinite(divState.nBranches) && divState.nBranches >= 2)
+    error("rxState.scFdeDiversity.nBranches must be an integer >= 2.");
+end
+divState.fallbackEnable = logical(divState.fallbackEnable);
+if ~isscalar(divState.fallbackEnable)
+    error("rxState.scFdeDiversity.fallbackEnable must be a logical scalar.");
+end
 end
 
 function tf = local_sc_fde_equalizer_method_local(rxSyncCfg)
@@ -3430,15 +3948,186 @@ relBlk(~isfinite(relBlk)) = 0;
 relBlk = max(min(relBlk, 1), 0);
 end
 
-function front = local_capture_synced_block_local(rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg)
+function front = local_capture_synced_block_local(rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg, rxDiversityCfg)
 if nargin < 9
     bootstrapChain = strings(1, 0);
 end
 if nargin < 10 || isempty(fhCaptureCfg)
     fhCaptureCfg = struct("enable", false);
 end
-front = capture_synced_block_from_samples( ...
-    rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg);
+if nargin < 11 || isempty(rxDiversityCfg)
+    rxDiversityCfg = local_disabled_rx_diversity_cfg_local();
+end
+
+branchSamples = local_rx_capture_branch_list_local(rxSampleRaw);
+if numel(branchSamples) == 1
+    cfgSingle = local_validate_rx_diversity_cfg_local(rxDiversityCfg, "rxDiversity");
+    if cfgSingle.enable
+        error("RX diversity capture requires multiple branches when rxDiversity.enable=true.");
+    end
+    front = capture_synced_block_from_samples( ...
+        branchSamples{1}, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg);
+    branchFront = front;
+    front.branchFronts = {branchFront};
+    front.branchOkMask = true;
+    front.branchCombineWeights = complex(1, 0);
+    front.branchPowerWeights = 1;
+    return;
+end
+
+front = local_capture_synced_block_diversity_local( ...
+    branchSamples, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg, rxDiversityCfg);
+end
+
+function front = local_capture_synced_block_diversity_local(branchSamples, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg, rxDiversityCfg)
+cfg = local_validate_rx_diversity_cfg_local(rxDiversityCfg, "rxDiversity");
+if ~cfg.enable
+    error("Multi-branch capture requires rxDiversity.enable=true.");
+end
+if numel(branchSamples) ~= double(cfg.nRx)
+    error("RX diversity capture expects %d branches, got %d.", double(cfg.nRx), numel(branchSamples));
+end
+
+fronts = cell(numel(branchSamples), 1);
+okMask = false(numel(branchSamples), 1);
+for branchIdx = 1:numel(branchSamples)
+    fronts{branchIdx} = capture_synced_block_from_samples( ...
+        branchSamples{branchIdx}, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, sampleAction, bootstrapChain, fhCaptureCfg);
+    okMask(branchIdx) = fronts{branchIdx}.ok;
+end
+if ~any(okMask)
+    front = fronts{1};
+    front.branchFronts = fronts;
+    front.branchOkMask = okMask;
+    front.branchCombineWeights = complex(zeros(numel(fronts), 1));
+    front.branchPowerWeights = zeros(numel(fronts), 1);
+    return;
+end
+
+usedIdx = find(okMask);
+combineWeights = complex(zeros(numel(usedIdx), 1));
+powerWeights = zeros(numel(usedIdx), 1);
+for k = 1:numel(usedIdx)
+    [combineWeights(k), powerWeights(k)] = local_diversity_branch_combine_weights_local( ...
+        syncSymRef, fronts{usedIdx(k)}, syncCfgUse);
+end
+if any(~isfinite(powerWeights)) || any(powerWeights <= 0)
+    error("RX diversity combining produced invalid branch power weights.");
+end
+
+rMat = complex(zeros(totalLen, numel(usedIdx)));
+relMat = zeros(totalLen, numel(usedIdx));
+for k = 1:numel(usedIdx)
+    frontNow = fronts{usedIdx(k)};
+    rMat(:, k) = fit_complex_length_local(frontNow.rFull, totalLen);
+    relMat(:, k) = local_fit_reliability_length_local(frontNow.reliabilityFull, totalLen);
+end
+
+switch cfg.combineMethod
+    case "mrc"
+        denom = sum(powerWeights);
+        if ~(isfinite(denom) && denom > 0)
+            error("RX diversity MRC denominator is invalid.");
+        end
+        rComb = (rMat * combineWeights) / denom;
+        relComb = (relMat * powerWeights) / denom;
+    otherwise
+        error("Unsupported rxDiversity.combineMethod: %s.", char(cfg.combineMethod));
+end
+
+[~, refLocalIdx] = max(powerWeights);
+front = fronts{usedIdx(refLocalIdx)};
+front.ok = true;
+front.rFull = rComb;
+front.reliabilityFull = local_fit_reliability_length_local(relComb, totalLen);
+branchCombineWeights = complex(zeros(numel(fronts), 1));
+branchPowerWeights = zeros(numel(fronts), 1);
+branchCombineWeights(usedIdx) = combineWeights;
+branchPowerWeights(usedIdx) = powerWeights;
+front.branchFronts = fronts;
+front.branchOkMask = okMask;
+front.branchCombineWeights = branchCombineWeights;
+front.branchPowerWeights = branchPowerWeights;
+end
+
+function [combineWeight, powerWeight] = local_diversity_branch_combine_weights_local(syncSymRef, front, syncCfgUse)
+combineWeight = complex(NaN, NaN);
+powerWeight = NaN;
+
+if ~(isstruct(front) && isfield(front, "syncInfo") && isstruct(front.syncInfo))
+    error("RX diversity branch is missing syncInfo for combining.");
+end
+
+gainRaw = complex(NaN, NaN);
+if isfield(front.syncInfo, "chanGainEstimate") && ~isempty(front.syncInfo.chanGainEstimate)
+    gainRaw = front.syncInfo.chanGainEstimate;
+end
+gainRawValid = isfinite(gainRaw) && abs(gainRaw) > 1e-12;
+
+compApplied = false;
+if isfield(front.syncInfo, "compensated") && ~isempty(front.syncInfo.compensated)
+    compApplied = logical(front.syncInfo.compensated);
+    if ~isscalar(compApplied)
+        error("RX diversity branch syncInfo.compensated must be a logical scalar.");
+    end
+end
+
+equalizeAmplitude = true;
+if isstruct(syncCfgUse) && isfield(syncCfgUse, "equalizeAmplitude") && ~isempty(syncCfgUse.equalizeAmplitude)
+    equalizeAmplitude = logical(syncCfgUse.equalizeAmplitude);
+    if ~isscalar(equalizeAmplitude)
+        error("rxSync.equalizeAmplitude must be a logical scalar.");
+    end
+end
+
+if compApplied && gainRawValid
+    gainMag = abs(gainRaw);
+    powerWeight = gainMag ^ 2;
+    if equalizeAmplitude
+        % capture_synced_block_from_samples has already divided by hHat,
+        % so each branch is phase/amplitude normalized and should be combined
+        % with post-equalization MRC power weights.
+        combineWeight = complex(powerWeight, 0);
+    else
+        % Only phase was removed, so the residual branch amplitude is |hHat|.
+        combineWeight = complex(gainMag, 0);
+    end
+    return;
+end
+
+gainRaw = local_estimate_diversity_branch_gain_local(syncSymRef, front);
+powerWeight = abs(gainRaw) ^ 2;
+combineWeight = conj(gainRaw);
+end
+
+function gain = local_estimate_diversity_branch_gain_local(syncSymRef, front)
+syncSymRef = syncSymRef(:);
+if ~(isstruct(front) && isfield(front, "rFull") && numel(front.rFull) >= numel(syncSymRef))
+    error("RX diversity branch is missing a valid synchronized preamble.");
+end
+den = sum(abs(syncSymRef).^2);
+if ~(isfinite(den) && den > 0)
+    error("RX diversity reference preamble energy is invalid.");
+end
+preambleRx = front.rFull(1:numel(syncSymRef));
+gain = sum(conj(syncSymRef) .* preambleRx) / den;
+if ~isfinite(gain)
+    error("RX diversity branch gain estimate is invalid.");
+end
+end
+
+function branches = local_rx_capture_branch_list_local(rxCapture)
+if iscell(rxCapture)
+    branches = rxCapture(:);
+else
+    branches = {rxCapture(:)};
+end
+for k = 1:numel(branches)
+    if isempty(branches{k})
+        error("RX capture branch %d is empty.", k);
+    end
+    branches{k} = branches{k}(:);
+end
 end
 
 function fhCaptureCfg = local_packet_sample_fh_capture_cfg_local(txPacket, fhAssumption)
@@ -3874,6 +4563,94 @@ relOut(~isfinite(relOut)) = 0;
 relOut = max(min(relOut, 1), 0);
 end
 
+function [rFull, reliabilityFull, ok] = local_extract_sample_fh_symbol_block_local( ...
+    rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, modCfg, waveform, syncStageSps)
+rFull = complex(zeros(0, 1));
+reliabilityFull = zeros(0, 1);
+ok = false;
+
+if ~(isstruct(waveform) && isfield(waveform, "enable") && waveform.enable)
+    error("Sample-domain FH capture requires waveform.enable=true.");
+end
+if ~(isfield(waveform, "sps") && double(waveform.sps) >= 2)
+    error("Sample-domain FH capture requires waveform.sps>=2.");
+end
+
+decim = round(double(waveform.sps) / double(syncStageSps));
+packetStartSample = 1 + (double(startIdx) - 1) * decim;
+packetSampleLen = local_packet_sample_length_local(totalLen, waveform);
+
+[pktSample, okPkt, extractInfo] = extract_fractional_block( ...
+    rxPrep, packetStartSample, packetSampleLen, local_symbol_extract_sync_cfg_local(syncCfgUse), modCfg, 1);
+if ~okPkt
+    return;
+end
+
+relPkt = local_extract_reliability_from_sample_times_local(relSamplePrep, extractInfo.sampleTimes);
+pktSample = local_apply_fast_fh_packet_demod_local(pktSample, fhCaptureCfg, waveform);
+pktMf = local_matched_filter_samples_local(pktSample, waveform);
+relMf = local_matched_filter_reliability_samples_local(relPkt, waveform);
+[rFull, reliabilityFull] = local_decimate_stage_branch_local(pktMf, relMf, waveform, 1);
+rFull = fit_complex_length_local(rFull, totalLen);
+reliabilityFull = local_fit_reliability_length_local(reliabilityFull, totalLen);
+ok = numel(rFull) == totalLen && any(abs(rFull) > 0);
+end
+
+function pktOut = local_apply_fast_fh_packet_demod_local(pktIn, fhCaptureCfg, waveform)
+pktOut = pktIn(:);
+syncSymbols = local_fast_fh_capture_scalar_local(fhCaptureCfg, "syncSymbols");
+headerSymbols = local_fast_fh_capture_scalar_local(fhCaptureCfg, "headerSymbols");
+headerStart = local_symbol_boundary_sample_index_local(syncSymbols, waveform);
+dataStart = local_symbol_boundary_sample_index_local(syncSymbols + headerSymbols, waveform);
+
+if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
+        && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable
+    headerStop = min(numel(pktOut), dataStart - 1);
+    if headerStart <= headerStop
+        pktOut(headerStart:headerStop) = local_fast_fh_segment_demod_local( ...
+            pktOut(headerStart:headerStop), fhCaptureCfg.headerFhCfg, waveform);
+    end
+end
+
+if isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
+        && isfield(fhCaptureCfg.dataFhCfg, "enable") && fhCaptureCfg.dataFhCfg.enable
+    dataStart = min(max(1, dataStart), numel(pktOut) + 1);
+    if dataStart <= numel(pktOut)
+        pktOut(dataStart:end) = local_fast_fh_segment_demod_local( ...
+            pktOut(dataStart:end), fhCaptureCfg.dataFhCfg, waveform);
+    end
+end
+end
+
+function segOut = local_fast_fh_segment_demod_local(segIn, fhCfg, waveform)
+hopInfo = fh_sample_hop_info_from_cfg(fhCfg, waveform, numel(segIn));
+segOut = fh_demodulate_samples(segIn, hopInfo, waveform);
+end
+
+function value = local_fast_fh_capture_scalar_local(fhCaptureCfg, fieldName)
+if ~(isfield(fhCaptureCfg, fieldName) && ~isempty(fhCaptureCfg.(fieldName)))
+    error("fhCaptureCfg.%s is required for sample-domain FH capture.", fieldName);
+end
+value = round(double(fhCaptureCfg.(fieldName)));
+if ~(isscalar(value) && isfinite(value) && value >= 0)
+    error("fhCaptureCfg.%s must be a nonnegative finite scalar.", fieldName);
+end
+end
+
+function nSample = local_packet_sample_length_local(nSym, waveform)
+nSym = max(0, round(double(nSym)));
+if ~waveform.enable
+    nSample = nSym;
+    return;
+end
+nSample = (nSym - 1) * round(double(waveform.sps)) + numel(waveform.rrcTaps);
+end
+
+function sampleIdx = local_symbol_boundary_sample_index_local(nLeadingSym, waveform)
+nLeadingSym = max(0, round(double(nLeadingSym)));
+sampleIdx = nLeadingSym * round(double(waveform.sps)) + 1;
+end
+
 function decision = local_select_frontend_action_local(methodName, adaptiveEnabled, rFull, syncSymRef, syncInfo, bootstrapPath, mitigation, channelCfg, waveform, N0)
 featureCount = numel(ml_interference_selector_feature_names());
 decision = struct( ...
@@ -4239,6 +5016,29 @@ for actionName = actions
 end
 end
 
+function [phy, headerOk, rFullUsed] = local_try_decode_header_candidates_local(headerCandidates, preLen, hdrLen, primaryAction, mitigation, frameCfg, fhCfgBase, fecCfg, softCfg, sampleFhDehopped)
+if ~(isstruct(headerCandidates) && ~isempty(headerCandidates))
+    error("Header decode candidate list must be a non-empty struct array.");
+end
+
+phy = struct();
+headerOk = false;
+rFullUsed = headerCandidates(1).rFull;
+
+for idx = 1:numel(headerCandidates)
+    candidate = headerCandidates(idx);
+    if ~(isfield(candidate, "rFull") && ~isempty(candidate.rFull))
+        error("Header decode candidate %d is missing rFull.", idx);
+    end
+    [phy, headerOk] = local_try_decode_header_local( ...
+        candidate.rFull, preLen, hdrLen, primaryAction, mitigation, frameCfg, fhCfgBase, fecCfg, softCfg, sampleFhDehopped);
+    if headerOk
+        rFullUsed = candidate.rFull;
+        return;
+    end
+end
+end
+
 function [hdrRaw, hopInfo] = local_header_known_fh_demod_local(hdrRaw, frameCfg, fhCfgBase, fecCfg, sampleFhDehopped)
 hdrRaw = hdrRaw(:);
 fhCfg = phy_header_fh_cfg(frameCfg, fhCfgBase, fecCfg);
@@ -4257,10 +5057,11 @@ if ~sampleFhDehopped
 end
 end
 
-function raw = local_init_raw_capture_local(nPackets, nSessionFrames)
+function raw = local_init_raw_capture_local(nPackets, nSessionFrames, rxDiversityCfg)
 raw = struct();
 raw.rxPackets = cell(nPackets, 1);
 raw.sessionRx = cell(nSessionFrames, 1);
+raw.rxDiversity = rxDiversityCfg;
 end
 
 function nom = local_init_packet_nominal_local(nPackets, nSessionFrames)
@@ -4295,7 +5096,7 @@ nom.adaptiveBootstrapPath = strings(nFrames, 1);
 nom.adaptiveConfidence = nan(nFrames, 1);
 end
 
-function sessionRx = local_capture_session_frames_raw_local(sessionFrames, rxAmplitudeScale, N0, channelSample, frameDelay, waveform)
+function sessionRx = local_capture_session_frames_raw_local(sessionFrames, rxAmplitudeScale, N0, channelBank, frameDelay, waveform, rxDiversityCfg)
 sessionRx = cell(numel(sessionFrames), 1);
 if isempty(sessionFrames)
     return;
@@ -4304,8 +5105,35 @@ end
 for frameIdx = 1:numel(sessionFrames)
     sessionFrame = sessionFrames(frameIdx);
     tx = [zeros(frameDelay, 1); rxAmplitudeScale * sessionFrame.txSymForChannel];
-    rx = channel_bg_impulsive(tx, N0, channelSample);
-    sessionRx{frameIdx} = rx;
+    sessionRx{frameIdx} = local_capture_rx_diversity_waveforms_local(tx, N0, channelBank, rxDiversityCfg);
+end
+end
+
+function rxCfg = local_capture_rx_diversity_cfg_local(branchCapture)
+branches = local_rx_capture_branch_list_local(branchCapture);
+if numel(branches) <= 1
+    rxCfg = local_disabled_rx_diversity_cfg_local();
+else
+    rxCfg = struct("enable", true, "nRx", double(numel(branches)), "combineMethod", "mrc");
+end
+end
+
+function rxBranches = local_capture_rx_diversity_waveforms_local(tx, N0, channelBank, rxDiversityCfg)
+cfg = local_validate_rx_diversity_cfg_local(rxDiversityCfg, "rxDiversity");
+if ~iscell(channelBank) || numel(channelBank) ~= double(cfg.nRx)
+    error("RX diversity channel bank must contain %d branches.", double(cfg.nRx));
+end
+rxBranches = cell(double(cfg.nRx), 1);
+for branchIdx = 1:double(cfg.nRx)
+    rxBranches{branchIdx} = channel_bg_impulsive(tx, N0, channelBank{branchIdx});
+end
+end
+
+function channelBank = local_freeze_rx_diversity_channel_bank_local(channelIn, rxDiversityCfg)
+cfg = local_validate_rx_diversity_cfg_local(rxDiversityCfg, "rxDiversity");
+channelBank = cell(double(cfg.nRx), 1);
+for branchIdx = 1:double(cfg.nRx)
+    channelBank{branchIdx} = local_freeze_channel_realization_local(channelIn);
 end
 end
 
@@ -4329,7 +5157,7 @@ for pktIdx = 1:nPackets
     bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
     fhCaptureCfg = local_packet_sample_fh_capture_cfg_local(txPackets(pktIdx), fhAssumption);
     front = local_capture_synced_block_local( ...
-        rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, sampleActionHint, bootstrapChain, fhCaptureCfg);
+        rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, sampleActionHint, bootstrapChain, fhCaptureCfg, rawCapture.rxDiversity);
     if ~front.ok
         continue;
     end
@@ -4342,7 +5170,7 @@ for pktIdx = 1:nPackets
     if local_is_adaptive_frontend_method_local(methodName) && string(decision.sampleAction) ~= sampleActionHint
         front = local_capture_synced_block_local( ...
             rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, ...
-            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg);
+            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg, rawCapture.rxDiversity);
         if ~front.ok
             continue;
         end
@@ -4356,7 +5184,9 @@ for pktIdx = 1:nPackets
 
     multipathEqReliabilityFull = [];
     multipathEq = [];
+    rFullRaw = rFull;
     rFullForHeader = rFull;
+    headerDecodeCandidates = local_single_header_decode_candidate_local("none", rFullForHeader);
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
         eqCfg = rxSyncCfg.multipathEq;
@@ -4374,16 +5204,18 @@ for pktIdx = 1:nPackets
             rFull = local_apply_frequency_aware_equalizer_block_local(rFull, eq, freqBySymbol);
             rFullForHeader = rFull;
         end
+        headerDecodeCandidates = local_build_header_decode_candidates_local( ...
+            rFullRaw, rFullForHeader, syncSymRef, rxSyncCfg, N0, chLenSymbols, freqBySymbol);
     end
 
     nom.frontEndOk(pktIdx) = true;
-    nom.preambleRx{pktIdx} = fit_complex_length_local(rFullForHeader(1:preLen), preLen);
     nom.preambleRef{pktIdx} = syncSymRef;
 
     actionName = string(decision.symbolAction);
-    [phy, headerOk] = local_try_decode_header_local( ...
-        rFullForHeader, preLen, hdrLen, actionName, mitigation, p.frame, p.fh, p.fec, p.softMetric, ...
+    [phy, headerOk, rFullHeaderUsed] = local_try_decode_header_candidates_local( ...
+        headerDecodeCandidates, preLen, hdrLen, actionName, mitigation, p.frame, p.fh, p.fec, p.softMetric, ...
         local_header_sample_fh_demod_enabled_local(fhCaptureCfg));
+    nom.preambleRx{pktIdx} = fit_complex_length_local(rFullHeaderUsed(1:preLen), preLen);
     nom.headerOk(pktIdx) = headerOk;
     if ~headerOk
         continue;
@@ -4404,6 +5236,8 @@ for pktIdx = 1:nPackets
         rxState.scFdeN0 = double(N0);
         rxState.scFdeFallbackSymbols = fit_complex_length_local(rFullEqGuard(preLen+hdrLen+1:end), rxState.nDataSym);
         rxState.scFdeFallbackReliability = local_fit_reliability_length_local(reliabilityFull(preLen+hdrLen+1:end), rxState.nDataSym);
+        rxState.scFdeDiversity = local_build_sc_fde_diversity_state_local( ...
+            front, preLen, hdrLen, syncSymRef, rxSyncCfg, p.mod, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState);
     end
     symbolFhEnabled = fhEnabled && ~fh_is_fast(rxState.fhCfg);
     if symbolFhEnabled
@@ -4440,7 +5274,7 @@ for frameIdx = 1:numel(sessionFrames)
     bootstrapChain = local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled);
     fhCaptureCfg = local_session_sample_fh_capture_cfg_local(sessionFrame, fhAssumption);
     front = local_capture_synced_block_local( ...
-        sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, sampleActionHint, bootstrapChain, fhCaptureCfg);
+        sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, sampleActionHint, bootstrapChain, fhCaptureCfg, local_capture_rx_diversity_cfg_local(sessionRx{frameIdx}));
     if ~front.ok
         continue;
     end
@@ -4453,7 +5287,7 @@ for frameIdx = 1:numel(sessionFrames)
     if local_is_adaptive_frontend_method_local(methodName) && string(decision.sampleAction) ~= sampleActionHint
         front = local_capture_synced_block_local( ...
             sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, ...
-            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg);
+            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg, local_capture_rx_diversity_cfg_local(sessionRx{frameIdx}));
         if ~front.ok
             continue;
         end
@@ -4860,6 +5694,67 @@ if ~isfield(metaOut, "rsParityPacketsPerBlock")
 end
 end
 
+function divState = local_build_sc_fde_diversity_state_local(front, preLen, hdrLen, syncSymRef, rxSyncCfg, modCfg, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState)
+divState = local_disabled_sc_fde_diversity_state_local();
+if ~local_sc_fde_equalizer_method_local(rxSyncCfg)
+    return;
+end
+
+branchFronts = local_valid_capture_branch_fronts_local(front);
+if numel(branchFronts) <= 1
+    return;
+end
+
+eqCfg = rxSyncCfg.multipathEq;
+totalLen = preLen + hdrLen + rxState.nDataSym;
+payloadBranches = cell(numel(branchFronts), 1);
+reliabilityBranches = cell(numel(branchFronts), 1);
+eqBranches = cell(numel(branchFronts), 1);
+fallbackBranches = cell(numel(branchFronts), 1);
+fallbackReliabilityBranches = cell(numel(branchFronts), 1);
+
+for branchIdx = 1:numel(branchFronts)
+    branchFront = branchFronts{branchIdx};
+    if ~(isstruct(branchFront) && isfield(branchFront, "rFull") && isfield(branchFront, "reliabilityFull"))
+        error("SC-FDE diversity branch %d is missing synchronized full-block state.", branchIdx);
+    end
+    rFullBranch = fit_complex_length_local(branchFront.rFull, totalLen);
+    relFullBranch = local_fit_reliability_length_local(branchFront.reliabilityFull, totalLen);
+    eqBranch = local_design_multipath_equalizer_local( ...
+        syncSymRef, rFullBranch(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+    rFullEqGuardBranch = local_apply_frequency_aware_equalizer_block_local(rFullBranch, eqBranch, freqBySymbol);
+
+    payloadBranches{branchIdx} = fit_complex_length_local(rFullBranch(preLen+hdrLen+1:end), rxState.nDataSym);
+    reliabilityBranches{branchIdx} = local_fit_reliability_length_local(relFullBranch(preLen+hdrLen+1:end), rxState.nDataSym);
+    eqBranches{branchIdx} = eqBranch;
+    fallbackBranches{branchIdx} = fit_complex_length_local(rFullEqGuardBranch(preLen+hdrLen+1:end), rxState.nDataSym);
+    fallbackReliabilityBranches{branchIdx} = local_fit_reliability_length_local(relFullBranch(preLen+hdrLen+1:end), rxState.nDataSym);
+end
+
+divState = struct( ...
+    "enable", true, ...
+    "nBranches", double(numel(branchFronts)), ...
+    "payloadBranches", {payloadBranches}, ...
+    "reliabilityBranches", {reliabilityBranches}, ...
+    "eqBranches", {eqBranches}, ...
+    "fallbackEnable", true, ...
+    "fallbackBranches", {fallbackBranches}, ...
+    "fallbackReliabilityBranches", {fallbackReliabilityBranches});
+end
+
+function branchFronts = local_valid_capture_branch_fronts_local(front)
+if ~(isstruct(front) && isfield(front, "branchFronts") && iscell(front.branchFronts) ...
+        && isfield(front, "branchOkMask") && ~isempty(front.branchOkMask))
+    error("RX front is missing branchFronts/branchOkMask metadata.");
+end
+branchOkMask = logical(front.branchOkMask(:));
+if numel(branchOkMask) ~= numel(front.branchFronts)
+    error("RX front branchOkMask size does not match branchFronts.");
+end
+usedIdx = find(branchOkMask);
+branchFronts = front.branchFronts(usedIdx);
+end
+
 function state = derive_rx_packet_state_local(p, pktIdx, packetDataBitsLen)
 if nargin < 3 || isempty(packetDataBitsLen) || ~isfinite(packetDataBitsLen)
     packetDataBitsLen = local_fixed_packet_data_bits_len_local(p, pktIdx);
@@ -4902,6 +5797,7 @@ state.fhCfg = fhCfg;
 state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nFhInputSym);
 state.scFdeCfg = scFdeCfg;
 state.scFdePlan = scFdePlan;
+state.scFdeDiversity = local_disabled_sc_fde_diversity_state_local();
 end
 
 function [payloadPktRx, sessionOut, packetInfo, ok] = recover_payload_packet_local(packetDataBitsRx, phyHeader, sessionIn, p)
@@ -5610,6 +6506,47 @@ tf = rxSyncCfg.compensateCarrier || rxSyncCfg.fineSearchRadius > 0 || ...
     rxSyncCfg.enableFractionalTiming || rxSyncCfg.carrierPll.enable || dllEnabled;
 end
 
+function cfg = local_disabled_rx_diversity_cfg_local()
+cfg = struct("enable", false, "nRx", 1, "combineMethod", "mrc");
+end
+
+function cfg = local_validate_rx_diversity_cfg_local(cfgIn, ownerName)
+if nargin < 2 || strlength(string(ownerName)) == 0
+    ownerName = "rxDiversity";
+end
+if ~(isstruct(cfgIn) && isscalar(cfgIn))
+    error("%s 必须是标量struct。", char(ownerName));
+end
+local_require_struct_fields_local(cfgIn, ["enable", "nRx", "combineMethod"], char(ownerName));
+
+cfg = struct();
+cfg.enable = logical(cfgIn.enable);
+if ~isscalar(cfg.enable)
+    error("%s.enable 必须是逻辑标量。", char(ownerName));
+end
+cfg.nRx = double(cfgIn.nRx);
+if ~(isscalar(cfg.nRx) && isfinite(cfg.nRx) && cfg.nRx >= 1 && abs(cfg.nRx - round(cfg.nRx)) <= 1e-12)
+    error("%s.nRx 必须是正整数标量。", char(ownerName));
+end
+cfg.nRx = round(cfg.nRx);
+cfg.combineMethod = lower(string(cfgIn.combineMethod));
+if strlength(cfg.combineMethod) == 0
+    error("%s.combineMethod 不能为空。", char(ownerName));
+end
+if cfg.enable
+    if cfg.nRx ~= 2
+        error("%s.enable=true 时当前仅支持 nRx=2。", char(ownerName));
+    end
+else
+    if cfg.nRx ~= 1
+        error("%s.enable=false 时必须设置 nRx=1。", char(ownerName));
+    end
+end
+if cfg.combineMethod ~= "mrc"
+    error("%s.combineMethod 当前仅支持 ""mrc""。", char(ownerName));
+end
+end
+
 function eveCfg = local_validate_eve_config_local(eveCfg, methodsMain, channelCfg)
 local_require_struct_field_local(eveCfg, "linkGainOffsetDb", "eve");
 local_require_struct_field_local(eveCfg, "scrambleAssumption", "eve");
@@ -5617,6 +6554,7 @@ local_require_struct_field_local(eveCfg, "fhAssumption", "eve");
 local_require_struct_field_local(eveCfg, "chaosAssumption", "eve");
 local_require_struct_field_local(eveCfg, "chaosApproxDelta", "eve");
 local_require_struct_field_local(eveCfg, "rxSync", "eve");
+local_require_struct_field_local(eveCfg, "rxDiversity", "eve");
 local_require_struct_field_local(eveCfg, "mitigation", "eve");
 
 if ~isscalar(double(eveCfg.linkGainOffsetDb)) || ~isfinite(double(eveCfg.linkGainOffsetDb))
@@ -5631,6 +6569,7 @@ end
 if ~isstruct(eveCfg.rxSync) || ~isscalar(eveCfg.rxSync)
     error("eve.rxSync 必须是标量struct。");
 end
+eveCfg.rxDiversity = local_validate_rx_diversity_cfg_local(eveCfg.rxDiversity, "eve.rxDiversity");
 if ~isstruct(eveCfg.mitigation) || ~isscalar(eveCfg.mitigation)
     error("eve.mitigation 必须是标量struct。");
 end
@@ -5707,6 +6646,14 @@ summary = struct( ...
     "carrierPllEnable", logical(rxSyncCfg.carrierPll.enable), ...
     "multipathEqEnable", logical(rxSyncCfg.multipathEq.enable), ...
     "timingDllEnable", logical(rxSyncCfg.timingDll.enable));
+end
+
+function summary = local_pack_rx_diversity_summary_local(rxDiversityCfg)
+cfg = local_validate_rx_diversity_cfg_local(rxDiversityCfg, "rxDiversity");
+summary = struct( ...
+    "enable", logical(cfg.enable), ...
+    "nRx", double(cfg.nRx), ...
+    "combineMethod", string(cfg.combineMethod));
 end
 
 function summary = local_pack_mitigation_summary_local(mitigationCfg)

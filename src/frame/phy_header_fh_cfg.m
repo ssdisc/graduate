@@ -60,6 +60,15 @@ if copies > 1
     fhCfg.freqSet = local_spread_copy_freq_set(fhCfg.freqSet, copies);
     fhCfg.nFreqs = numel(fhCfg.freqSet);
     fhCfg.symbolsPerHop = phy_header_single_symbol_length(frameCfg, fec);
+elseif fhCfg.enable && ~fh_is_fast(fhCfg)
+    if ~isfield(fec, "trellis") || isempty(fec.trellis)
+        error("PHY-header FH validation requires fec.trellis.");
+    end
+    minSymbolsPerHop = phy_header_nondiverse_min_symbols_per_hop(frameCfg, fhCfg, fec);
+    if fhCfg.symbolsPerHop < minSymbolsPerHop
+        error("frame.phyHeaderFhSymbolsPerHop=%d is too small for a single-copy PHY header; it must be >= %d (copyLen=%d, nFreqs=%d). Increase frame.phyHeaderFhSymbolsPerHop or enable frame.phyHeaderDiversity.", ...
+            fhCfg.symbolsPerHop, minSymbolsPerHop, phy_header_single_symbol_length(frameCfg, fec), numel(fhCfg.freqSet));
+    end
 end
 end
 
