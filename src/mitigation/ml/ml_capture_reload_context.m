@@ -14,6 +14,8 @@ ctx.waveform = fullCtx.waveform;
 ctx.fh = fullCtx.fh;
 ctx.frame = fullCtx.frame;
 ctx.dsss = fullCtx.dsss;
+ctx.scFde = fullCtx.scFde;
+ctx.rxDiversity = fullCtx.rxDiversity;
 ctx.rxSync = fullCtx.rxSync;
 ctx.channel = struct( ...
     "impulseProb", fullCtx.channel.impulseProb, ...

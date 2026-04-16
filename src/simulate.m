@@ -2750,7 +2750,7 @@ function [yPrep, relPrep] = local_prepare_data_symbols_local(rData, rawReliabili
 %
 % FH-aware multipath equalization has already been applied on the full
 % [preamble; PHY; data] block. Here we only process the payload region.
-if local_sc_fde_equalizer_method_local(rxSyncCfg) && local_rx_state_sc_fde_diversity_enabled_local(rxState)
+if local_rx_state_sc_fde_diversity_enabled_local(rxState)
     [r, relPrep] = local_prepare_sc_fde_diversity_data_symbols_local( ...
         rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation);
 else
@@ -2800,9 +2800,6 @@ end
 end
 
 function [rOut, relOut] = local_prepare_sc_fde_diversity_data_symbols_local(rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation)
-if ~local_sc_fde_equalizer_method_local(rxSyncCfg)
-    error("SC-FDE diversity payload preparation requires rxSync.multipathEq.method=""sc_fde_mmse"".");
-end
 divState = local_require_sc_fde_diversity_state_local(rxState);
 nBranches = double(divState.nBranches);
 branchSymbols = cell(nBranches, 1);
@@ -2822,8 +2819,13 @@ for branchIdx = 1:nBranches
     end
 end
 
-[rOut, relOut] = local_apply_sc_fde_mmse_payload_diversity_local( ...
-    branchSymbols, branchReliability, fallbackSymbols, fallbackReliability, rxState, rxSyncCfg);
+if local_sc_fde_equalizer_method_local(rxSyncCfg)
+    [rOut, relOut] = local_apply_sc_fde_mmse_payload_diversity_local( ...
+        branchSymbols, branchReliability, fallbackSymbols, fallbackReliability, rxState, rxSyncCfg);
+else
+    [rOut, relOut] = local_apply_sc_fde_payload_diversity_local( ...
+        branchSymbols, branchReliability, rxState);
+end
 end
 
 function [rOut, relOut] = local_fast_fh_symbol_prepare_local(rIn, relIn, hopInfoUsed, rxState)
@@ -3078,7 +3080,7 @@ for hopIdx = 1:plan.nHops
         [~, eqCoreList{branchIdx}, hopRel] = local_sc_fde_align_core_to_pilot_local( ...
             xCore, pilot, cfg, maxPilotShift);
         eqRelList{branchIdx} = min(relCore, hopRel);
-        eqScoreList(branchIdx) = double(hopRel);
+        eqScoreList(branchIdx) = mean(eqRelList{branchIdx});
     end
 
     eqScoreList = local_sc_fde_gate_branch_scores_local( ...
@@ -3099,7 +3101,7 @@ for hopIdx = 1:plan.nHops
             [~, fallbackCoreList{branchIdx}, fallbackHopRel] = local_sc_fde_align_core_to_pilot_local( ...
                 fallbackCoreRaw, pilot, cfg, maxPilotShiftList(branchIdx));
             fallbackRelList{branchIdx} = min(fallbackRelCore, fallbackHopRel);
-            fallbackScoreList(branchIdx) = double(fallbackHopRel);
+            fallbackScoreList(branchIdx) = mean(fallbackRelList{branchIdx});
         end
 
         fallbackScoreList = local_sc_fde_gate_branch_scores_local( ...
@@ -3117,6 +3119,53 @@ for hopIdx = 1:plan.nHops
             relCoreComb = fallbackRelComb;
         end
     end
+
+    dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
+    dataOutFull(dataIdx) = xCoreComb(plan.pilotLength + 1:end);
+    relOutFull(dataIdx) = relCoreComb(plan.pilotLength + 1:end);
+end
+
+dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
+relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
+end
+
+function [dataOut, relOut] = local_apply_sc_fde_payload_diversity_local(branchSymbols, branchReliability, rxState)
+divState = local_require_sc_fde_diversity_state_local(rxState);
+plan = rxState.scFdePlan;
+cfg = rxState.scFdeCfg;
+nBranches = double(divState.nBranches);
+if ~(iscell(branchSymbols) && iscell(branchReliability) ...
+        && numel(branchSymbols) == nBranches && numel(branchReliability) == nBranches)
+    error("SC-FDE diversity payload branches must match rxState.scFdeDiversity.nBranches.");
+end
+
+for branchIdx = 1:nBranches
+    branchSymbols{branchIdx} = fit_complex_length_local(branchSymbols{branchIdx}, plan.nTxSymbols);
+    branchReliability{branchIdx} = local_fit_reliability_length_local(branchReliability{branchIdx}, plan.nTxSymbols);
+end
+
+dataOutFull = complex(zeros(plan.nHops * plan.dataSymbolsPerHop, 1));
+relOutFull = ones(plan.nHops * plan.dataSymbolsPerHop, 1);
+
+for hopIdx = 1:plan.nHops
+    pilot = sc_fde_payload_pilot_symbols(cfg, rxState.packetIndex, hopIdx);
+    coreList = cell(nBranches, 1);
+    relList = cell(nBranches, 1);
+    scoreList = zeros(nBranches, 1);
+
+    for branchIdx = 1:nBranches
+        [core, relCore] = local_sc_fde_core_from_physical_hop_local( ...
+            branchSymbols{branchIdx}, branchReliability{branchIdx}, hopIdx, plan);
+        [~, coreList{branchIdx}, hopRel] = local_sc_fde_align_core_to_pilot_local( ...
+            core, pilot, cfg, plan.cpLen);
+        relList{branchIdx} = min(relCore, hopRel);
+        scoreList(branchIdx) = mean(relList{branchIdx});
+    end
+
+    scoreList = local_sc_fde_gate_branch_scores_local( ...
+        scoreList, sprintf("SC-FDE diversity payload hop %d", hopIdx));
+    [xCoreComb, relCoreComb] = local_sc_fde_mrc_combine_branch_cores_local( ...
+        coreList, relList, ones(nBranches, 1), scoreList, sprintf("SC-FDE diversity payload hop %d", hopIdx));
 
     dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
     dataOutFull(dataIdx) = xCoreComb(plan.pilotLength + 1:end);
@@ -5184,6 +5233,8 @@ for pktIdx = 1:nPackets
 
     multipathEqReliabilityFull = [];
     multipathEq = [];
+    chLenSymbols = NaN;
+    freqBySymbol = zeros(totalLen, 1);
     rFullRaw = rFull;
     rFullForHeader = rFull;
     headerDecodeCandidates = local_single_header_decode_candidate_local("none", rFullForHeader);
@@ -5228,6 +5279,10 @@ for pktIdx = 1:nPackets
         rxState.multipathEqReliability = local_fit_reliability_length_local( ...
             multipathEqReliabilityFull(preLen+hdrLen+1:end), rxState.nDataSym);
     end
+    if local_rx_state_sc_fde_enabled_local(rxState)
+        rxState.scFdeDiversity = local_build_sc_fde_diversity_state_local( ...
+            front, preLen, hdrLen, syncSymRef, p.channel, rxSyncCfg, p.mod, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState);
+    end
     if local_sc_fde_equalizer_method_local(rxSyncCfg)
         if isempty(multipathEq)
             error("SC-FDE receiver branch requires a preamble-derived channel estimate.");
@@ -5236,8 +5291,6 @@ for pktIdx = 1:nPackets
         rxState.scFdeN0 = double(N0);
         rxState.scFdeFallbackSymbols = fit_complex_length_local(rFullEqGuard(preLen+hdrLen+1:end), rxState.nDataSym);
         rxState.scFdeFallbackReliability = local_fit_reliability_length_local(reliabilityFull(preLen+hdrLen+1:end), rxState.nDataSym);
-        rxState.scFdeDiversity = local_build_sc_fde_diversity_state_local( ...
-            front, preLen, hdrLen, syncSymRef, rxSyncCfg, p.mod, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState);
     end
     symbolFhEnabled = fhEnabled && ~fh_is_fast(rxState.fhCfg);
     if symbolFhEnabled
@@ -5694,9 +5747,9 @@ if ~isfield(metaOut, "rsParityPacketsPerBlock")
 end
 end
 
-function divState = local_build_sc_fde_diversity_state_local(front, preLen, hdrLen, syncSymRef, rxSyncCfg, modCfg, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState)
+function divState = local_build_sc_fde_diversity_state_local(front, preLen, hdrLen, syncSymRef, channelCfg, rxSyncCfg, modCfg, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState)
 divState = local_disabled_sc_fde_diversity_state_local();
-if ~local_sc_fde_equalizer_method_local(rxSyncCfg)
+if ~local_rx_state_sc_fde_enabled_local(rxState)
     return;
 end
 
@@ -5705,7 +5758,12 @@ if numel(branchFronts) <= 1
     return;
 end
 
-eqCfg = rxSyncCfg.multipathEq;
+multipathEqEnabled = local_multipath_eq_enabled_local(channelCfg, rxSyncCfg);
+useScFdeEq = multipathEqEnabled && local_sc_fde_equalizer_method_local(rxSyncCfg);
+eqCfg = struct();
+if multipathEqEnabled
+    eqCfg = rxSyncCfg.multipathEq;
+end
 totalLen = preLen + hdrLen + rxState.nDataSym;
 payloadBranches = cell(numel(branchFronts), 1);
 reliabilityBranches = cell(numel(branchFronts), 1);
@@ -5720,15 +5778,28 @@ for branchIdx = 1:numel(branchFronts)
     end
     rFullBranch = fit_complex_length_local(branchFront.rFull, totalLen);
     relFullBranch = local_fit_reliability_length_local(branchFront.reliabilityFull, totalLen);
-    eqBranch = local_design_multipath_equalizer_local( ...
-        syncSymRef, rFullBranch(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
-    rFullEqGuardBranch = local_apply_frequency_aware_equalizer_block_local(rFullBranch, eqBranch, freqBySymbol);
+    payloadFullBranch = rFullBranch;
+    eqBranch = struct();
+    rFullEqGuardBranch = complex(zeros(0, 1));
+    if multipathEqEnabled
+        eqBranch = local_design_multipath_equalizer_local( ...
+            syncSymRef, rFullBranch(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+        rFullEqGuardBranch = local_apply_frequency_aware_equalizer_block_local(rFullBranch, eqBranch, freqBySymbol);
+        if ~useScFdeEq
+            payloadFullBranch = rFullEqGuardBranch;
+        end
+    end
 
-    payloadBranches{branchIdx} = fit_complex_length_local(rFullBranch(preLen+hdrLen+1:end), rxState.nDataSym);
+    payloadBranches{branchIdx} = fit_complex_length_local(payloadFullBranch(preLen+hdrLen+1:end), rxState.nDataSym);
     reliabilityBranches{branchIdx} = local_fit_reliability_length_local(relFullBranch(preLen+hdrLen+1:end), rxState.nDataSym);
     eqBranches{branchIdx} = eqBranch;
-    fallbackBranches{branchIdx} = fit_complex_length_local(rFullEqGuardBranch(preLen+hdrLen+1:end), rxState.nDataSym);
-    fallbackReliabilityBranches{branchIdx} = local_fit_reliability_length_local(relFullBranch(preLen+hdrLen+1:end), rxState.nDataSym);
+    if useScFdeEq
+        fallbackBranches{branchIdx} = fit_complex_length_local(rFullEqGuardBranch(preLen+hdrLen+1:end), rxState.nDataSym);
+        fallbackReliabilityBranches{branchIdx} = local_fit_reliability_length_local(relFullBranch(preLen+hdrLen+1:end), rxState.nDataSym);
+    else
+        fallbackBranches{branchIdx} = complex(zeros(0, 1));
+        fallbackReliabilityBranches{branchIdx} = zeros(0, 1);
+    end
 end
 
 divState = struct( ...
@@ -5737,7 +5808,7 @@ divState = struct( ...
     "payloadBranches", {payloadBranches}, ...
     "reliabilityBranches", {reliabilityBranches}, ...
     "eqBranches", {eqBranches}, ...
-    "fallbackEnable", true, ...
+    "fallbackEnable", logical(useScFdeEq), ...
     "fallbackBranches", {fallbackBranches}, ...
     "fallbackReliabilityBranches", {fallbackReliabilityBranches});
 end

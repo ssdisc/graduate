@@ -13,6 +13,9 @@ ctx.mod = fullCtx.mod;
 ctx.waveform = fullCtx.waveform;
 ctx.fh = fullCtx.fh;
 ctx.frame = fullCtx.frame;
+ctx.scFde = fullCtx.scFde;
+ctx.rxDiversity = fullCtx.rxDiversity;
+ctx.rxSync = fullCtx.rxSync;
 ctx.rxSyncMultipathEq = local_eq_context(p);
 ctx.channelMultipath = local_multipath_context(p);
 end
