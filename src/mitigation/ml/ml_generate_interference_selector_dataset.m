@@ -32,20 +32,26 @@ dataset.ebN0dBRange = ebN0dBRange;
 dataset.classNames = classNames;
 dataset.featureNames = featureNames;
 dataset.featureMatrix = zeros(nBlocks, numel(featureNames));
-dataset.labels = strings(nBlocks, 1);
-dataset.labelIndex = zeros(nBlocks, 1);
+dataset.primaryLabels = strings(nBlocks, 1);
+dataset.primaryLabelIndex = zeros(nBlocks, 1);
+dataset.labelMatrix = zeros(nBlocks, numel(classNames));
 dataset.ebN0dBPerBlock = zeros(nBlocks, 1);
 dataset.bootstrapPath = strings(nBlocks, 1);
 
 for b = 1:nBlocks
-    labelNow = labelSchedule(b);
+    primaryLabel = labelSchedule(b);
     success = false;
     for attempt = 1:opts.maxRetriesPerBlock
         ebN0dB = ebN0dBRange(1) + rand() * diff(ebN0dBRange);
         EbN0 = 10.^(ebN0dB / 10);
         N0 = ebn0_to_n0(EbN0, codeRate, bitsPerSym, 1.0);
 
-        pBlock = local_selector_channel_for_class(p, labelNow);
+        pBlock = local_selector_reset_channel_local(p);
+        labelMask = false(1, numel(classNames));
+        [pBlock, labelMask] = local_apply_selector_class_to_channel_local(pBlock, p, primaryLabel, classNames, labelMask);
+        auxiliaryClasses = local_selector_enabled_auxiliary_classes_local(p, primaryLabel, classNames);
+        [pBlock, labelMask] = local_selector_apply_auxiliary_classes_local( ...
+            pBlock, p, auxiliaryClasses, classNames, labelMask);
         [txFrame, fhCaptureCfg] = local_build_training_packet(pBlock, dataSymbolsPerBlock);
         frameDelaySym = randi([0, max(0, round(double(pBlock.channel.maxDelaySymbols)))], 1, 1);
         frameDelay = round(double(frameDelaySym) * waveform.sps);
@@ -70,8 +76,9 @@ for b = 1:nBlocks
         end
 
         dataset.featureMatrix(b, :) = featureRow;
-        dataset.labels(b) = labelNow;
-        dataset.labelIndex(b) = find(classNames == labelNow, 1, "first");
+        dataset.primaryLabels(b) = primaryLabel;
+        dataset.primaryLabelIndex(b) = find(classNames == primaryLabel, 1, "first");
+        dataset.labelMatrix(b, :) = double(labelMask);
         dataset.ebN0dBPerBlock(b) = ebN0dB;
         dataset.bootstrapPath(b) = string(front.bootstrapPath);
         success = true;
@@ -80,14 +87,15 @@ for b = 1:nBlocks
 
     if ~success
         error("Failed to generate a valid selector sample for class %s after %d retries.", ...
-            char(labelNow), opts.maxRetriesPerBlock);
+            char(primaryLabel), opts.maxRetriesPerBlock);
     end
 end
 
-dataset.classCounts = zeros(numel(classNames), 1);
-for k = 1:numel(classNames)
-    dataset.classCounts(k) = nnz(dataset.labels == classNames(k));
-end
+dataset.labels = dataset.primaryLabels;
+dataset.labelIndex = dataset.primaryLabelIndex;
+dataset.primaryClassCounts = accumarray(dataset.primaryLabelIndex(:), 1, [numel(classNames) 1], @sum, 0);
+dataset.classPresenceCounts = sum(dataset.labelMatrix, 1).';
+dataset.classCounts = dataset.primaryClassCounts;
 
 if opts.verbose
     fprintf("Selector dataset generated: %d blocks.\n", nBlocks);
@@ -113,7 +121,7 @@ end
 syncCfg.maxSearchIndex = double(channelCfg.maxDelaySymbols) + mpExtra + 6;
 end
 
-function pBlock = local_selector_channel_for_class(p, labelName)
+function pBlock = local_selector_reset_channel_local(p)
 pBlock = p;
 pBlock.channel.impulseProb = 0;
 pBlock.channel.impulseToBgRatio = 0;
@@ -123,40 +131,198 @@ pBlock.channel.sweep.enable = false;
 pBlock.channel.syncImpairment.enable = false;
 pBlock.channel.multipath.enable = false;
 pBlock.channel.multipath.rayleigh = false;
+end
 
-switch lower(string(labelName))
+function [pBlock, labelMask] = local_apply_selector_class_to_channel_local(pBlock, pRef, labelName, classNames, labelMask)
+labelName = lower(string(labelName));
+labelIdx = find(classNames == labelName, 1, "first");
+if isempty(labelIdx)
+    error("Unsupported selector class: %s", char(labelName));
+end
+
+switch labelName
     case "clean"
         % keep all extra impairments disabled
     case "impulse"
-        pBlock.channel.impulseProb = 0.004 + 0.028 * rand();
-        pBlock.channel.impulseToBgRatio = 15 + 55 * rand();
+        pBlock.channel.impulseProb = local_selector_sample_scaled_local( ...
+            local_selector_channel_scalar_local(pRef.channel, "impulseProb", 0.02), 0.55, 0.004, 0.05);
+        pBlock.channel.impulseToBgRatio = local_selector_sample_scaled_local( ...
+            local_selector_channel_scalar_local(pRef.channel, "impulseToBgRatio", 40), 0.45, 12, 80);
     case "tone"
         pBlock.channel.singleTone.enable = true;
-        pBlock.channel.singleTone.power = 0.004 + 0.08 * rand();
-        pBlock.channel.singleTone.freqHz = -2500 + 5000 * rand();
+        pBlock.channel.singleTone.power = local_selector_sample_scaled_local( ...
+            local_selector_nested_scalar_local(pRef.channel.singleTone, "power", 0.03), 0.65, 0.004, 0.10);
+        pBlock.channel.singleTone.freqHz = local_selector_sample_scaled_local( ...
+            local_selector_nested_scalar_local(pRef.channel.singleTone, "freqHz", 1500), 0.85, -4000, 4000);
         pBlock.channel.singleTone.randomPhase = true;
     case "narrowband"
         pBlock.channel.narrowband.enable = true;
-        pBlock.channel.narrowband.power = 0.004 + 0.08 * rand();
-        pBlock.channel.narrowband.bandwidthFreqPoints = 0.2 + 0.8 * rand();
+        pBlock.channel.narrowband.power = local_selector_sample_scaled_local( ...
+            local_selector_nested_scalar_local(pRef.channel.narrowband, "power", 0.03), 0.65, 0.004, 0.10);
+        pBlock.channel.narrowband.bandwidthFreqPoints = local_selector_sample_scaled_local( ...
+            local_selector_nested_scalar_local(pRef.channel.narrowband, "bandwidthFreqPoints", 0.9), 0.55, 0.2, 1.6);
         [maxCenterFreqPoints, ~] = narrowband_center_freq_points_limit( ...
             pBlock.fh, resolve_waveform_cfg(pBlock), pBlock.channel.narrowband.bandwidthFreqPoints);
-        pBlock.channel.narrowband.centerFreqPoints = -maxCenterFreqPoints + 2 * maxCenterFreqPoints * rand();
+        centerBase = local_selector_nested_scalar_local(pRef.channel.narrowband, "centerFreqPoints", 0.8);
+        if maxCenterFreqPoints <= 0
+            pBlock.channel.narrowband.centerFreqPoints = 0;
+        else
+            centerNow = local_selector_sample_scaled_local(centerBase, 0.85, -maxCenterFreqPoints, maxCenterFreqPoints);
+            pBlock.channel.narrowband.centerFreqPoints = max(min(centerNow, maxCenterFreqPoints), -maxCenterFreqPoints);
+        end
     case "sweep"
         pBlock.channel.sweep.enable = true;
-        pBlock.channel.sweep.power = 0.004 + 0.06 * rand();
-        pBlock.channel.sweep.startHz = -3500 + 1500 * rand();
-        pBlock.channel.sweep.stopHz = 2000 + 1500 * rand();
-        pBlock.channel.sweep.periodSymbols = randi([64 384], 1, 1);
+        pBlock.channel.sweep.power = local_selector_sample_scaled_local( ...
+            local_selector_nested_scalar_local(pRef.channel.sweep, "power", 0.025), 0.65, 0.004, 0.08);
+        startBase = local_selector_nested_scalar_local(pRef.channel.sweep, "startHz", -1800);
+        stopBase = local_selector_nested_scalar_local(pRef.channel.sweep, "stopHz", 1800);
+        pBlock.channel.sweep.startHz = local_selector_sample_scaled_local(startBase, 0.75, -4000, 1000);
+        pBlock.channel.sweep.stopHz = local_selector_sample_scaled_local(stopBase, 0.75, -1000, 4000);
+        if pBlock.channel.sweep.stopHz <= pBlock.channel.sweep.startHz
+            pBlock.channel.sweep.stopHz = min(4000, pBlock.channel.sweep.startHz + 1200 + 1800 * rand());
+        end
+        periodBase = local_selector_nested_scalar_local(pRef.channel.sweep, "periodSymbols", 256);
+        pBlock.channel.sweep.periodSymbols = max(64, min(384, round(local_selector_sample_scaled_local(periodBase, 0.6, 64, 384))));
         pBlock.channel.sweep.randomPhase = true;
     case "multipath"
         pBlock.channel.multipath.enable = true;
-        pBlock.channel.multipath.pathDelaysSymbols = [0 1 2];
-        pBlock.channel.multipath.pathGainsDb = [0, -4 - 6 * rand(), -8 - 8 * rand()];
-        pBlock.channel.multipath.rayleigh = rand() < 0.5;
+        pBlock.channel.multipath.pathDelaysSymbols = local_selector_multipath_delays_local(pRef.channel);
+        pBlock.channel.multipath.pathGainsDb = local_selector_multipath_gains_local(pRef.channel);
+        rayleighBase = local_selector_nested_scalar_local(pRef.channel.multipath, "rayleigh", 1);
+        pBlock.channel.multipath.rayleigh = logical(rayleighBase) || rand() < 0.35;
     otherwise
         error("Unsupported selector class: %s", char(labelName));
 end
+labelMask(labelIdx) = true;
+end
+
+function auxiliaryClasses = local_selector_enabled_auxiliary_classes_local(p, primaryLabel, classNames)
+auxiliaryClasses = strings(1, 0);
+primaryLabel = string(primaryLabel);
+if primaryLabel == "clean"
+    return;
+end
+for k = 1:numel(classNames)
+    className = classNames(k);
+    if className == "clean" || className == primaryLabel
+        continue;
+    end
+    if local_selector_class_enabled_in_channel_local(p.channel, className)
+        auxiliaryClasses(end+1) = className; %#ok<AGROW>
+    end
+end
+end
+
+function [pBlock, labelMask] = local_selector_apply_auxiliary_classes_local(pBlock, pRef, auxiliaryClasses, classNames, labelMask)
+if isempty(auxiliaryClasses)
+    return;
+end
+
+selectedMask = rand(size(auxiliaryClasses)) < 0.7;
+if ~any(selectedMask)
+    selectedMask(randi(numel(auxiliaryClasses), 1, 1)) = true;
+end
+
+selectedClasses = auxiliaryClasses(selectedMask);
+selectedClasses = selectedClasses(randperm(numel(selectedClasses)));
+for k = 1:numel(selectedClasses)
+    [pBlock, labelMask] = local_apply_selector_class_to_channel_local( ...
+        pBlock, pRef, selectedClasses(k), classNames, labelMask);
+end
+end
+
+function tf = local_selector_class_enabled_in_channel_local(channelCfg, className)
+className = lower(string(className));
+switch className
+    case "impulse"
+        tf = isfield(channelCfg, "impulseProb") && double(channelCfg.impulseProb) > 0;
+    case "tone"
+        tf = isfield(channelCfg, "singleTone") && isstruct(channelCfg.singleTone) ...
+            && isfield(channelCfg.singleTone, "enable") && logical(channelCfg.singleTone.enable);
+    case "narrowband"
+        tf = isfield(channelCfg, "narrowband") && isstruct(channelCfg.narrowband) ...
+            && isfield(channelCfg.narrowband, "enable") && logical(channelCfg.narrowband.enable);
+    case "sweep"
+        tf = isfield(channelCfg, "sweep") && isstruct(channelCfg.sweep) ...
+            && isfield(channelCfg.sweep, "enable") && logical(channelCfg.sweep.enable);
+    case "multipath"
+        tf = isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
+            && isfield(channelCfg.multipath, "enable") && logical(channelCfg.multipath.enable);
+    otherwise
+        error("Unsupported selector class for auxiliary sampling: %s", char(className));
+end
+end
+
+function value = local_selector_channel_scalar_local(cfg, fieldName, defaultValue)
+if isfield(cfg, fieldName) && ~isempty(cfg.(fieldName))
+    value = double(cfg.(fieldName));
+else
+    value = double(defaultValue);
+end
+if ~(isscalar(value) && isfinite(value))
+    error("Selector dataset field channel.%s must be a finite scalar.", fieldName);
+end
+end
+
+function value = local_selector_nested_scalar_local(cfg, fieldName, defaultValue)
+if isfield(cfg, fieldName) && ~isempty(cfg.(fieldName))
+    value = double(cfg.(fieldName));
+else
+    value = double(defaultValue);
+end
+if ~(isscalar(value) && isfinite(value))
+    error("Selector dataset field %s must be a finite scalar.", fieldName);
+end
+end
+
+function value = local_selector_sample_scaled_local(baseValue, relativeSpan, minValue, maxValue)
+baseValue = double(baseValue);
+relativeSpan = abs(double(relativeSpan));
+minValue = double(minValue);
+maxValue = double(maxValue);
+if ~(isscalar(baseValue) && isfinite(baseValue))
+    error("Selector dataset baseValue must be a finite scalar.");
+end
+if ~(isscalar(minValue) && isfinite(minValue) && isscalar(maxValue) && isfinite(maxValue) && maxValue >= minValue)
+    error("Selector dataset range must be a finite ascending interval.");
+end
+scale = 1 - relativeSpan + 2 * relativeSpan * rand();
+value = baseValue * scale;
+value = max(min(value, maxValue), minValue);
+end
+
+function delays = local_selector_multipath_delays_local(channelCfg)
+if isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
+        && isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols)
+    delays = round(double(channelCfg.multipath.pathDelaysSymbols(:).'));
+else
+    delays = [0 1 2];
+end
+if isempty(delays) || any(~isfinite(delays)) || any(delays < 0)
+    error("Selector dataset multipath.pathDelaysSymbols must be finite nonnegative values.");
+end
+delays = unique(delays, "stable");
+if delays(1) ~= 0
+    delays = [0 delays];
+end
+end
+
+function gainsDb = local_selector_multipath_gains_local(channelCfg)
+delays = local_selector_multipath_delays_local(channelCfg);
+if isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
+        && isfield(channelCfg.multipath, "pathGainsDb") && ~isempty(channelCfg.multipath.pathGainsDb)
+    baseGains = double(channelCfg.multipath.pathGainsDb(:).');
+else
+    baseGains = [0 -8 -14];
+end
+if numel(baseGains) ~= numel(delays)
+    error("Selector dataset multipath.pathGainsDb length must match pathDelaysSymbols length.");
+end
+gainsDb = baseGains;
+if numel(gainsDb) >= 2
+    gainsDb(2:end) = gainsDb(2:end) + (-3 + 6 * rand(1, numel(gainsDb) - 1));
+end
+gainsDb(1) = 0;
 end
 
 function [txFrame, fhCaptureCfg] = local_build_training_packet(p, dataSymbolsPerBlock)

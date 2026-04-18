@@ -4729,10 +4729,11 @@ if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnable
         probeObs = rFull(:);
     end
     [className, actionName] = local_apply_narrowband_guard_local(mitigation, className, actionName, featureInfo, probeObs);
-    [sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
+    [sampleAction, symbolAction, routeLabel] = local_select_adaptive_frontend_route_local( ...
+        mitigation, classProbabilities, actionName);
 
     decision.selectedClass = string(className);
-    decision.selectedAction = string(actionName);
+    decision.selectedAction = routeLabel;
     decision.sampleAction = sampleAction;
     decision.symbolAction = symbolAction;
     decision.confidence = double(confidence);
@@ -4793,13 +4794,22 @@ model = mitigation.selector;
 if ~(isfield(model, "trained") && logical(model.trained))
     error("adaptive_ml_frontend requires a trained selector model.");
 end
+cfg = local_require_adaptive_frontend_cfg_local(mitigation);
+if ~(isfield(cfg, "classNames") && ~isempty(cfg.classNames))
+    error("mitigation.adaptiveFrontend.classNames is required for adaptive_ml_frontend.");
+end
+if ~(isfield(model, "classNames") && ~isempty(model.classNames))
+    error("adaptive_ml_frontend selector model must provide classNames.");
+end
+modelClasses = string(model.classNames(:).');
+cfgClasses = string(cfg.classNames(:).');
+if ~isequal(modelClasses, cfgClasses)
+    error("adaptive_ml_frontend selector classNames must match mitigation.adaptiveFrontend.classNames.");
+end
 end
 
 function actionName = local_map_class_to_action_local(mitigation, className)
-if ~(isfield(mitigation, "adaptiveFrontend") && isstruct(mitigation.adaptiveFrontend))
-    error("mitigation.adaptiveFrontend is required for adaptive_ml_frontend.");
-end
-cfg = mitigation.adaptiveFrontend;
+cfg = local_require_adaptive_frontend_cfg_local(mitigation);
 if ~(isfield(cfg, "classToAction") && isstruct(cfg.classToAction))
     error("mitigation.adaptiveFrontend.classToAction is required.");
 end
@@ -4810,6 +4820,177 @@ end
 actionName = string(cfg.classToAction.(fieldName));
 if strlength(actionName) == 0
     error("Adaptive front-end action mapping for class %s must not be empty.", char(string(className)));
+end
+if actionName == "adaptive_ml_frontend"
+    error("Adaptive front-end action mapping for class %s must not recursively map to adaptive_ml_frontend.", ...
+        char(string(className)));
+end
+[sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
+if sampleAction ~= "none" && symbolAction ~= "none"
+    error("Adaptive front-end action mapping for class %s must be a single-layer action.", char(string(className)));
+end
+end
+
+function [sampleAction, symbolAction, routeLabel] = local_select_adaptive_frontend_route_local(mitigation, classProbabilities, dominantAction)
+cfg = local_require_adaptive_frontend_cfg_local(mitigation);
+classNames = string(cfg.classNames(:).');
+classProbabilities = double(classProbabilities(:));
+if numel(classProbabilities) ~= numel(classNames)
+    error("adaptive_ml_frontend class probability vector length %d does not match classNames length %d.", ...
+        numel(classProbabilities), numel(classNames));
+end
+if any(~isfinite(classProbabilities)) || any(classProbabilities < 0)
+    error("adaptive_ml_frontend class probabilities must be finite and nonnegative.");
+end
+
+[sampleAction, symbolAction] = local_split_mitigation_action_local(dominantAction);
+routeCfg = local_require_adaptive_sparse_routing_cfg_local(cfg);
+if routeCfg.enable
+    if routeCfg.enableAuxiliarySample && sampleAction == "none"
+        sampleAction = local_select_adaptive_aux_action_local( ...
+            mitigation, classNames, classProbabilities, routeCfg.sampleClasses, ...
+            routeCfg.sampleProbabilityThreshold, "sample");
+    end
+    if routeCfg.enableAuxiliarySymbol && symbolAction == "none"
+        symbolAction = local_select_adaptive_aux_action_local( ...
+            mitigation, classNames, classProbabilities, routeCfg.symbolClasses, ...
+            routeCfg.symbolProbabilityThreshold, "symbol");
+    end
+end
+routeLabel = local_compose_adaptive_action_label_local(sampleAction, symbolAction);
+end
+
+function actionOut = local_select_adaptive_aux_action_local(mitigation, classNames, classProbabilities, candidateClasses, threshold, layerName)
+layerName = lower(string(layerName));
+candidateClasses = string(candidateClasses(:).');
+if isempty(candidateClasses) || any(strlength(candidateClasses) == 0)
+    error("adaptive_ml_frontend sparse routing %s candidate class list must be non-empty.", char(layerName));
+end
+if ~(isscalar(threshold) && isfinite(threshold) && threshold >= 0 && threshold <= 1)
+    error("adaptive_ml_frontend sparse routing %s threshold must be a finite scalar in [0, 1].", char(layerName));
+end
+
+bestProb = -inf;
+actionOut = "none";
+for k = 1:numel(candidateClasses)
+    classNow = candidateClasses(k);
+    idx = find(classNames == classNow, 1, "first");
+    if isempty(idx)
+        error("adaptive_ml_frontend sparse routing candidate class %s is not registered.", char(classNow));
+    end
+    mappedAction = local_map_class_to_action_local(mitigation, classNow);
+    [sampleNow, symbolNow] = local_split_mitigation_action_local(mappedAction);
+    switch layerName
+        case "sample"
+            if sampleNow == "none" || symbolNow ~= "none"
+                error("adaptive_ml_frontend sparse routing class %s must map to a sample-domain action.", char(classNow));
+            end
+            actionNow = sampleNow;
+        case "symbol"
+            if symbolNow == "none" || sampleNow ~= "none"
+                error("adaptive_ml_frontend sparse routing class %s must map to a symbol-domain action.", char(classNow));
+            end
+            actionNow = symbolNow;
+        otherwise
+            error("Unsupported adaptive sparse routing layer: %s", char(layerName));
+    end
+    probNow = classProbabilities(idx);
+    if probNow > bestProb
+        bestProb = probNow;
+        actionOut = actionNow;
+    end
+end
+
+if ~(bestProb >= threshold)
+    actionOut = "none";
+end
+end
+
+function routeLabel = local_compose_adaptive_action_label_local(sampleAction, symbolAction)
+sampleAction = lower(string(sampleAction));
+symbolAction = lower(string(symbolAction));
+if sampleAction == "none" && symbolAction == "none"
+    routeLabel = "none";
+    return;
+end
+if sampleAction == "none"
+    routeLabel = symbolAction;
+    return;
+end
+if symbolAction == "none"
+    routeLabel = sampleAction;
+    return;
+end
+routeLabel = sampleAction + "+" + symbolAction;
+end
+
+function cfg = local_require_adaptive_frontend_cfg_local(mitigation)
+if ~(isfield(mitigation, "adaptiveFrontend") && isstruct(mitigation.adaptiveFrontend))
+    error("mitigation.adaptiveFrontend is required for adaptive_ml_frontend.");
+end
+cfg = mitigation.adaptiveFrontend;
+end
+
+function routeCfg = local_require_adaptive_sparse_routing_cfg_local(cfg)
+if ~(isstruct(cfg) && isfield(cfg, "sparseRouting") && isstruct(cfg.sparseRouting))
+    error("mitigation.adaptiveFrontend.sparseRouting is required.");
+end
+raw = cfg.sparseRouting;
+requiredFields = [ ...
+    "enable", "enableAuxiliarySample", "enableAuxiliarySymbol", ...
+    "sampleClasses", "symbolClasses", ...
+    "sampleProbabilityThreshold", "symbolProbabilityThreshold"];
+for k = 1:numel(requiredFields)
+    if ~isfield(raw, requiredFields(k))
+        error("mitigation.adaptiveFrontend.sparseRouting.%s is required.", char(requiredFields(k)));
+    end
+end
+
+routeCfg = struct();
+routeCfg.enable = local_require_adaptive_logical_scalar_local(raw.enable, "mitigation.adaptiveFrontend.sparseRouting.enable");
+routeCfg.enableAuxiliarySample = local_require_adaptive_logical_scalar_local(raw.enableAuxiliarySample, ...
+    "mitigation.adaptiveFrontend.sparseRouting.enableAuxiliarySample");
+routeCfg.enableAuxiliarySymbol = local_require_adaptive_logical_scalar_local(raw.enableAuxiliarySymbol, ...
+    "mitigation.adaptiveFrontend.sparseRouting.enableAuxiliarySymbol");
+routeCfg.sampleClasses = local_require_adaptive_class_vector_local(raw.sampleClasses, ...
+    cfg.classNames, "mitigation.adaptiveFrontend.sparseRouting.sampleClasses");
+routeCfg.symbolClasses = local_require_adaptive_class_vector_local(raw.symbolClasses, ...
+    cfg.classNames, "mitigation.adaptiveFrontend.sparseRouting.symbolClasses");
+routeCfg.sampleProbabilityThreshold = local_require_adaptive_probability_local(raw.sampleProbabilityThreshold, ...
+    "mitigation.adaptiveFrontend.sparseRouting.sampleProbabilityThreshold");
+routeCfg.symbolProbabilityThreshold = local_require_adaptive_probability_local(raw.symbolProbabilityThreshold, ...
+    "mitigation.adaptiveFrontend.sparseRouting.symbolProbabilityThreshold");
+end
+
+function value = local_require_adaptive_logical_scalar_local(rawValue, fieldName)
+if ~(islogical(rawValue) || isnumeric(rawValue))
+    error("%s must be a logical scalar.", fieldName);
+end
+value = logical(rawValue);
+if ~isscalar(value)
+    error("%s must be a logical scalar.", fieldName);
+end
+end
+
+function classes = local_require_adaptive_class_vector_local(rawClasses, classCatalog, fieldName)
+classes = string(rawClasses(:).');
+if isempty(classes) || any(strlength(classes) == 0)
+    error("%s must be a non-empty string vector.", fieldName);
+end
+classCatalog = string(classCatalog(:).');
+invalid = classes(~ismember(classes, classCatalog));
+if ~isempty(invalid)
+    error("%s contains unsupported classes: %s.", fieldName, strjoin(cellstr(unique(invalid, "stable")), ", "));
+end
+if numel(unique(classes, "stable")) ~= numel(classes)
+    error("%s must not contain duplicates.", fieldName);
+end
+end
+
+function value = local_require_adaptive_probability_local(rawValue, fieldName)
+value = double(rawValue);
+if ~(isscalar(value) && isfinite(value) && value >= 0 && value <= 1)
+    error("%s must be a finite scalar in [0, 1].", fieldName);
 end
 end
 
@@ -4876,6 +5057,11 @@ if ~(isfield(guard, "action") && strlength(string(guard.action)) > 0)
     error("adaptiveFrontend.narrowbandGuard.action is required.");
 end
 actionName = lower(string(guard.action));
+[sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
+if sampleAction ~= "none" || symbolAction == "none"
+    error("adaptiveFrontend.narrowbandGuard.action must be a symbol-domain mitigation action.");
+end
+actionName = symbolAction;
 end
 
 function value = local_guard_scalar_local(cfg, fieldName, defaultValue)
@@ -5612,45 +5798,66 @@ function diagCfg = local_adaptive_frontend_catalog_local(mitigationCfg)
 if ~isstruct(mitigationCfg) || ~isscalar(mitigationCfg)
     error("mitigation 配置必须是标量struct。");
 end
-if ~isfield(mitigationCfg, "adaptiveFrontend") || ~isstruct(mitigationCfg.adaptiveFrontend)
-    error("mitigation.adaptiveFrontend 缺失。");
-end
-cfg = mitigationCfg.adaptiveFrontend;
+cfg = local_require_adaptive_frontend_cfg_local(mitigationCfg);
 local_require_struct_fields_local(cfg, ...
-    ["bootstrapSyncChain", "classNames", "classToAction", "diagnostics"], ...
+    ["bootstrapSyncChain", "classNames", "classToAction", "sparseRouting", "diagnostics"], ...
     "mitigation.adaptiveFrontend");
 
-    classNames = string(cfg.classNames(:).');
-    bootstrapPaths = string(cfg.bootstrapSyncChain(:).');
-    if isempty(classNames)
-        error("mitigation.adaptiveFrontend.classNames 不能为空。");
-    end
-    if isempty(bootstrapPaths)
-        error("mitigation.adaptiveFrontend.bootstrapSyncChain 不能为空。");
-    end
-    if ~isstruct(cfg.classToAction) || ~isscalar(cfg.classToAction)
-        error("mitigation.adaptiveFrontend.classToAction 必须是标量struct。");
-    end
+classNames = string(cfg.classNames(:).');
+bootstrapPaths = string(cfg.bootstrapSyncChain(:).');
+if isempty(classNames)
+    error("mitigation.adaptiveFrontend.classNames 不能为空。");
+end
+if isempty(bootstrapPaths)
+    error("mitigation.adaptiveFrontend.bootstrapSyncChain 不能为空。");
+end
+if ~isstruct(cfg.classToAction) || ~isscalar(cfg.classToAction)
+    error("mitigation.adaptiveFrontend.classToAction 必须是标量struct。");
+end
 
-    actionNames = strings(1, 0);
-    for k = 1:numel(classNames)
-        fieldName = matlab.lang.makeValidName(char(classNames(k)));
-        if ~isfield(cfg.classToAction, fieldName)
-            error("mitigation.adaptiveFrontend.classToAction 缺少类别 %s 的映射。", char(classNames(k)));
-        end
-        actionName = string(cfg.classToAction.(fieldName));
-        if strlength(actionName) == 0
-            error("mitigation.adaptiveFrontend.classToAction.%s 不能为空。", fieldName);
-        end
-        if ~any(actionNames == actionName)
-            actionNames(end+1) = actionName; %#ok<AGROW>
+local_require_adaptive_sparse_routing_cfg_local(cfg);
+sampleActions = "none";
+symbolActions = "none";
+for k = 1:numel(classNames)
+    actionName = local_map_class_to_action_local(mitigationCfg, classNames(k));
+    [sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
+    if sampleAction ~= "none" && ~any(sampleActions == sampleAction)
+        sampleActions(end + 1) = sampleAction; %#ok<AGROW>
+    end
+    if symbolAction ~= "none" && ~any(symbolActions == symbolAction)
+        symbolActions(end + 1) = symbolAction; %#ok<AGROW>
+    end
+end
+if isfield(cfg, "narrowbandGuard") && isstruct(cfg.narrowbandGuard) ...
+        && isfield(cfg.narrowbandGuard, "enable") && logical(cfg.narrowbandGuard.enable)
+    guardAction = local_narrowband_guard_action_local(cfg.narrowbandGuard);
+    if ~any(symbolActions == guardAction)
+        symbolActions(end + 1) = guardAction; %#ok<AGROW>
+    end
+end
+
+diagCfg = struct( ...
+    "classNames", classNames, ...
+    "actionNames", local_build_adaptive_action_catalog_local(sampleActions, symbolActions), ...
+    "bootstrapPaths", bootstrapPaths);
+end
+
+function actionNames = local_build_adaptive_action_catalog_local(sampleActions, symbolActions)
+sampleActions = unique(string(sampleActions(:).'), "stable");
+symbolActions = unique(string(symbolActions(:).'), "stable");
+if isempty(sampleActions) || isempty(symbolActions)
+    error("Adaptive front-end action catalog requires non-empty sample and symbol action sets.");
+end
+
+actionNames = strings(1, 0);
+for isample = 1:numel(sampleActions)
+    for isymbol = 1:numel(symbolActions)
+        actionLabel = local_compose_adaptive_action_label_local(sampleActions(isample), symbolActions(isymbol));
+        if ~any(actionNames == actionLabel)
+            actionNames(end + 1) = actionLabel; %#ok<AGROW>
         end
     end
-
-    diagCfg = struct( ...
-        "classNames", classNames, ...
-        "actionNames", actionNames, ...
-        "bootstrapPaths", bootstrapPaths);
+end
 end
 
 function summary = local_collect_adaptive_frontend_summary_local(nom, mitigationCfg)
@@ -6670,7 +6877,7 @@ local_require_struct_fields_local(eveCfg.mitigation.thresholdCalibration, [ ...
     "minPacketTrustedSamples", "preambleUpdateAlpha", "packetUpdateAlpha", ...
     "preambleResidualAlpha", "packetResidualAlpha"], "eve.mitigation.thresholdCalibration");
 local_require_struct_fields_local(eveCfg.mitigation.adaptiveFrontend, [ ...
-    "bootstrapSyncChain", "classNames", "classToAction", "diagnostics"], ...
+    "bootstrapSyncChain", "classNames", "classToAction", "sparseRouting", "diagnostics"], ...
     "eve.mitigation.adaptiveFrontend");
 
 methodsEve = resolve_mitigation_methods(eveCfg.mitigation, channelCfg);

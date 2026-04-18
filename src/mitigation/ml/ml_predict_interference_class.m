@@ -14,17 +14,15 @@ end
 Xn = (featureRow - double(model.inputMean(:).')) ./ (double(model.inputStd(:).') + 1e-8);
 XDl = dlarray(single(Xn.'), "CB");
 scoresDl = predict(model.net, XDl);
-scores = double(extractdata(scoresDl(:)));
-probabilities = local_softmax(scores);
+scores = double(gather(extractdata(scoresDl(:))));
+probabilities = local_sigmoid(scores);
 
 [confidence, idx] = max(probabilities);
 className = string(model.classNames(idx));
 info = struct("scores", scores, "classIndex", idx);
 end
 
-function p = local_softmax(scores)
+function p = local_sigmoid(scores)
 scores = scores(:);
-scores = scores - max(scores);
-expScores = exp(max(min(scores, 30), -30));
-p = expScores / max(sum(expScores), eps);
+p = 1 ./ (1 + exp(-max(min(scores, 30), -30)));
 end

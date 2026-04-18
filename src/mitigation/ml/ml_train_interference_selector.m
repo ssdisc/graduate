@@ -1,5 +1,5 @@
 function [model, report] = ml_train_interference_selector(p, opts)
-%ML_TRAIN_INTERFERENCE_SELECTOR  Train a frame-level MLP selector for dominant interference class.
+%ML_TRAIN_INTERFERENCE_SELECTOR  Train a frame-level MLP selector for mixed-interference presence routing.
 
 arguments
     p (1,1) struct
@@ -58,9 +58,12 @@ end
 XTrain = dataset.featureMatrix(split.trainIdx, :);
 XVal = dataset.featureMatrix(split.valIdx, :);
 XTest = dataset.featureMatrix(split.testIdx, :);
-yTrain = dataset.labelIndex(split.trainIdx);
-yVal = dataset.labelIndex(split.valIdx);
-yTest = dataset.labelIndex(split.testIdx);
+primaryTrain = dataset.primaryLabelIndex(split.trainIdx);
+primaryVal = dataset.primaryLabelIndex(split.valIdx);
+primaryTest = dataset.primaryLabelIndex(split.testIdx);
+YTrain = dataset.labelMatrix(split.trainIdx, :);
+YVal = dataset.labelMatrix(split.valIdx, :);
+YTest = dataset.labelMatrix(split.testIdx, :);
 classNames = dataset.classNames;
 nClasses = numel(classNames);
 
@@ -76,9 +79,18 @@ model = ml_interference_selector_model();
 model.inputMean = inputMean;
 model.inputStd = inputStd;
 
-classCountTrain = accumarray(yTrain(:), 1, [nClasses 1], @sum, 0);
-classWeights = sum(classCountTrain) ./ max(classCountTrain, 1);
-classWeights = classWeights / mean(classWeights);
+primaryClassCountTrain = accumarray(primaryTrain(:), 1, [nClasses 1], @sum, 0);
+classPresenceCountTrain = sum(YTrain, 1).';
+if any(primaryClassCountTrain < 1)
+    error("当前选择器训练流程要求训练集主标签覆盖全部类别，primaryClassCounts=%s。", ...
+        mat2str(primaryClassCountTrain(:).'));
+end
+if any(classPresenceCountTrain < 1)
+    error("当前选择器训练流程要求训练集多标签覆盖全部类别，classPresenceCounts=%s。", ...
+        mat2str(classPresenceCountTrain(:).'));
+end
+positiveClassWeights = size(YTrain, 1) ./ classPresenceCountTrain;
+positiveClassWeights = positiveClassWeights / mean(positiveClassWeights);
 
 averageGrad = [];
 averageSqGrad = [];
@@ -98,20 +110,21 @@ for epoch = 1:opts.epochs
         bEnd = min(bStart + opts.batchSize - 1, size(XTrain, 1));
         batchIdx = perm(bStart:bEnd);
         XBatch = dlarray(single(XTrain(batchIdx, :).'), "CB");
-        yBatch = double(yTrain(batchIdx));
+        YBatch = dlarray(single(YTrain(batchIdx, :).'), "CB");
         if executionEnvironment == "gpu"
             XBatch = gpuArray(XBatch);
+            YBatch = gpuArray(YBatch);
         end
 
-        [loss, gradients] = dlfeval(@local_selector_loss, model.net, XBatch, yBatch, classWeights, nClasses);
+        [loss, gradients] = dlfeval(@local_selector_loss, model.net, XBatch, YBatch, positiveClassWeights);
         [model.net, averageGrad, averageSqGrad] = adamupdate(model.net, gradients, ...
             averageGrad, averageSqGrad, epoch, opts.lr);
-        epochLoss = epochLoss + extractdata(loss) * numel(batchIdx);
+        epochLoss = epochLoss + double(gather(extractdata(loss))) * numel(batchIdx);
     end
 
     epochLoss = epochLoss / size(XTrain, 1);
     losses(epoch) = epochLoss;
-    valLoss = local_eval_selector_loss(model.net, XVal, yVal, classWeights, nClasses, executionEnvironment);
+    valLoss = local_eval_selector_loss(model.net, XVal, YVal, positiveClassWeights, executionEnvironment);
     valLosses(epoch) = valLoss;
 
     if isfinite(valLoss) && (valLoss < bestValLoss - opts.earlyStoppingMinDelta || bestEpoch == 0)
@@ -125,9 +138,9 @@ for epoch = 1:opts.epochs
     epochsCompleted = epoch;
 
     if opts.verbose && (epoch == 1 || mod(epoch, 5) == 0 || epoch == opts.epochs)
-        valMetricsNow = local_selector_metrics(model.net, XVal, yVal, classNames);
-        fprintf("第%d/%d轮：trainLoss=%.4f, valLoss=%.4f, Val Acc=%.3f\n", ...
-            epoch, opts.epochs, epochLoss, valLoss, valMetricsNow.accuracy);
+        valMetricsNow = local_selector_metrics(model.net, XVal, primaryVal, YVal, classNames);
+        fprintf("第%d/%d轮：trainLoss=%.4f, valLoss=%.4f, Val PrimaryAcc=%.3f, Val PresenceF1=%.3f\n", ...
+            epoch, opts.epochs, epochLoss, valLoss, valMetricsNow.primaryAccuracy, valMetricsNow.presenceF1);
     end
 
     if opts.enableEarlyStopping && epoch >= opts.minEpochs && patienceCount >= opts.earlyStoppingPatience
@@ -143,9 +156,11 @@ losses = losses(1:epochsCompleted);
 valLosses = valLosses(1:epochsCompleted);
 model.net = bestNet;
 model.trained = true;
+model.labelMode = "multilabel_sigmoid";
+model.presenceThreshold = 0.5;
 
-valMetrics = local_selector_metrics(model.net, XVal, yVal, classNames);
-testMetrics = local_selector_metrics(model.net, XTest, yTest, classNames);
+valMetrics = local_selector_metrics(model.net, XVal, primaryVal, YVal, classNames);
+testMetrics = local_selector_metrics(model.net, XTest, primaryTest, YTest, classNames);
 
 report = struct();
 report.nBlocks = dataset.nBlocks;
@@ -156,7 +171,10 @@ report.trainingOptions = opts;
 report.trainingContext = ml_capture_training_context(p);
 report.featureNames = dataset.featureNames;
 report.classNames = dataset.classNames;
-report.classCounts = dataset.classCounts;
+report.labelMode = "multilabel_sigmoid";
+report.classCounts = dataset.primaryClassCounts;
+report.primaryClassCounts = dataset.primaryClassCounts;
+report.classPresenceCounts = dataset.classPresenceCounts;
 report.epochs = opts.epochs;
 report.epochsCompleted = epochsCompleted;
 report.bestEpoch = bestEpoch;
@@ -168,7 +186,10 @@ report.losses = losses;
 report.validationLosses = valLosses;
 report.executionEnvironment = executionEnvironment;
 report.split = split;
-report.train = struct("classCounts", classCountTrain, "classWeights", classWeights);
+report.train = struct( ...
+    "primaryClassCounts", primaryClassCountTrain, ...
+    "classPresenceCounts", classPresenceCountTrain, ...
+    "positiveClassWeights", positiveClassWeights);
 report.validation = valMetrics;
 report.test = testMetrics;
 report.selection = struct("bestCheckpointBy", "validation_loss", "testSetHeldOut", true);
@@ -182,82 +203,103 @@ end
 if opts.verbose
     fprintf("\n干扰选择器训练完成。\n");
     fprintf("最佳模型来自第%d轮，best val loss=%.4f。\n", bestEpoch, bestValLoss);
-    fprintf("验证集准确率=%.3f，测试集准确率=%.3f。\n", valMetrics.accuracy, testMetrics.accuracy);
+    fprintf("验证集主类准确率=%.3f，Presence F1=%.3f。\n", valMetrics.primaryAccuracy, valMetrics.presenceF1);
+    fprintf("测试集主类准确率=%.3f，Presence F1=%.3f。\n", testMetrics.primaryAccuracy, testMetrics.presenceF1);
 end
 end
 
-function [loss, gradients] = local_selector_loss(net, XBatch, yBatch, classWeights, nClasses)
+function [loss, gradients] = local_selector_loss(net, XBatch, YBatch, positiveClassWeights)
 scores = forward(net, XBatch);
-Y = local_one_hot(yBatch, nClasses);
-YDl = dlarray(single(Y), "CB");
-if isa(XBatch, "gpuArray")
-    YDl = gpuArray(YDl);
+weightData = single(positiveClassWeights(:));
+if isa(extractdata(scores), "gpuArray")
+    weightData = gpuArray(weightData);
 end
-sampleWeights = classWeights(yBatch(:)).';
-weightDl = dlarray(single(sampleWeights), "CB");
-if isa(XBatch, "gpuArray")
-    weightDl = gpuArray(weightDl);
-end
-loss = local_cross_entropy_loss(scores, YDl, weightDl);
+weightDl = dlarray(weightData, "CB");
+loss = local_multilabel_bce_loss(scores, YBatch, weightDl);
 gradients = dlgradient(loss, net.Learnables);
 end
 
-function loss = local_eval_selector_loss(net, XVal, yVal, classWeights, nClasses, executionEnvironment)
+function loss = local_eval_selector_loss(net, XVal, YVal, positiveClassWeights, executionEnvironment)
 if isempty(XVal)
     loss = NaN;
     return;
 end
 X = dlarray(single(XVal.'), "CB");
-Y = dlarray(single(local_one_hot(yVal, nClasses)), "CB");
-W = dlarray(single(classWeights(yVal(:)).'), "CB");
+Y = dlarray(single(YVal.'), "CB");
+weightData = single(positiveClassWeights(:));
 if executionEnvironment == "gpu"
     X = gpuArray(X);
     Y = gpuArray(Y);
-    W = gpuArray(W);
+    weightData = gpuArray(weightData);
 end
+W = dlarray(weightData, "CB");
 scores = predict(net, X);
-loss = double(gather(extractdata(local_cross_entropy_loss(scores, Y, W))));
+loss = double(gather(extractdata(local_multilabel_bce_loss(scores, Y, W))));
 end
 
-function metrics = local_selector_metrics(net, X, y, classNames)
-prob = local_predict_probabilities(net, X);
+function metrics = local_selector_metrics(net, X, yPrimary, YPresence, classNames)
+prob = local_predict_probabilities(net, X, numel(classNames));
 [~, predIdx] = max(prob, [], 2);
 confMat = zeros(numel(classNames), numel(classNames));
-for k = 1:numel(y)
-    confMat(y(k), predIdx(k)) = confMat(y(k), predIdx(k)) + 1;
+for k = 1:numel(yPrimary)
+    confMat(yPrimary(k), predIdx(k)) = confMat(yPrimary(k), predIdx(k)) + 1;
 end
+
+presenceThreshold = 0.5;
+predPresence = prob >= presenceThreshold;
+truePresence = YPresence > 0.5;
+tp = sum(predPresence & truePresence, 1);
+fp = sum(predPresence & ~truePresence, 1);
+fn = sum(~predPresence & truePresence, 1);
+precisionPerClass = tp ./ max(tp + fp, 1);
+recallPerClass = tp ./ max(tp + fn, 1);
+f1PerClass = 2 * precisionPerClass .* recallPerClass ./ max(precisionPerClass + recallPerClass, eps);
+tpAll = sum(tp);
+fpAll = sum(fp);
+fnAll = sum(fn);
+presencePrecision = tpAll / max(tpAll + fpAll, 1);
+presenceRecall = tpAll / max(tpAll + fnAll, 1);
+presenceF1 = 2 * presencePrecision * presenceRecall / max(presencePrecision + presenceRecall, eps);
+
+if size(prob, 1) ~= size(YPresence, 1) || size(prob, 2) ~= size(YPresence, 2)
+    error("Selector metric inputs have inconsistent shapes.");
+end
+
 metrics = struct();
-metrics.accuracy = mean(predIdx == y);
+metrics.accuracy = mean(predIdx == yPrimary);
+metrics.primaryAccuracy = metrics.accuracy;
 metrics.confusionMatrix = confMat;
+metrics.primaryConfusionMatrix = confMat;
+metrics.presenceThreshold = presenceThreshold;
+metrics.presencePrecision = presencePrecision;
+metrics.presenceRecall = presenceRecall;
+metrics.presenceF1 = presenceF1;
+metrics.classPresencePrecision = precisionPerClass(:);
+metrics.classPresenceRecall = recallPerClass(:);
+metrics.classPresenceF1 = f1PerClass(:);
+metrics.classPresenceCounts = sum(truePresence, 1).';
+metrics.classPredictedCounts = sum(predPresence, 1).';
 metrics.classNames = classNames;
 end
 
-function prob = local_predict_probabilities(net, X)
+function prob = local_predict_probabilities(net, X, nClasses)
 if isempty(X)
-    prob = zeros(0, 0);
+    prob = zeros(0, nClasses);
     return;
 end
 scores = predict(net, dlarray(single(X.'), "CB"));
-scores = double(extractdata(scores));
-scores = scores - max(scores, [], 1);
-expScores = exp(max(min(scores, 30), -30));
-prob = (expScores ./ max(sum(expScores, 1), eps)).';
+scores = double(gather(extractdata(scores)));
+prob = local_sigmoid(scores).';
 end
 
-function Y = local_one_hot(y, nClasses)
-y = double(y(:));
-Y = zeros(nClasses, numel(y), "single");
-for k = 1:numel(y)
-    Y(y(k), k) = 1;
-end
+function loss = local_multilabel_bce_loss(scores, Y, positiveClassWeights)
+prob = local_sigmoid(scores);
+bce = -(positiveClassWeights .* Y .* log(prob + 1e-8) + (1 - Y) .* log(1 - prob + 1e-8));
+loss = mean(bce, "all");
 end
 
-function loss = local_cross_entropy_loss(scores, Y, sampleWeights)
-scores = scores - max(scores, [], 1);
-expScores = exp(scores);
-prob = expScores ./ max(sum(expScores, 1), eps);
-ce = -sum(Y .* log(prob + 1e-8), 1);
-loss = sum(ce .* sampleWeights, "all") / max(sum(sampleWeights, "all"), eps);
+function y = local_sigmoid(x)
+y = 1 ./ (1 + exp(-max(min(x, 30), -30)));
 end
 
 function artifacts = local_empty_artifacts_report()

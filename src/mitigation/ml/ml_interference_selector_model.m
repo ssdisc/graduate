@@ -9,11 +9,13 @@ model.name = "interference_selector_mlp";
 model.type = "selector_mlp";
 model.trained = false;
 model.featureVersion = 1;
-model.trainingLogicVersion = 2;
+model.trainingLogicVersion = 4;
 model.featureNames = featureNames;
 model.classNames = classNames;
 model.inputChannels = numel(featureNames);
 model.hiddenSizes = [48 24];
+model.labelMode = "multilabel_sigmoid";
+model.presenceThreshold = 0.5;
 
 layers = [
     featureInputLayer(model.inputChannels, "Name", "input", "Normalization", "none")
