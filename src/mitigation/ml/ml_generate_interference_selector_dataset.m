@@ -12,10 +12,13 @@ arguments
 end
 
 classNames = string(opts.classNames(:).');
+domainCfg = ml_require_selector_training_domain(p);
+if ~isequal(classNames, string(domainCfg.classNames(:).'))
+    error("Selector dataset opts.classNames must match mitigation.adaptiveFrontend.trainingDomain.classNames.");
+end
 featureNames = ml_interference_selector_feature_names();
 waveform = resolve_waveform_cfg(p);
 [~, syncSym] = make_packet_sync(p.frame, 1);
-syncCfg = local_selector_sync_cfg(p.rxSync, p.channel, waveform);
 [~, modInfo] = modulate_bits(uint8(zeros(bits_per_symbol_local(p.mod), 1)), p.mod, p.fec);
 modInfo.spreadFactor = dsss_effective_spread_factor(p.dsss);
 bitsPerSym = modInfo.bitsPerSymbol;
@@ -48,10 +51,12 @@ for b = 1:nBlocks
 
         pBlock = local_selector_reset_channel_local(p);
         labelMask = false(1, numel(classNames));
-        [pBlock, labelMask] = local_apply_selector_class_to_channel_local(pBlock, p, primaryLabel, classNames, labelMask);
-        auxiliaryClasses = local_selector_enabled_auxiliary_classes_local(p, primaryLabel, classNames);
+        [pBlock, labelMask] = local_apply_selector_class_to_channel_local( ...
+            pBlock, domainCfg, primaryLabel, classNames, labelMask);
+        auxiliaryClasses = local_selector_enabled_auxiliary_classes_local(domainCfg, primaryLabel, classNames);
         [pBlock, labelMask] = local_selector_apply_auxiliary_classes_local( ...
-            pBlock, p, auxiliaryClasses, classNames, labelMask);
+            pBlock, domainCfg, auxiliaryClasses, classNames, labelMask);
+        syncCfg = local_selector_sync_cfg(p.rxSync, pBlock.channel, waveform);
         [txFrame, fhCaptureCfg] = local_build_training_packet(pBlock, dataSymbolsPerBlock);
         frameDelaySym = randi([0, max(0, round(double(pBlock.channel.maxDelaySymbols)))], 1, 1);
         frameDelay = round(double(frameDelaySym) * waveform.sps);
@@ -133,7 +138,7 @@ pBlock.channel.multipath.enable = false;
 pBlock.channel.multipath.rayleigh = false;
 end
 
-function [pBlock, labelMask] = local_apply_selector_class_to_channel_local(pBlock, pRef, labelName, classNames, labelMask)
+function [pBlock, labelMask] = local_apply_selector_class_to_channel_local(pBlock, domainCfg, labelName, classNames, labelMask)
 labelName = lower(string(labelName));
 labelIdx = find(classNames == labelName, 1, "first");
 if isempty(labelIdx)
@@ -144,183 +149,172 @@ switch labelName
     case "clean"
         % keep all extra impairments disabled
     case "impulse"
-        pBlock.channel.impulseProb = local_selector_sample_scaled_local( ...
-            local_selector_channel_scalar_local(pRef.channel, "impulseProb", 0.02), 0.55, 0.004, 0.05);
-        pBlock.channel.impulseToBgRatio = local_selector_sample_scaled_local( ...
-            local_selector_channel_scalar_local(pRef.channel, "impulseToBgRatio", 40), 0.45, 12, 80);
+        cfg = local_selector_require_class_cfg_local(domainCfg, "impulse");
+        pBlock.channel.impulseProb = local_selector_sample_range_local(cfg.probRange);
+        pBlock.channel.impulseToBgRatio = local_selector_sample_range_local(cfg.toBgRatioRange);
     case "tone"
+        cfg = local_selector_require_class_cfg_local(domainCfg, "tone");
         pBlock.channel.singleTone.enable = true;
-        pBlock.channel.singleTone.power = local_selector_sample_scaled_local( ...
-            local_selector_nested_scalar_local(pRef.channel.singleTone, "power", 0.03), 0.65, 0.004, 0.10);
-        pBlock.channel.singleTone.freqHz = local_selector_sample_scaled_local( ...
-            local_selector_nested_scalar_local(pRef.channel.singleTone, "freqHz", 1500), 0.85, -4000, 4000);
+        pBlock.channel.singleTone.power = local_selector_sample_range_local(cfg.powerRange);
+        pBlock.channel.singleTone.freqHz = local_selector_sample_range_local(cfg.freqHzRange);
         pBlock.channel.singleTone.randomPhase = true;
     case "narrowband"
+        cfg = local_selector_require_class_cfg_local(domainCfg, "narrowband");
         pBlock.channel.narrowband.enable = true;
-        pBlock.channel.narrowband.power = local_selector_sample_scaled_local( ...
-            local_selector_nested_scalar_local(pRef.channel.narrowband, "power", 0.03), 0.65, 0.004, 0.10);
-        pBlock.channel.narrowband.bandwidthFreqPoints = local_selector_sample_scaled_local( ...
-            local_selector_nested_scalar_local(pRef.channel.narrowband, "bandwidthFreqPoints", 0.9), 0.55, 0.2, 1.6);
+        pBlock.channel.narrowband.power = local_selector_sample_range_local(cfg.powerRange);
+        pBlock.channel.narrowband.bandwidthFreqPoints = local_selector_sample_range_local(cfg.bandwidthFreqPointsRange);
         [maxCenterFreqPoints, ~] = narrowband_center_freq_points_limit( ...
             pBlock.fh, resolve_waveform_cfg(pBlock), pBlock.channel.narrowband.bandwidthFreqPoints);
-        centerBase = local_selector_nested_scalar_local(pRef.channel.narrowband, "centerFreqPoints", 0.8);
         if maxCenterFreqPoints <= 0
             pBlock.channel.narrowband.centerFreqPoints = 0;
         else
-            centerNow = local_selector_sample_scaled_local(centerBase, 0.85, -maxCenterFreqPoints, maxCenterFreqPoints);
-            pBlock.channel.narrowband.centerFreqPoints = max(min(centerNow, maxCenterFreqPoints), -maxCenterFreqPoints);
+            pBlock.channel.narrowband.centerFreqPoints = local_selector_sample_uniform_local( ...
+                -maxCenterFreqPoints, maxCenterFreqPoints);
         end
     case "sweep"
+        cfg = local_selector_require_class_cfg_local(domainCfg, "sweep");
         pBlock.channel.sweep.enable = true;
-        pBlock.channel.sweep.power = local_selector_sample_scaled_local( ...
-            local_selector_nested_scalar_local(pRef.channel.sweep, "power", 0.025), 0.65, 0.004, 0.08);
-        startBase = local_selector_nested_scalar_local(pRef.channel.sweep, "startHz", -1800);
-        stopBase = local_selector_nested_scalar_local(pRef.channel.sweep, "stopHz", 1800);
-        pBlock.channel.sweep.startHz = local_selector_sample_scaled_local(startBase, 0.75, -4000, 1000);
-        pBlock.channel.sweep.stopHz = local_selector_sample_scaled_local(stopBase, 0.75, -1000, 4000);
+        pBlock.channel.sweep.power = local_selector_sample_range_local(cfg.powerRange);
+        pBlock.channel.sweep.startHz = local_selector_sample_range_local(cfg.startHzRange);
+        pBlock.channel.sweep.stopHz = local_selector_sample_range_local(cfg.stopHzRange);
         if pBlock.channel.sweep.stopHz <= pBlock.channel.sweep.startHz
-            pBlock.channel.sweep.stopHz = min(4000, pBlock.channel.sweep.startHz + 1200 + 1800 * rand());
+            pBlock.channel.sweep.stopHz = cfg.stopHzRange(2);
+            if pBlock.channel.sweep.stopHz <= pBlock.channel.sweep.startHz
+                pBlock.channel.sweep.startHz = cfg.startHzRange(1);
+            end
         end
-        periodBase = local_selector_nested_scalar_local(pRef.channel.sweep, "periodSymbols", 256);
-        pBlock.channel.sweep.periodSymbols = max(64, min(384, round(local_selector_sample_scaled_local(periodBase, 0.6, 64, 384))));
+        pBlock.channel.sweep.periodSymbols = local_selector_sample_integer_range_local(cfg.periodSymbolsRange);
         pBlock.channel.sweep.randomPhase = true;
     case "multipath"
+        cfg = local_selector_require_class_cfg_local(domainCfg, "multipath");
         pBlock.channel.multipath.enable = true;
-        pBlock.channel.multipath.pathDelaysSymbols = local_selector_multipath_delays_local(pRef.channel);
-        pBlock.channel.multipath.pathGainsDb = local_selector_multipath_gains_local(pRef.channel);
-        rayleighBase = local_selector_nested_scalar_local(pRef.channel.multipath, "rayleigh", 1);
-        pBlock.channel.multipath.rayleigh = logical(rayleighBase) || rand() < 0.35;
+        pBlock.channel.multipath.pathDelaysSymbols = double(cfg.pathDelaysSymbols(:).');
+        pBlock.channel.multipath.pathGainsDb = local_selector_sample_multipath_gains_local(cfg);
+        pBlock.channel.multipath.rayleigh = rand() < cfg.rayleighProbability;
     otherwise
         error("Unsupported selector class: %s", char(labelName));
 end
 labelMask(labelIdx) = true;
 end
 
-function auxiliaryClasses = local_selector_enabled_auxiliary_classes_local(p, primaryLabel, classNames)
+function auxiliaryClasses = local_selector_enabled_auxiliary_classes_local(domainCfg, primaryLabel, classNames)
 auxiliaryClasses = strings(1, 0);
 primaryLabel = string(primaryLabel);
-if primaryLabel == "clean"
+if primaryLabel == "clean" || rand() > domainCfg.mixingProbability
     return;
 end
-for k = 1:numel(classNames)
-    className = classNames(k);
-    if className == "clean" || className == primaryLabel
+
+candidateClasses = string(domainCfg.auxiliaryClassNames(:).');
+selectedMask = false(size(candidateClasses));
+for k = 1:numel(candidateClasses)
+    className = candidateClasses(k);
+    if ~any(classNames == className) || className == primaryLabel
         continue;
     end
-    if local_selector_class_enabled_in_channel_local(p.channel, className)
-        auxiliaryClasses(end+1) = className; %#ok<AGROW>
+    if ~local_selector_class_enabled_in_domain_local(domainCfg, className)
+        continue;
     end
-end
+    selectedMask(k) = rand() <= domainCfg.auxiliaryClassProbability;
 end
 
-function [pBlock, labelMask] = local_selector_apply_auxiliary_classes_local(pBlock, pRef, auxiliaryClasses, classNames, labelMask)
+candidateClasses = candidateClasses(selectedMask);
+if isempty(candidateClasses)
+    fallback = string(domainCfg.auxiliaryClassNames(:).');
+    fallback = fallback(ismember(fallback, classNames) & fallback ~= primaryLabel);
+    fallback = fallback(arrayfun(@(c) local_selector_class_enabled_in_domain_local(domainCfg, c), fallback));
+    if isempty(fallback)
+        return;
+    end
+    candidateClasses = fallback(randi(numel(fallback), 1, 1));
+end
+auxiliaryClasses = candidateClasses(randperm(numel(candidateClasses)));
+end
+
+function [pBlock, labelMask] = local_selector_apply_auxiliary_classes_local(pBlock, domainCfg, auxiliaryClasses, classNames, labelMask)
 if isempty(auxiliaryClasses)
     return;
 end
 
-selectedMask = rand(size(auxiliaryClasses)) < 0.7;
-if ~any(selectedMask)
-    selectedMask(randi(numel(auxiliaryClasses), 1, 1)) = true;
-end
-
-selectedClasses = auxiliaryClasses(selectedMask);
-selectedClasses = selectedClasses(randperm(numel(selectedClasses)));
-for k = 1:numel(selectedClasses)
+for k = 1:numel(auxiliaryClasses)
     [pBlock, labelMask] = local_apply_selector_class_to_channel_local( ...
-        pBlock, pRef, selectedClasses(k), classNames, labelMask);
+        pBlock, domainCfg, auxiliaryClasses(k), classNames, labelMask);
 end
 end
 
-function tf = local_selector_class_enabled_in_channel_local(channelCfg, className)
+function tf = local_selector_class_enabled_in_domain_local(domainCfg, className)
 className = lower(string(className));
 switch className
     case "impulse"
-        tf = isfield(channelCfg, "impulseProb") && double(channelCfg.impulseProb) > 0;
+        tf = logical(domainCfg.impulse.enable);
     case "tone"
-        tf = isfield(channelCfg, "singleTone") && isstruct(channelCfg.singleTone) ...
-            && isfield(channelCfg.singleTone, "enable") && logical(channelCfg.singleTone.enable);
+        tf = logical(domainCfg.tone.enable);
     case "narrowband"
-        tf = isfield(channelCfg, "narrowband") && isstruct(channelCfg.narrowband) ...
-            && isfield(channelCfg.narrowband, "enable") && logical(channelCfg.narrowband.enable);
+        tf = logical(domainCfg.narrowband.enable);
     case "sweep"
-        tf = isfield(channelCfg, "sweep") && isstruct(channelCfg.sweep) ...
-            && isfield(channelCfg.sweep, "enable") && logical(channelCfg.sweep.enable);
+        tf = logical(domainCfg.sweep.enable);
     case "multipath"
-        tf = isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
-            && isfield(channelCfg.multipath, "enable") && logical(channelCfg.multipath.enable);
+        tf = logical(domainCfg.multipath.enable);
     otherwise
         error("Unsupported selector class for auxiliary sampling: %s", char(className));
 end
 end
 
-function value = local_selector_channel_scalar_local(cfg, fieldName, defaultValue)
-if isfield(cfg, fieldName) && ~isempty(cfg.(fieldName))
-    value = double(cfg.(fieldName));
-else
-    value = double(defaultValue);
+function cfg = local_selector_require_class_cfg_local(domainCfg, className)
+className = lower(string(className));
+fieldName = char(className);
+if ~isfield(domainCfg, fieldName)
+    error("Selector trainingDomain missing class configuration for %s.", char(className));
 end
-if ~(isscalar(value) && isfinite(value))
-    error("Selector dataset field channel.%s must be a finite scalar.", fieldName);
+cfg = domainCfg.(fieldName);
+if ~(isstruct(cfg) && isscalar(cfg))
+    error("Selector trainingDomain.%s must be a scalar struct.", char(className));
 end
-end
-
-function value = local_selector_nested_scalar_local(cfg, fieldName, defaultValue)
-if isfield(cfg, fieldName) && ~isempty(cfg.(fieldName))
-    value = double(cfg.(fieldName));
-else
-    value = double(defaultValue);
-end
-if ~(isscalar(value) && isfinite(value))
-    error("Selector dataset field %s must be a finite scalar.", fieldName);
+if ~local_selector_class_enabled_in_domain_local(domainCfg, className)
+    error("Selector trainingDomain.%s must be enabled for selector dataset generation.", char(className));
 end
 end
 
-function value = local_selector_sample_scaled_local(baseValue, relativeSpan, minValue, maxValue)
-baseValue = double(baseValue);
-relativeSpan = abs(double(relativeSpan));
+function value = local_selector_sample_range_local(valueRange)
+valueRange = double(valueRange(:).');
+if ~(numel(valueRange) == 2 && all(isfinite(valueRange)) && valueRange(1) <= valueRange(2))
+    error("Selector dataset valueRange must be a finite ascending [min max] interval.");
+end
+if valueRange(1) == valueRange(2)
+    value = valueRange(1);
+    return;
+end
+value = valueRange(1) + rand() * (valueRange(2) - valueRange(1));
+end
+
+function value = local_selector_sample_uniform_local(minValue, maxValue)
 minValue = double(minValue);
 maxValue = double(maxValue);
-if ~(isscalar(baseValue) && isfinite(baseValue))
-    error("Selector dataset baseValue must be a finite scalar.");
+if ~(isscalar(minValue) && isscalar(maxValue) && isfinite(minValue) && isfinite(maxValue) && maxValue >= minValue)
+    error("Selector dataset uniform sampling requires a finite ascending interval.");
 end
-if ~(isscalar(minValue) && isfinite(minValue) && isscalar(maxValue) && isfinite(maxValue) && maxValue >= minValue)
-    error("Selector dataset range must be a finite ascending interval.");
+if minValue == maxValue
+    value = minValue;
+    return;
 end
-scale = 1 - relativeSpan + 2 * relativeSpan * rand();
-value = baseValue * scale;
-value = max(min(value, maxValue), minValue);
-end
-
-function delays = local_selector_multipath_delays_local(channelCfg)
-if isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
-        && isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols)
-    delays = round(double(channelCfg.multipath.pathDelaysSymbols(:).'));
-else
-    delays = [0 1 2];
-end
-if isempty(delays) || any(~isfinite(delays)) || any(delays < 0)
-    error("Selector dataset multipath.pathDelaysSymbols must be finite nonnegative values.");
-end
-delays = unique(delays, "stable");
-if delays(1) ~= 0
-    delays = [0 delays];
-end
+value = minValue + rand() * (maxValue - minValue);
 end
 
-function gainsDb = local_selector_multipath_gains_local(channelCfg)
-delays = local_selector_multipath_delays_local(channelCfg);
-if isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
-        && isfield(channelCfg.multipath, "pathGainsDb") && ~isempty(channelCfg.multipath.pathGainsDb)
-    baseGains = double(channelCfg.multipath.pathGainsDb(:).');
-else
-    baseGains = [0 -8 -14];
+function value = local_selector_sample_integer_range_local(valueRange)
+valueRange = round(double(valueRange(:).'));
+if ~(numel(valueRange) == 2 && all(isfinite(valueRange)) && valueRange(1) >= 1 && valueRange(1) <= valueRange(2))
+    error("Selector dataset integer range must be a positive ascending [min max] interval.");
 end
-if numel(baseGains) ~= numel(delays)
-    error("Selector dataset multipath.pathGainsDb length must match pathDelaysSymbols length.");
+value = randi(valueRange, 1, 1);
 end
-gainsDb = baseGains;
+
+function gainsDb = local_selector_sample_multipath_gains_local(cfg)
+gainsDb = double(cfg.pathGainsDb(:).');
+if isempty(gainsDb) || any(~isfinite(gainsDb))
+    error("Selector trainingDomain.multipath.pathGainsDb must contain finite values.");
+end
 if numel(gainsDb) >= 2
-    gainsDb(2:end) = gainsDb(2:end) + (-3 + 6 * rand(1, numel(gainsDb) - 1));
+    jitter = double(cfg.pathGainJitterDb);
+    gainsDb(2:end) = gainsDb(2:end) + (-jitter + 2 * jitter * rand(1, numel(gainsDb) - 1));
 end
 gainsDb(1) = 0;
 end

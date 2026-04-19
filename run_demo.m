@@ -25,6 +25,7 @@ fhErasureTrainArgs = local_fh_erasure_training_args(p);
 multipathEqTrainArgs = local_multipath_eq_training_args();
 requiredModels = local_required_ml_models(activeMethods, p);
 expectedReloadContext = ml_capture_reload_context(p);
+expectedSelectorReloadContext = ml_capture_selector_reload_context(p);
 expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
 expectedFhErasureContext = ml_capture_fh_erasure_reload_context(p);
 expectedMultipathEqContext = ml_capture_multipath_equalizer_reload_context(p);
@@ -162,7 +163,7 @@ if requiredModels.selector
     selectorModelPath = fullfile(modelDir, 'interference_selector_model.mat');
     if ~forceRetrain
         [p.mitigation.selector, loadedSelector, loadedSelectorPath] = load_pretrained_model( ...
-            selectorModelPath, @ml_interference_selector_model, "expectedContext", expectedReloadContext);
+            selectorModelPath, @ml_interference_selector_model, "expectedContext", expectedSelectorReloadContext);
         loadedSelector = loadedSelector && isfield(p.mitigation.selector, 'trained') && logical(p.mitigation.selector.trained);
         if ~loadedSelector
             loadedSelectorPath = "";

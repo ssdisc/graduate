@@ -1,0 +1,22 @@
+function ctx = ml_capture_selector_reload_context(p)
+%ML_CAPTURE_SELECTOR_RELOAD_CONTEXT  Reload context for offline-trained adaptive front-end selectors.
+
+arguments
+    p (1,1) struct
+end
+
+fullCtx = ml_capture_training_context(p);
+
+ctx = struct();
+ctx.domain = fullCtx.domain;
+ctx.rxArchitecture = fullCtx.rxArchitecture;
+ctx.mod = fullCtx.mod;
+ctx.waveform = fullCtx.waveform;
+ctx.fh = fullCtx.fh;
+ctx.frame = fullCtx.frame;
+ctx.dsss = fullCtx.dsss;
+ctx.scFde = fullCtx.scFde;
+ctx.rxDiversity = fullCtx.rxDiversity;
+ctx.rxSync = fullCtx.rxSync;
+ctx.selectorTrainingDomain = ml_require_selector_training_domain(p);
+end
