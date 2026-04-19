@@ -4722,7 +4722,7 @@ nLeadingSym = max(0, round(double(nLeadingSym)));
 sampleIdx = nLeadingSym * round(double(waveform.sps)) + 1;
 end
 
-function decision = local_select_frontend_action_local(methodName, adaptiveEnabled, rFull, syncSymRef, syncInfo, bootstrapPath, mitigation, channelCfg, waveform, N0)
+function [decision, committedFront] = local_select_frontend_action_local(methodName, adaptiveEnabled, initialFront, syncSymRef, mitigation, channelCfg, waveform, N0, captureFn)
 featureCount = numel(ml_interference_selector_feature_names());
 decision = struct( ...
     "selectedClass", "", ...
@@ -4732,89 +4732,108 @@ decision = struct( ...
     "confidence", NaN, ...
     "classProbabilities", zeros(0, 1), ...
     "featureRow", zeros(1, featureCount), ...
-    "bootstrapPath", string(bootstrapPath), ...
+    "bootstrapPath", string(initialFront.bootstrapPath), ...
     "pSample", 0, ...
     "pSymbol", 0, ...
+    "sampleEvmScores", struct("candidates", strings(0, 1), "scores", zeros(0, 1)), ...
     "evmScores", struct("candidates", strings(0, 1), "scores", zeros(0, 1)));
+committedFront = initialFront;
 
 methodName = string(methodName);
-if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnabled)
-    selectorModel = local_require_selector_model_local(mitigation);
-    captureDiag = struct( ...
-        "ok", true, ...
-        "rFull", rFull(:), ...
-        "syncInfo", syncInfo);
-    channelLenSymbols = local_multipath_channel_len_symbols_local(channelCfg, waveform);
-    [featureRow, ~] = adaptive_frontend_extract_features(captureDiag, syncSymRef, N0, ...
-        "channelLenSymbols", channelLenSymbols);
-    [classProbabilities, classNames] = ml_predict_interference_presence(featureRow, selectorModel);
-    [sampleAction, symbolAction, pSample, pSymbol, evmScores] = local_select_cascade_stages_local( ...
-        mitigation, classProbabilities, classNames, rFull, syncSymRef);
-    routeLabel = local_compose_adaptive_action_label_local(sampleAction, symbolAction);
-    presenceLabel = local_compose_presence_label_local(classProbabilities, classNames);
-    dominantProb = max([pSample, pSymbol, 0]);
-
-    decision.selectedClass = presenceLabel;
-    decision.selectedAction = routeLabel;
-    decision.sampleAction = sampleAction;
-    decision.symbolAction = symbolAction;
-    decision.confidence = double(dominantProb);
-    decision.classProbabilities = classProbabilities;
-    decision.featureRow = featureRow;
-    decision.pSample = double(pSample);
-    decision.pSymbol = double(pSymbol);
-    decision.evmScores = evmScores;
+if ~(local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnabled))
+    decision.selectedAction = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
+    [decision.sampleAction, decision.symbolAction] = local_split_mitigation_action_local(decision.selectedAction);
     return;
 end
 
-decision.selectedAction = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
-[decision.sampleAction, decision.symbolAction] = local_split_mitigation_action_local(decision.selectedAction);
-end
-
-function [sampleAction, symbolAction, pSample, pSymbol, evmScores] = local_select_cascade_stages_local(mitigation, classProbabilities, classNames, rFull, syncSymRef)
-classProbabilities = double(classProbabilities(:));
-classNames = string(classNames(:));
-cfg = local_require_adaptive_frontend_cfg_local(mitigation);
-stagesCfg = local_require_adaptive_stages_cfg_local(cfg);
-
-[sampleAction, pSample] = local_select_sample_stage_local( ...
-    stagesCfg.sample, classProbabilities, classNames);
-[symbolAction, pSymbol, evmScores] = local_select_symbol_stage_local( ...
-    stagesCfg.symbol, classProbabilities, classNames, rFull, syncSymRef, mitigation);
-end
-
-function decision = local_rescore_symbol_stage_local(decision, rFull, syncSymRef, mitigation)
-if ~(isstruct(decision) && isfield(decision, "classProbabilities") ...
-        && ~isempty(decision.classProbabilities))
-    return;
-end
-cfg = local_require_adaptive_frontend_cfg_local(mitigation);
-stagesCfg = local_require_adaptive_stages_cfg_local(cfg);
 selectorModel = local_require_selector_model_local(mitigation);
-classProbabilities = double(decision.classProbabilities(:));
-classNames = string(selectorModel.classNames(:));
+captureDiag = struct("ok", true, "rFull", initialFront.rFull(:), "syncInfo", initialFront.syncInfo);
+channelLenSymbols = local_multipath_channel_len_symbols_local(channelCfg, waveform);
+[featureRow, ~] = adaptive_frontend_extract_features(captureDiag, syncSymRef, N0, ...
+    "channelLenSymbols", channelLenSymbols);
+[classProbabilities, classNames] = ml_predict_interference_presence(featureRow, selectorModel);
 
-[symbolAction, pSymbol, evmScores] = local_select_symbol_stage_local( ...
-    stagesCfg.symbol, classProbabilities, classNames, rFull, syncSymRef, mitigation);
+cfg = local_require_adaptive_frontend_cfg_local(mitigation);
+stagesCfg = local_require_adaptive_stages_cfg_local(cfg);
 
-decision.symbolAction = symbolAction;
-decision.pSymbol = double(pSymbol);
-decision.evmScores = evmScores;
-decision.selectedAction = local_compose_adaptive_action_label_local(decision.sampleAction, symbolAction);
-decision.confidence = max([double(decision.pSample), double(pSymbol), 0]);
+[sampleAction, pSample, sampleEvmScores, committedFront] = local_select_sample_stage_with_evm_local( ...
+    stagesCfg.sample, classProbabilities, classNames, initialFront, syncSymRef, captureFn);
+if ~(isstruct(committedFront) && isfield(committedFront, "ok") && committedFront.ok)
+    return;
 end
 
-function [sampleAction, pSample] = local_select_sample_stage_local(stageCfg, classProbabilities, classNames)
+[symbolAction, pSymbol, evmScores] = local_select_symbol_stage_local( ...
+    stagesCfg.symbol, classProbabilities, classNames, committedFront.rFull, syncSymRef, mitigation);
+
+routeLabel = local_compose_adaptive_action_label_local(sampleAction, symbolAction);
+presenceLabel = local_compose_presence_label_local(classProbabilities, classNames);
+dominantProb = max([pSample, pSymbol, 0]);
+
+decision.selectedClass = presenceLabel;
+decision.selectedAction = routeLabel;
+decision.sampleAction = sampleAction;
+decision.symbolAction = symbolAction;
+decision.confidence = double(dominantProb);
+decision.classProbabilities = classProbabilities;
+decision.featureRow = featureRow;
+decision.bootstrapPath = string(committedFront.bootstrapPath);
+decision.pSample = double(pSample);
+decision.pSymbol = double(pSymbol);
+decision.sampleEvmScores = sampleEvmScores;
+decision.evmScores = evmScores;
+end
+
+function [sampleAction, pSample, evmScores, committedFront] = local_select_sample_stage_with_evm_local( ...
+    stageCfg, classProbabilities, classNames, initialFront, syncSymRef, captureFn)
 sampleAction = "none";
+evmScores = struct("candidates", strings(0, 1), "scores", zeros(0, 1));
+committedFront = initialFront;
 pSample = local_aggregate_evidence_probability_local(stageCfg, classProbabilities, classNames);
 if pSample < double(stageCfg.enableThreshold)
     return;
 end
+
 [orderedCandidates, ~] = local_order_stage_candidates_local(stageCfg, classProbabilities, classNames, "sample");
 if isempty(orderedCandidates)
     return;
 end
-sampleAction = orderedCandidates(1);
+
+topK = max(1, round(double(local_stage_cfg_scalar_local(stageCfg, "evmTopK", 2))));
+topK = min(topK, numel(orderedCandidates));
+picks = orderedCandidates(1:topK);
+% "none" baseline is free — it reuses the initial capture.
+if ~any(picks == "none")
+    picks(end+1, 1) = "none"; %#ok<AGROW>
+end
+
+syncSymRef = syncSymRef(:);
+fronts = cell(numel(picks), 1);
+scores = inf(numel(picks), 1);
+for k = 1:numel(picks)
+    candidate = picks(k);
+    if candidate == "none"
+        fronts{k} = initialFront;
+    elseif isa(captureFn, "function_handle")
+        fronts{k} = captureFn(candidate);
+    else
+        fronts{k} = struct("ok", false);
+    end
+    frontNow = fronts{k};
+    if isstruct(frontNow) && isfield(frontNow, "ok") && frontNow.ok ...
+            && isfield(frontNow, "rFull") && ~isempty(frontNow.rFull)
+        rSample = frontNow.rFull;
+        nSync = min(numel(syncSymRef), numel(rSample));
+        scores(k) = local_score_sync_evm_local(rSample, syncSymRef, nSync);
+    end
+end
+
+if ~any(isfinite(scores))
+    return;
+end
+[~, bestIdx] = min(scores);
+sampleAction = picks(bestIdx);
+committedFront = fronts{bestIdx};
+evmScores = struct("candidates", picks, "scores", scores);
 end
 
 function [symbolAction, pSymbol, evmScores] = local_select_symbol_stage_local(stageCfg, classProbabilities, classNames, rFull, syncSymRef, mitigation)
@@ -5400,22 +5419,17 @@ for pktIdx = 1:nPackets
         continue;
     end
 
+    captureFn = @(sampleAction) local_capture_synced_block_local( ...
+        rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, ...
+        sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg, rawCapture.rxDiversity);
+    [decision, front] = local_select_frontend_action_local( ...
+        methodName, adaptiveEnabled, front, syncSymRef, ...
+        mitigation, p.channel, waveform, N0, captureFn);
+    if ~front.ok
+        continue;
+    end
     rFull = front.rFull;
     reliabilityFull = front.reliabilityFull;
-    decision = local_select_frontend_action_local( ...
-        methodName, adaptiveEnabled, rFull, syncSymRef, front.syncInfo, front.bootstrapPath, ...
-        mitigation, p.channel, waveform, N0);
-    if local_is_adaptive_frontend_method_local(methodName) && string(decision.sampleAction) ~= sampleActionHint
-        front = local_capture_synced_block_local( ...
-            rxRaw, syncSymRef, totalLen, syncCfgUse, mitigation, p.mod, waveform, ...
-            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg, rawCapture.rxDiversity);
-        if ~front.ok
-            continue;
-        end
-        rFull = front.rFull;
-        reliabilityFull = front.reliabilityFull;
-        decision = local_rescore_symbol_stage_local(decision, rFull, syncSymRef, mitigation);
-    end
     nom.adaptiveClass(pktIdx) = string(decision.selectedClass);
     nom.adaptiveAction(pktIdx) = string(decision.selectedAction);
     nom.adaptiveBootstrapPath(pktIdx) = string(front.bootstrapPath);
@@ -5526,22 +5540,17 @@ for frameIdx = 1:numel(sessionFrames)
         continue;
     end
 
+    captureFn = @(sampleAction) local_capture_synced_block_local( ...
+        sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, ...
+        sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg, local_capture_rx_diversity_cfg_local(sessionRx{frameIdx}));
+    [decision, front] = local_select_frontend_action_local( ...
+        methodName, adaptiveEnabled, front, sessionFrame.syncSym(:), ...
+        mitigation, p.channel, waveform, N0, captureFn);
+    if ~front.ok
+        continue;
+    end
     rFull = front.rFull;
     reliabilityFull = front.reliabilityFull;
-    decision = local_select_frontend_action_local( ...
-        methodName, adaptiveEnabled, rFull, sessionFrame.syncSym(:), front.syncInfo, front.bootstrapPath, ...
-        mitigation, p.channel, waveform, N0);
-    if local_is_adaptive_frontend_method_local(methodName) && string(decision.sampleAction) ~= sampleActionHint
-        front = local_capture_synced_block_local( ...
-            sessionRx{frameIdx}, sessionFrame.syncSym(:), totalLen, syncCfgUse, mitigation, sessionFrame.modCfg, waveform, ...
-            decision.sampleAction, local_capture_bootstrap_chain_for_method_local(methodName, adaptiveEnabled), fhCaptureCfg, local_capture_rx_diversity_cfg_local(sessionRx{frameIdx}));
-        if ~front.ok
-            continue;
-        end
-        rFull = front.rFull;
-        reliabilityFull = front.reliabilityFull;
-        decision = local_rescore_symbol_stage_local(decision, rFull, sessionFrame.syncSym(:), mitigation);
-    end
     nom.adaptiveClass(frameIdx) = string(decision.selectedClass);
     nom.adaptiveAction(frameIdx) = string(decision.selectedAction);
     nom.adaptiveBootstrapPath(frameIdx) = string(front.bootstrapPath);
