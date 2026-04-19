@@ -2787,7 +2787,7 @@ elseif fhEnabled && ~sampleFhDataDemod
     r = fh_demodulate(r, hopInfoUsed);
 end
 
-[r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled && ~fastFhEnabled, modCfg);
+[r, relPrep] = local_apply_data_action_local(r, actionName, mitigation, hopInfoUsed, fhEnabled && ~fastFhEnabled, modCfg, local_rx_state_psymbol_blend_local(rxState));
 relPrep = local_fit_reliability_length_local(relPrep, numel(r));
 if any(actionName == ["fh_erasure" "ml_fh_erasure"])
     [r, relPrep] = local_apply_multipath_fade_erasure_local(r, relPrep, rxState, mitigation);
@@ -3496,6 +3496,18 @@ tf = isstruct(rxState) && isfield(rxState, "scFdeDiversity") && isstruct(rxState
     && isfield(rxState.scFdeDiversity, "enable") && logical(rxState.scFdeDiversity.enable);
 end
 
+function pBlend = local_rx_state_psymbol_blend_local(rxState)
+pBlend = 1.0;
+if ~(isstruct(rxState) && isfield(rxState, "adaptivePSymbolBlend"))
+    return;
+end
+raw = double(rxState.adaptivePSymbolBlend);
+if ~(isscalar(raw) && isfinite(raw))
+    return;
+end
+pBlend = max(min(raw, 1), 0);
+end
+
 function divState = local_disabled_sc_fde_diversity_state_local()
 divState = struct( ...
     "enable", false, ...
@@ -3533,10 +3545,14 @@ tf = isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSync
     && lower(string(rxSyncCfg.multipathEq.method)) == "sc_fde_mmse";
 end
 
-function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled, modCfg)
+function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled, modCfg, pBlend)
 r = rIn(:);
 actionName = string(actionName);
 reliability = ones(numel(r), 1);
+if nargin < 7 || isempty(pBlend)
+    pBlend = 1.0;
+end
+pBlend = max(min(double(pBlend), 1), 0);
 if actionName == "none"
     rOut = r;
     return;
@@ -3547,6 +3563,7 @@ if actionName == "fh_erasure"
         error("fh_erasure requires enabled FH hop information.");
     end
     [rOut, reliability] = local_apply_fh_erasure_action_local(r, hopInfoUsed, mitigation, modCfg);
+    reliability = (1 - pBlend) * ones(numel(r), 1) + pBlend * reliability;
     return;
 end
 
@@ -3555,17 +3572,22 @@ if actionName == "ml_fh_erasure"
         error("ml_fh_erasure requires enabled FH hop information.");
     end
     [rOut, reliability] = local_apply_ml_fh_erasure_action_local(r, hopInfoUsed, mitigation, modCfg);
+    reliability = (1 - pBlend) * ones(numel(r), 1) + pBlend * reliability;
     return;
 end
 
 if local_action_prefers_per_hop_local(actionName) && fhEnabled ...
         && isstruct(hopInfoUsed) && isfield(hopInfoUsed, "enable") && hopInfoUsed.enable ...
         && isfield(hopInfoUsed, "hopLen") && double(hopInfoUsed.hopLen) > 0
-    [rOut, reliability] = local_apply_action_per_hop_local(r, actionName, mitigation, round(double(hopInfoUsed.hopLen)));
+    [rOutMit, reliabilityMit] = local_apply_action_per_hop_local(r, actionName, mitigation, round(double(hopInfoUsed.hopLen)));
+    rOut = (1 - pBlend) * r + pBlend * rOutMit;
+    reliability = (1 - pBlend) * ones(numel(r), 1) + pBlend * reliabilityMit;
     return;
 end
 
-[rOut, reliability] = mitigate_impulses(r, actionName, mitigation);
+[rOutMit, reliabilityMit] = mitigate_impulses(r, actionName, mitigation);
+rOut = (1 - pBlend) * r + pBlend * rOutMit;
+reliability = (1 - pBlend) * ones(numel(r), 1) + pBlend * reliabilityMit;
 end
 
 function [rOut, reliabilityOut] = local_apply_multipath_fade_erasure_local(rIn, reliabilityIn, rxState, mitigation)
@@ -4710,7 +4732,10 @@ decision = struct( ...
     "confidence", NaN, ...
     "classProbabilities", zeros(0, 1), ...
     "featureRow", zeros(1, featureCount), ...
-    "bootstrapPath", string(bootstrapPath));
+    "bootstrapPath", string(bootstrapPath), ...
+    "pSample", 0, ...
+    "pSymbol", 0, ...
+    "evmScores", struct("candidates", strings(0, 1), "scores", zeros(0, 1)));
 
 methodName = string(methodName);
 if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnabled)
@@ -4720,30 +4745,253 @@ if local_is_adaptive_frontend_method_local(methodName) && logical(adaptiveEnable
         "rFull", rFull(:), ...
         "syncInfo", syncInfo);
     channelLenSymbols = local_multipath_channel_len_symbols_local(channelCfg, waveform);
-    [featureRow, featureInfo] = adaptive_frontend_extract_features(captureDiag, syncSymRef, N0, ...
+    [featureRow, ~] = adaptive_frontend_extract_features(captureDiag, syncSymRef, N0, ...
         "channelLenSymbols", channelLenSymbols);
-    [className, confidence, classProbabilities] = ml_predict_interference_class(featureRow, selectorModel);
-    actionName = local_map_class_to_action_local(mitigation, className);
-    probeObs = rFull(min(numel(syncSymRef) + 1, numel(rFull)):end);
-    if numel(probeObs) < 32
-        probeObs = rFull(:);
-    end
-    [className, actionName] = local_apply_narrowband_guard_local(mitigation, className, actionName, featureInfo, probeObs);
-    [sampleAction, symbolAction, routeLabel] = local_select_adaptive_frontend_route_local( ...
-        mitigation, classProbabilities, actionName);
+    [classProbabilities, classNames] = ml_predict_interference_presence(featureRow, selectorModel);
+    [sampleAction, symbolAction, pSample, pSymbol, evmScores] = local_select_cascade_stages_local( ...
+        mitigation, classProbabilities, classNames, rFull, syncSymRef);
+    routeLabel = local_compose_adaptive_action_label_local(sampleAction, symbolAction);
+    presenceLabel = local_compose_presence_label_local(classProbabilities, classNames);
+    dominantProb = max([pSample, pSymbol, 0]);
 
-    decision.selectedClass = string(className);
+    decision.selectedClass = presenceLabel;
     decision.selectedAction = routeLabel;
     decision.sampleAction = sampleAction;
     decision.symbolAction = symbolAction;
-    decision.confidence = double(confidence);
+    decision.confidence = double(dominantProb);
     decision.classProbabilities = classProbabilities;
     decision.featureRow = featureRow;
+    decision.pSample = double(pSample);
+    decision.pSymbol = double(pSymbol);
+    decision.evmScores = evmScores;
     return;
 end
 
 decision.selectedAction = local_effective_presync_method_name_local(methodName, adaptiveEnabled);
 [decision.sampleAction, decision.symbolAction] = local_split_mitigation_action_local(decision.selectedAction);
+end
+
+function [sampleAction, symbolAction, pSample, pSymbol, evmScores] = local_select_cascade_stages_local(mitigation, classProbabilities, classNames, rFull, syncSymRef)
+classProbabilities = double(classProbabilities(:));
+classNames = string(classNames(:));
+cfg = local_require_adaptive_frontend_cfg_local(mitigation);
+stagesCfg = local_require_adaptive_stages_cfg_local(cfg);
+
+[sampleAction, pSample] = local_select_sample_stage_local( ...
+    stagesCfg.sample, classProbabilities, classNames);
+[symbolAction, pSymbol, evmScores] = local_select_symbol_stage_local( ...
+    stagesCfg.symbol, classProbabilities, classNames, rFull, syncSymRef, mitigation);
+end
+
+function decision = local_rescore_symbol_stage_local(decision, rFull, syncSymRef, mitigation)
+if ~(isstruct(decision) && isfield(decision, "classProbabilities") ...
+        && ~isempty(decision.classProbabilities))
+    return;
+end
+cfg = local_require_adaptive_frontend_cfg_local(mitigation);
+stagesCfg = local_require_adaptive_stages_cfg_local(cfg);
+selectorModel = local_require_selector_model_local(mitigation);
+classProbabilities = double(decision.classProbabilities(:));
+classNames = string(selectorModel.classNames(:));
+
+[symbolAction, pSymbol, evmScores] = local_select_symbol_stage_local( ...
+    stagesCfg.symbol, classProbabilities, classNames, rFull, syncSymRef, mitigation);
+
+decision.symbolAction = symbolAction;
+decision.pSymbol = double(pSymbol);
+decision.evmScores = evmScores;
+decision.selectedAction = local_compose_adaptive_action_label_local(decision.sampleAction, symbolAction);
+decision.confidence = max([double(decision.pSample), double(pSymbol), 0]);
+end
+
+function [sampleAction, pSample] = local_select_sample_stage_local(stageCfg, classProbabilities, classNames)
+sampleAction = "none";
+pSample = local_aggregate_evidence_probability_local(stageCfg, classProbabilities, classNames);
+if pSample < double(stageCfg.enableThreshold)
+    return;
+end
+[orderedCandidates, ~] = local_order_stage_candidates_local(stageCfg, classProbabilities, classNames, "sample");
+if isempty(orderedCandidates)
+    return;
+end
+sampleAction = orderedCandidates(1);
+end
+
+function [symbolAction, pSymbol, evmScores] = local_select_symbol_stage_local(stageCfg, classProbabilities, classNames, rFull, syncSymRef, mitigation)
+symbolAction = "none";
+evmScores = struct("candidates", strings(0, 1), "scores", zeros(0, 1));
+pSymbol = local_aggregate_evidence_probability_local(stageCfg, classProbabilities, classNames);
+if pSymbol < double(stageCfg.enableThreshold)
+    return;
+end
+
+[orderedCandidates, ~] = local_order_stage_candidates_local(stageCfg, classProbabilities, classNames, "symbol");
+if isempty(orderedCandidates)
+    return;
+end
+
+topK = max(1, round(double(local_stage_cfg_scalar_local(stageCfg, "evmTopK", 2))));
+topK = min(topK, numel(orderedCandidates));
+picks = orderedCandidates(1:topK);
+% Always include "none" as a baseline — if the raw signal already has lower
+% EVM than any mitigated candidate, the stage should back off. Without this,
+% the stage commits to some action whenever the gate fires, even when doing
+% nothing would have been strictly better.
+if ~any(picks == "none")
+    picks(end+1, 1) = "none"; %#ok<AGROW>
+end
+
+rFull = rFull(:);
+syncSymRef = syncSymRef(:);
+nSync = min(numel(syncSymRef), numel(rFull));
+scores = inf(numel(picks), 1);
+for k = 1:numel(picks)
+    candidate = picks(k);
+    rCandidate = local_score_candidate_symbol_action_local(rFull, candidate, mitigation);
+    scores(k) = local_score_sync_evm_local(rCandidate, syncSymRef, nSync);
+end
+
+[~, bestIdx] = min(scores);
+symbolAction = picks(bestIdx);
+evmScores = struct("candidates", picks, "scores", scores);
+end
+
+function rOut = local_score_candidate_symbol_action_local(rIn, actionName, mitigation)
+rIn = rIn(:);
+switch lower(string(actionName))
+    case "none"
+        rOut = rIn;
+    case {"fh_erasure", "ml_fh_erasure"}
+        % FH-aware actions need hop info that is not available at scoring
+        % time; fall back to the raw signal so EVM reflects the baseline.
+        % Downstream execution still uses the full FH-aware pipeline.
+        rOut = rIn;
+    otherwise
+        [rOut, ~] = mitigate_impulses(rIn, actionName, mitigation);
+end
+rOut = rOut(:);
+end
+
+function evm = local_score_sync_evm_local(r, syncSymRef, nSync)
+r = r(:);
+syncSymRef = syncSymRef(:);
+nSync = round(double(nSync));
+if nSync <= 0 || numel(r) < nSync || numel(syncSymRef) < nSync
+    evm = inf;
+    return;
+end
+refSeg = syncSymRef(1:nSync);
+rxSeg = r(1:nSync);
+refPower = sum(abs(refSeg).^2);
+if ~(isfinite(refPower) && refPower > 0)
+    evm = inf;
+    return;
+end
+denom = sum(refSeg .* conj(refSeg));
+if abs(denom) <= 1e-12
+    evm = inf;
+    return;
+end
+hHat = sum(rxSeg .* conj(refSeg)) / denom;
+if ~isfinite(hHat) || abs(hHat) <= 1e-12
+    evm = inf;
+    return;
+end
+err = rxSeg ./ hHat - refSeg;
+evm = sqrt(sum(abs(err).^2) / refPower);
+if ~isfinite(evm)
+    evm = inf;
+end
+end
+
+function pEvidence = local_aggregate_evidence_probability_local(stageCfg, classProbabilities, classNames)
+evidence = string(stageCfg.evidenceClasses(:).');
+if isempty(evidence)
+    pEvidence = 0;
+    return;
+end
+pEvidence = 0;
+for k = 1:numel(evidence)
+    idx = find(classNames == evidence(k), 1, "first");
+    if isempty(idx)
+        continue;
+    end
+    pEvidence = max(pEvidence, classProbabilities(idx));
+end
+end
+
+function [orderedCandidates, orderedProbs] = local_order_stage_candidates_local(stageCfg, classProbabilities, classNames, layerName)
+candidates = string(stageCfg.candidates(:).');
+candidateClasses = string(stageCfg.candidateClasses(:).');
+if numel(candidates) ~= numel(candidateClasses)
+    error("mitigation.adaptiveFrontend.stages.%s.candidates and candidateClasses must have equal length.", char(layerName));
+end
+if isempty(candidates)
+    orderedCandidates = strings(0, 1);
+    orderedProbs = zeros(0, 1);
+    return;
+end
+
+probs = zeros(numel(candidates), 1);
+for k = 1:numel(candidates)
+    idx = find(classNames == candidateClasses(k), 1, "first");
+    if isempty(idx)
+        error("mitigation.adaptiveFrontend.stages.%s candidateClass %s is not registered.", ...
+            char(layerName), char(candidateClasses(k)));
+    end
+    probs(k) = classProbabilities(idx);
+    if candidates(k) == "none"
+        probs(k) = -inf;
+    end
+end
+[orderedProbs, order] = sort(probs, "descend");
+orderedCandidates = candidates(order);
+keep = orderedProbs > -inf;
+orderedCandidates = orderedCandidates(keep);
+orderedProbs = orderedProbs(keep);
+orderedCandidates = orderedCandidates(:);
+orderedProbs = orderedProbs(:);
+end
+
+function value = local_stage_cfg_scalar_local(stageCfg, fieldName, defaultValue)
+value = double(defaultValue);
+if isfield(stageCfg, fieldName) && ~isempty(stageCfg.(fieldName))
+    value = double(stageCfg.(fieldName));
+end
+if ~(isscalar(value) && isfinite(value))
+    error("stages.%s must be a finite scalar.", char(fieldName));
+end
+end
+
+function stagesCfg = local_require_adaptive_stages_cfg_local(cfg)
+if ~(isstruct(cfg) && isfield(cfg, "stages") && isstruct(cfg.stages))
+    error("mitigation.adaptiveFrontend.stages is required.");
+end
+stagesCfg = cfg.stages;
+for layer = ["sample" "symbol"]
+    if ~(isfield(stagesCfg, layer) && isstruct(stagesCfg.(layer)))
+        error("mitigation.adaptiveFrontend.stages.%s is required.", char(layer));
+    end
+    layerCfg = stagesCfg.(layer);
+    requiredFields = ["evidenceClasses", "candidates", "candidateClasses", "enableThreshold"];
+    for k = 1:numel(requiredFields)
+        if ~isfield(layerCfg, requiredFields(k))
+            error("mitigation.adaptiveFrontend.stages.%s.%s is required.", ...
+                char(layer), char(requiredFields(k)));
+        end
+    end
+end
+end
+
+function label = local_compose_presence_label_local(classProbabilities, classNames)
+classProbabilities = double(classProbabilities(:));
+classNames = string(classNames(:));
+if isempty(classProbabilities) || isempty(classNames)
+    label = "";
+    return;
+end
+[~, idx] = max(classProbabilities);
+label = classNames(idx);
 end
 
 function sampleAction = local_initial_sample_action_hint_local(methodName, adaptiveEnabled)
@@ -4808,104 +5056,6 @@ if ~isequal(modelClasses, cfgClasses)
 end
 end
 
-function actionName = local_map_class_to_action_local(mitigation, className)
-cfg = local_require_adaptive_frontend_cfg_local(mitigation);
-if ~(isfield(cfg, "classToAction") && isstruct(cfg.classToAction))
-    error("mitigation.adaptiveFrontend.classToAction is required.");
-end
-fieldName = matlab.lang.makeValidName(char(string(className)));
-if ~isfield(cfg.classToAction, fieldName)
-    error("Missing adaptive front-end action mapping for class %s.", char(string(className)));
-end
-actionName = string(cfg.classToAction.(fieldName));
-if strlength(actionName) == 0
-    error("Adaptive front-end action mapping for class %s must not be empty.", char(string(className)));
-end
-if actionName == "adaptive_ml_frontend"
-    error("Adaptive front-end action mapping for class %s must not recursively map to adaptive_ml_frontend.", ...
-        char(string(className)));
-end
-[sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
-if sampleAction ~= "none" && symbolAction ~= "none"
-    error("Adaptive front-end action mapping for class %s must be a single-layer action.", char(string(className)));
-end
-end
-
-function [sampleAction, symbolAction, routeLabel] = local_select_adaptive_frontend_route_local(mitigation, classProbabilities, dominantAction)
-cfg = local_require_adaptive_frontend_cfg_local(mitigation);
-classNames = string(cfg.classNames(:).');
-classProbabilities = double(classProbabilities(:));
-if numel(classProbabilities) ~= numel(classNames)
-    error("adaptive_ml_frontend class probability vector length %d does not match classNames length %d.", ...
-        numel(classProbabilities), numel(classNames));
-end
-if any(~isfinite(classProbabilities)) || any(classProbabilities < 0)
-    error("adaptive_ml_frontend class probabilities must be finite and nonnegative.");
-end
-
-[sampleAction, symbolAction] = local_split_mitigation_action_local(dominantAction);
-routeCfg = local_require_adaptive_sparse_routing_cfg_local(cfg);
-if routeCfg.enable
-    if routeCfg.enableAuxiliarySample && sampleAction == "none"
-        sampleAction = local_select_adaptive_aux_action_local( ...
-            mitigation, classNames, classProbabilities, routeCfg.sampleClasses, ...
-            routeCfg.sampleProbabilityThreshold, "sample");
-    end
-    if routeCfg.enableAuxiliarySymbol && symbolAction == "none"
-        symbolAction = local_select_adaptive_aux_action_local( ...
-            mitigation, classNames, classProbabilities, routeCfg.symbolClasses, ...
-            routeCfg.symbolProbabilityThreshold, "symbol");
-    end
-end
-routeLabel = local_compose_adaptive_action_label_local(sampleAction, symbolAction);
-end
-
-function actionOut = local_select_adaptive_aux_action_local(mitigation, classNames, classProbabilities, candidateClasses, threshold, layerName)
-layerName = lower(string(layerName));
-candidateClasses = string(candidateClasses(:).');
-if isempty(candidateClasses) || any(strlength(candidateClasses) == 0)
-    error("adaptive_ml_frontend sparse routing %s candidate class list must be non-empty.", char(layerName));
-end
-if ~(isscalar(threshold) && isfinite(threshold) && threshold >= 0 && threshold <= 1)
-    error("adaptive_ml_frontend sparse routing %s threshold must be a finite scalar in [0, 1].", char(layerName));
-end
-
-bestProb = -inf;
-actionOut = "none";
-for k = 1:numel(candidateClasses)
-    classNow = candidateClasses(k);
-    idx = find(classNames == classNow, 1, "first");
-    if isempty(idx)
-        error("adaptive_ml_frontend sparse routing candidate class %s is not registered.", char(classNow));
-    end
-    mappedAction = local_map_class_to_action_local(mitigation, classNow);
-    [sampleNow, symbolNow] = local_split_mitigation_action_local(mappedAction);
-    switch layerName
-        case "sample"
-            if sampleNow == "none" || symbolNow ~= "none"
-                error("adaptive_ml_frontend sparse routing class %s must map to a sample-domain action.", char(classNow));
-            end
-            actionNow = sampleNow;
-        case "symbol"
-            if symbolNow == "none" || sampleNow ~= "none"
-                error("adaptive_ml_frontend sparse routing class %s must map to a symbol-domain action.", char(classNow));
-            end
-            actionNow = symbolNow;
-        otherwise
-            error("Unsupported adaptive sparse routing layer: %s", char(layerName));
-    end
-    probNow = classProbabilities(idx);
-    if probNow > bestProb
-        bestProb = probNow;
-        actionOut = actionNow;
-    end
-end
-
-if ~(bestProb >= threshold)
-    actionOut = "none";
-end
-end
-
 function routeLabel = local_compose_adaptive_action_label_local(sampleAction, symbolAction)
 sampleAction = lower(string(sampleAction));
 symbolAction = lower(string(symbolAction));
@@ -4929,159 +5079,6 @@ if ~(isfield(mitigation, "adaptiveFrontend") && isstruct(mitigation.adaptiveFron
     error("mitigation.adaptiveFrontend is required for adaptive_ml_frontend.");
 end
 cfg = mitigation.adaptiveFrontend;
-end
-
-function routeCfg = local_require_adaptive_sparse_routing_cfg_local(cfg)
-if ~(isstruct(cfg) && isfield(cfg, "sparseRouting") && isstruct(cfg.sparseRouting))
-    error("mitigation.adaptiveFrontend.sparseRouting is required.");
-end
-raw = cfg.sparseRouting;
-requiredFields = [ ...
-    "enable", "enableAuxiliarySample", "enableAuxiliarySymbol", ...
-    "sampleClasses", "symbolClasses", ...
-    "sampleProbabilityThreshold", "symbolProbabilityThreshold"];
-for k = 1:numel(requiredFields)
-    if ~isfield(raw, requiredFields(k))
-        error("mitigation.adaptiveFrontend.sparseRouting.%s is required.", char(requiredFields(k)));
-    end
-end
-
-routeCfg = struct();
-routeCfg.enable = local_require_adaptive_logical_scalar_local(raw.enable, "mitigation.adaptiveFrontend.sparseRouting.enable");
-routeCfg.enableAuxiliarySample = local_require_adaptive_logical_scalar_local(raw.enableAuxiliarySample, ...
-    "mitigation.adaptiveFrontend.sparseRouting.enableAuxiliarySample");
-routeCfg.enableAuxiliarySymbol = local_require_adaptive_logical_scalar_local(raw.enableAuxiliarySymbol, ...
-    "mitigation.adaptiveFrontend.sparseRouting.enableAuxiliarySymbol");
-routeCfg.sampleClasses = local_require_adaptive_class_vector_local(raw.sampleClasses, ...
-    cfg.classNames, "mitigation.adaptiveFrontend.sparseRouting.sampleClasses");
-routeCfg.symbolClasses = local_require_adaptive_class_vector_local(raw.symbolClasses, ...
-    cfg.classNames, "mitigation.adaptiveFrontend.sparseRouting.symbolClasses");
-routeCfg.sampleProbabilityThreshold = local_require_adaptive_probability_local(raw.sampleProbabilityThreshold, ...
-    "mitigation.adaptiveFrontend.sparseRouting.sampleProbabilityThreshold");
-routeCfg.symbolProbabilityThreshold = local_require_adaptive_probability_local(raw.symbolProbabilityThreshold, ...
-    "mitigation.adaptiveFrontend.sparseRouting.symbolProbabilityThreshold");
-end
-
-function value = local_require_adaptive_logical_scalar_local(rawValue, fieldName)
-if ~(islogical(rawValue) || isnumeric(rawValue))
-    error("%s must be a logical scalar.", fieldName);
-end
-value = logical(rawValue);
-if ~isscalar(value)
-    error("%s must be a logical scalar.", fieldName);
-end
-end
-
-function classes = local_require_adaptive_class_vector_local(rawClasses, classCatalog, fieldName)
-classes = string(rawClasses(:).');
-if isempty(classes) || any(strlength(classes) == 0)
-    error("%s must be a non-empty string vector.", fieldName);
-end
-classCatalog = string(classCatalog(:).');
-invalid = classes(~ismember(classes, classCatalog));
-if ~isempty(invalid)
-    error("%s contains unsupported classes: %s.", fieldName, strjoin(cellstr(unique(invalid, "stable")), ", "));
-end
-if numel(unique(classes, "stable")) ~= numel(classes)
-    error("%s must not contain duplicates.", fieldName);
-end
-end
-
-function value = local_require_adaptive_probability_local(rawValue, fieldName)
-value = double(rawValue);
-if ~(isscalar(value) && isfinite(value) && value >= 0 && value <= 1)
-    error("%s must be a finite scalar in [0, 1].", fieldName);
-end
-end
-
-function [className, actionName] = local_apply_narrowband_guard_local(mitigation, className, actionName, featureInfo, obs)
-if ~(isfield(mitigation, "adaptiveFrontend") && isstruct(mitigation.adaptiveFrontend) ...
-        && isfield(mitigation.adaptiveFrontend, "narrowbandGuard") ...
-        && isstruct(mitigation.adaptiveFrontend.narrowbandGuard))
-    return;
-end
-
-guard = mitigation.adaptiveFrontend.narrowbandGuard;
-if ~(isfield(guard, "enable") && logical(guard.enable))
-    return;
-end
-
-obs = obs(:);
-if numel(obs) < 32
-    return;
-end
-
-probeCfg = mitigation.fftBandstop;
-if isfield(guard, "probePeakRatio") && ~isempty(guard.probePeakRatio)
-    probeCfg.peakRatio = double(guard.probePeakRatio);
-end
-[~, probeInfo] = fft_bandstop_filter(obs, probeCfg);
-if ~(isfield(probeInfo, "applied") && probeInfo.applied && ~isempty(probeInfo.selectedBandwidthFrac))
-    return;
-end
-
-bwFrac = max(double(probeInfo.selectedBandwidthFrac));
-metrics = struct();
-if isfield(featureInfo, "metrics") && isstruct(featureInfo.metrics)
-    metrics = featureInfo.metrics;
-end
-
-overrideClasses = ["clean" "multipath"];
-if isfield(guard, "overrideClasses") && ~isempty(guard.overrideClasses)
-    overrideClasses = string(guard.overrideClasses(:).');
-end
-
-minBw = local_guard_scalar_local(guard, "minBandwidthFrac", 0.025);
-maxBw = local_guard_scalar_local(guard, "maxBandwidthFrac", 0.22);
-toneBw = local_guard_scalar_local(guard, "toneBandwidthFrac", 0.025);
-minFftPeakRatio = local_guard_scalar_local(guard, "minFftPeakRatio", 6.0);
-fftPeakRatio = max(local_metric_scalar_local(metrics, "fftPeakRatio"), max(double(probeInfo.peakRatios)));
-narrowbandLike = bwFrac >= minBw && bwFrac <= maxBw ...
-    && fftPeakRatio >= minFftPeakRatio;
-guardAction = local_narrowband_guard_action_local(guard);
-
-if className == "tone" && bwFrac >= toneBw
-    className = "narrowband";
-    actionName = guardAction;
-    return;
-end
-
-if any(className == overrideClasses) && narrowbandLike
-    className = "narrowband";
-    actionName = guardAction;
-end
-end
-
-function actionName = local_narrowband_guard_action_local(guard)
-if ~(isfield(guard, "action") && strlength(string(guard.action)) > 0)
-    error("adaptiveFrontend.narrowbandGuard.action is required.");
-end
-actionName = lower(string(guard.action));
-[sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
-if sampleAction ~= "none" || symbolAction == "none"
-    error("adaptiveFrontend.narrowbandGuard.action must be a symbol-domain mitigation action.");
-end
-actionName = symbolAction;
-end
-
-function value = local_guard_scalar_local(cfg, fieldName, defaultValue)
-value = double(defaultValue);
-if isfield(cfg, fieldName) && ~isempty(cfg.(fieldName))
-    value = double(cfg.(fieldName));
-end
-if ~(isscalar(value) && isfinite(value))
-    error("adaptiveFrontend.narrowbandGuard.%s must be a finite scalar.", fieldName);
-end
-end
-
-function value = local_metric_scalar_local(metrics, fieldName)
-value = 0;
-if isfield(metrics, fieldName) && ~isempty(metrics.(fieldName))
-    value = double(metrics.(fieldName));
-end
-if ~(isscalar(value) && isfinite(value))
-    value = 0;
-end
 end
 
 function hdrSymPrep = local_prepare_header_symbols_local(hdrSym, actionName, mitigation, headerActionCtx)
@@ -5314,6 +5311,9 @@ nom.adaptiveClass = strings(nPackets, 1);
 nom.adaptiveAction = strings(nPackets, 1);
 nom.adaptiveBootstrapPath = strings(nPackets, 1);
 nom.adaptiveConfidence = nan(nPackets, 1);
+nom.adaptivePSample = zeros(nPackets, 1);
+nom.adaptivePSymbol = zeros(nPackets, 1);
+nom.adaptiveEvmScores = cell(nPackets, 1);
 nom.session = local_init_session_nominal_local(nSessionFrames);
 end
 
@@ -5329,6 +5329,9 @@ nom.adaptiveClass = strings(nFrames, 1);
 nom.adaptiveAction = strings(nFrames, 1);
 nom.adaptiveBootstrapPath = strings(nFrames, 1);
 nom.adaptiveConfidence = nan(nFrames, 1);
+nom.adaptivePSample = zeros(nFrames, 1);
+nom.adaptivePSymbol = zeros(nFrames, 1);
+nom.adaptiveEvmScores = cell(nFrames, 1);
 end
 
 function sessionRx = local_capture_session_frames_raw_local(sessionFrames, rxAmplitudeScale, N0, channelBank, frameDelay, waveform, rxDiversityCfg)
@@ -5411,11 +5414,15 @@ for pktIdx = 1:nPackets
         end
         rFull = front.rFull;
         reliabilityFull = front.reliabilityFull;
+        decision = local_rescore_symbol_stage_local(decision, rFull, syncSymRef, mitigation);
     end
     nom.adaptiveClass(pktIdx) = string(decision.selectedClass);
     nom.adaptiveAction(pktIdx) = string(decision.selectedAction);
     nom.adaptiveBootstrapPath(pktIdx) = string(front.bootstrapPath);
     nom.adaptiveConfidence(pktIdx) = double(decision.confidence);
+    nom.adaptivePSample(pktIdx) = double(decision.pSample);
+    nom.adaptivePSymbol(pktIdx) = double(decision.pSymbol);
+    nom.adaptiveEvmScores{pktIdx} = decision.evmScores;
 
     multipathEqReliabilityFull = [];
     multipathEq = [];
@@ -5461,6 +5468,7 @@ for pktIdx = 1:nPackets
     rxState = derive_rx_packet_state_local( ...
         p, double(phy.packetIndex), local_packet_data_bits_len_from_header_local(p, double(phy.packetIndex), phy));
     rxState.sampleFhDataDemod = local_data_sample_fh_demod_enabled_local(fhCaptureCfg);
+    rxState.adaptivePSymbolBlend = double(decision.pSymbol);
     if ~isempty(multipathEqReliabilityFull)
         rxState.multipathEqReliability = local_fit_reliability_length_local( ...
             multipathEqReliabilityFull(preLen+hdrLen+1:end), rxState.nDataSym);
@@ -5532,11 +5540,15 @@ for frameIdx = 1:numel(sessionFrames)
         end
         rFull = front.rFull;
         reliabilityFull = front.reliabilityFull;
+        decision = local_rescore_symbol_stage_local(decision, rFull, sessionFrame.syncSym(:), mitigation);
     end
     nom.adaptiveClass(frameIdx) = string(decision.selectedClass);
     nom.adaptiveAction(frameIdx) = string(decision.selectedAction);
     nom.adaptiveBootstrapPath(frameIdx) = string(front.bootstrapPath);
     nom.adaptiveConfidence(frameIdx) = double(decision.confidence);
+    nom.adaptivePSample(frameIdx) = double(decision.pSample);
+    nom.adaptivePSymbol(frameIdx) = double(decision.pSymbol);
+    nom.adaptiveEvmScores{frameIdx} = decision.evmScores;
 
     if local_multipath_eq_enabled_local(p.channel, rxSyncCfg)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
@@ -5548,6 +5560,7 @@ for frameIdx = 1:numel(sessionFrames)
 
     rxStateSession = local_session_rx_state_local(sessionFrame);
     rxStateSession.sampleFhDataDemod = local_data_sample_fh_demod_enabled_local(fhCaptureCfg);
+    rxStateSession.adaptivePSymbolBlend = double(decision.pSymbol);
     nom.preambleRx{frameIdx} = fit_complex_length_local(rFull(1:preLen), preLen);
     nom.preambleRef{frameIdx} = sessionFrame.syncSym(:);
     actionName = string(decision.symbolAction);
@@ -5800,7 +5813,7 @@ if ~isstruct(mitigationCfg) || ~isscalar(mitigationCfg)
 end
 cfg = local_require_adaptive_frontend_cfg_local(mitigationCfg);
 local_require_struct_fields_local(cfg, ...
-    ["bootstrapSyncChain", "classNames", "classToAction", "sparseRouting", "diagnostics"], ...
+    ["bootstrapSyncChain", "classNames", "stages", "diagnostics"], ...
     "mitigation.adaptiveFrontend");
 
 classNames = string(cfg.classNames(:).');
@@ -5811,35 +5824,47 @@ end
 if isempty(bootstrapPaths)
     error("mitigation.adaptiveFrontend.bootstrapSyncChain 不能为空。");
 end
-if ~isstruct(cfg.classToAction) || ~isscalar(cfg.classToAction)
-    error("mitigation.adaptiveFrontend.classToAction 必须是标量struct。");
-end
 
-local_require_adaptive_sparse_routing_cfg_local(cfg);
-sampleActions = "none";
-symbolActions = "none";
-for k = 1:numel(classNames)
-    actionName = local_map_class_to_action_local(mitigationCfg, classNames(k));
-    [sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
-    if sampleAction ~= "none" && ~any(sampleActions == sampleAction)
-        sampleActions(end + 1) = sampleAction; %#ok<AGROW>
-    end
-    if symbolAction ~= "none" && ~any(symbolActions == symbolAction)
-        symbolActions(end + 1) = symbolAction; %#ok<AGROW>
-    end
-end
-if isfield(cfg, "narrowbandGuard") && isstruct(cfg.narrowbandGuard) ...
-        && isfield(cfg.narrowbandGuard, "enable") && logical(cfg.narrowbandGuard.enable)
-    guardAction = local_narrowband_guard_action_local(cfg.narrowbandGuard);
-    if ~any(symbolActions == guardAction)
-        symbolActions(end + 1) = guardAction; %#ok<AGROW>
-    end
-end
+stagesCfg = local_require_adaptive_stages_cfg_local(cfg);
+sampleActions = local_stage_action_catalog_local(stagesCfg.sample, "sample");
+symbolActions = local_stage_action_catalog_local(stagesCfg.symbol, "symbol");
 
 diagCfg = struct( ...
     "classNames", classNames, ...
     "actionNames", local_build_adaptive_action_catalog_local(sampleActions, symbolActions), ...
     "bootstrapPaths", bootstrapPaths);
+end
+
+function actions = local_stage_action_catalog_local(stageCfg, layerName)
+actions = "none";
+if ~(isfield(stageCfg, "candidates") && ~isempty(stageCfg.candidates))
+    return;
+end
+candidates = lower(string(stageCfg.candidates(:).'));
+for k = 1:numel(candidates)
+    actionName = candidates(k);
+    if actionName == "none"
+        continue;
+    end
+    [sampleAction, symbolAction] = local_split_mitigation_action_local(actionName);
+    switch lower(string(layerName))
+        case "sample"
+            if sampleAction == "none" || symbolAction ~= "none"
+                error("mitigation.adaptiveFrontend.stages.sample candidate %s must be a sample-domain action.", char(actionName));
+            end
+            resolved = sampleAction;
+        case "symbol"
+            if symbolAction == "none" || sampleAction ~= "none"
+                error("mitigation.adaptiveFrontend.stages.symbol candidate %s must be a symbol-domain action.", char(actionName));
+            end
+            resolved = symbolAction;
+        otherwise
+            error("Unsupported adaptive stage layer: %s", char(layerName));
+    end
+    if ~any(actions == resolved)
+        actions(end + 1) = resolved; %#ok<AGROW>
+    end
+end
 end
 
 function actionNames = local_build_adaptive_action_catalog_local(sampleActions, symbolActions)
@@ -6877,7 +6902,7 @@ local_require_struct_fields_local(eveCfg.mitigation.thresholdCalibration, [ ...
     "minPacketTrustedSamples", "preambleUpdateAlpha", "packetUpdateAlpha", ...
     "preambleResidualAlpha", "packetResidualAlpha"], "eve.mitigation.thresholdCalibration");
 local_require_struct_fields_local(eveCfg.mitigation.adaptiveFrontend, [ ...
-    "bootstrapSyncChain", "classNames", "classToAction", "sparseRouting", "diagnostics"], ...
+    "bootstrapSyncChain", "classNames", "stages", "diagnostics"], ...
     "eve.mitigation.adaptiveFrontend");
 
 methodsEve = resolve_mitigation_methods(eveCfg.mitigation, channelCfg);

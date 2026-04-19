@@ -232,9 +232,9 @@ p.frame.phyHeaderFhSymbolsPerHop = phy_header_nondiverse_min_symbols_per_hop(p.f
 % AWGN + 伯努利-高斯脉冲噪声（可选叠加更多干扰/同步失配）
 p.channel = struct();
 p.channel.maxDelaySymbols = 200; % 随机前导零用于测试帧同步
-p.channel.impulseProb = 0;    % 每个符号触发脉冲的概率；当前默认取中等稀疏度，进入采样级前会换算为每采样概率
+p.channel.impulseProb = 0.03;    % 每个符号触发脉冲的概率；当前默认取中等稀疏度，进入采样级前会换算为每采样概率
 p.channel.impulseToBgRatio = 50; % 非JSR重标定时，单次脉冲噪声方差相对背景噪声方差的倍数
-p.channel.impulseWeight =0;   % JSR总干扰功率分配权重；weight>0且impulseProb>0时纳入干扰预算
+p.channel.impulseWeight =1;   % JSR总干扰功率分配权重；weight>0且impulseProb>0时纳入干扰预算
 % 可选：单音干扰（窄带强干扰）
 p.channel.singleTone = struct();
 p.channel.singleTone.enable = false;
@@ -262,7 +262,7 @@ p.channel.syncImpairment.timingOffsetSymbols = 0.0; % 分数符号偏移（单�
 p.channel.syncImpairment.phaseOffsetRad = 0.0;    % 初始相位偏移（rad）
 % 可选：多径抽头信道（整数抽头时延，复基带等效）
 p.channel.multipath = struct();
-p.channel.multipath.enable = false;
+p.channel.multipath.enable = true;
 p.channel.multipath.pathDelaysSymbols = [0 1 2];   % 各径时延（单位：symbol）
 p.channel.multipath.pathGainsDb = [0 -12 -18]; % 各径平均增益(dB)
 p.channel.multipath.rayleigh = true;        % 启用瑞利衰落（各径独立复高斯系数，每帧随机）
@@ -332,21 +332,19 @@ p.mitigation.stftNotch.minFreqAbs = 0.01;
 p.mitigation.adaptiveFrontend = struct();
 p.mitigation.adaptiveFrontend.bootstrapSyncChain = ["raw" "adaptive_notch" "blanking"];
 p.mitigation.adaptiveFrontend.classNames = ml_interference_selector_class_names();
-p.mitigation.adaptiveFrontend.classToAction = struct( ...
-    "clean", "none", ...
-    "impulse", "ml_gru", ...
-    "tone", "adaptive_notch", ...
-    "narrowband", "fh_erasure", ...
-    "sweep", "stft_notch", ...
-    "multipath", "none");
-p.mitigation.adaptiveFrontend.sparseRouting = struct();
-p.mitigation.adaptiveFrontend.sparseRouting.enable = true; % 主类别动作保留，同时按概率补一个辅助专家
-p.mitigation.adaptiveFrontend.sparseRouting.enableAuxiliarySample = true;
-p.mitigation.adaptiveFrontend.sparseRouting.enableAuxiliarySymbol = true;
-p.mitigation.adaptiveFrontend.sparseRouting.sampleClasses = ["impulse"];
-p.mitigation.adaptiveFrontend.sparseRouting.symbolClasses = ["tone" "narrowband" "sweep"];
-p.mitigation.adaptiveFrontend.sparseRouting.sampleProbabilityThreshold = 0.25;
-p.mitigation.adaptiveFrontend.sparseRouting.symbolProbabilityThreshold = 0.10;
+p.mitigation.adaptiveFrontend.stages = struct();
+p.mitigation.adaptiveFrontend.stages.sample = struct( ...
+    "evidenceClasses", ["impulse"], ...
+    "candidates", ["none" "ml_gru" "ml_cnn" "blanking"], ...
+    "candidateClasses", ["clean" "impulse" "impulse" "impulse"], ...
+    "enableThreshold", 0.30);
+p.mitigation.adaptiveFrontend.stages.symbol = struct( ...
+    "evidenceClasses", ["tone" "narrowband" "sweep"], ...
+    "candidates", ["none" "adaptive_notch" "fft_bandstop" "stft_notch" "fh_erasure" "ml_narrowband"], ...
+    "candidateClasses", ["clean" "tone" "narrowband" "sweep" "narrowband" "narrowband"], ...
+    "enableThreshold", 0.15, ...
+    "evmEarlyExitProbability", 0.80, ...
+    "evmTopK", 2);
 p.mitigation.adaptiveFrontend.diagnostics = true;
 p.mitigation.adaptiveFrontend.trainingDomain = struct();
 p.mitigation.adaptiveFrontend.trainingDomain.classNames = ml_interference_selector_class_names();
@@ -377,17 +375,6 @@ p.mitigation.adaptiveFrontend.trainingDomain.multipath = struct( ...
     "pathGainsDb", [0 -8 -14], ...
     "pathGainJitterDb", 3.0, ...
     "rayleighProbability", 0.70);
-p.mitigation.adaptiveFrontend.narrowbandGuard = struct();
-p.mitigation.adaptiveFrontend.narrowbandGuard.enable = true;
-p.mitigation.adaptiveFrontend.narrowbandGuard.action = "fh_erasure";
-p.mitigation.adaptiveFrontend.narrowbandGuard.overrideClasses = ["clean" "impulse" "multipath"];
-p.mitigation.adaptiveFrontend.narrowbandGuard.probePeakRatio = 3.5;
-p.mitigation.adaptiveFrontend.narrowbandGuard.minBandwidthFrac = 0.02;
-p.mitigation.adaptiveFrontend.narrowbandGuard.maxBandwidthFrac = 0.22;
-p.mitigation.adaptiveFrontend.narrowbandGuard.minFftPeakRatio = 5.0;
-p.mitigation.adaptiveFrontend.narrowbandGuard.maxResidualKurtosis = 8.0;
-p.mitigation.adaptiveFrontend.narrowbandGuard.maxResidualOutlierRate = 0.18;
-p.mitigation.adaptiveFrontend.narrowbandGuard.toneBandwidthFrac = 0.025;
 p.mitigation.headerBandstop = struct();
 p.mitigation.headerBandstop.enable = true;
 p.mitigation.headerBandstop.observationSymbols = 512;

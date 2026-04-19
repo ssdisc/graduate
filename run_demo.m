@@ -291,10 +291,71 @@ fprintf('========================================\n\n');
 
 results = simulate(p);
 disp(results.summary);
+local_print_adaptive_action_distribution(results);
 if nargout == 0
     clear results
 end
 
+end
+
+function local_print_adaptive_action_distribution(results)
+if ~(isstruct(results) && isfield(results, "packetDiagnostics") ...
+        && isstruct(results.packetDiagnostics) && isfield(results.packetDiagnostics, "bob") ...
+        && isstruct(results.packetDiagnostics.bob) && isfield(results.packetDiagnostics.bob, "adaptiveFrontEnd"))
+    return;
+end
+af = results.packetDiagnostics.bob.adaptiveFrontEnd;
+if ~(isfield(af, "actionNames") && isfield(af, "actionCounts") && isfield(af, "classNames") ...
+        && isfield(af, "classCounts"))
+    return;
+end
+methods = string(results.methods(:).');
+idx = find(startsWith(lower(methods), "adaptive_ml_frontend"), 1, "first");
+if isempty(idx)
+    return;
+end
+
+actionCounts = double(squeeze(sum(af.actionCounts(:, idx, :), 3)));
+classCounts = double(squeeze(sum(af.classCounts(:, idx, :), 3)));
+totalDecisions = sum(actionCounts);
+if totalDecisions <= 0
+    fprintf('\nadaptive_ml_frontend: no decisions recorded.\n');
+    return;
+end
+
+fprintf('\n========================================\n');
+fprintf('adaptive_ml_frontend decision distribution (method "%s")\n', char(methods(idx)));
+fprintf('Total decisions across Eb/N0 points: %d\n', totalDecisions);
+fprintf('========================================\n');
+
+actionNames = string(af.actionNames(:));
+[counts, order] = sort(actionCounts, "descend");
+actionNamesSorted = actionNames(order);
+nonzero = counts > 0;
+fprintf('Actions (non-zero, sorted by count):\n');
+for k = 1:numel(counts)
+    if ~nonzero(k)
+        continue;
+    end
+    fprintf('  %5d (%.1f%%)  %s\n', counts(k), 100 * counts(k) / totalDecisions, char(actionNamesSorted(k)));
+end
+
+classNames = string(af.classNames(:));
+[clsCounts, clsOrder] = sort(classCounts, "descend");
+fprintf('Argmax class distribution:\n');
+for k = 1:numel(clsCounts)
+    if clsCounts(k) == 0
+        continue;
+    end
+    fprintf('  %5d (%.1f%%)  %s\n', clsCounts(k), 100 * clsCounts(k) / totalDecisions, char(classNames(clsOrder(k))));
+end
+
+if isfield(af, "meanConfidence") && ~isempty(af.meanConfidence) ...
+        && size(af.meanConfidence, 1) >= idx
+    confPerEbN0 = double(af.meanConfidence(idx, :));
+    fprintf('Mean confidence by Eb/N0: %s\n', mat2str(confPerEbN0, 4));
+end
+fprintf('========================================\n');
 end
 
 function args = local_generalized_training_args(p)
