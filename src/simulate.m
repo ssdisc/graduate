@@ -2388,7 +2388,7 @@ if requestedMethod == "sc_fde_mmse"
 end
 end
 
-function candidates = local_build_header_decode_candidates_local(rFullRaw, rFullConfigured, txPreamble, rxSyncCfg, N0, chLenSymbols, freqBySymbol)
+function candidates = local_build_header_decode_candidates_local(rFullRaw, rFullConfigured, txPreamble, rxSyncCfg, N0, chLenSymbols, freqBySymbol, symbolAction, mitigation)
 rFullRaw = rFullRaw(:);
 rFullConfigured = rFullConfigured(:);
 if numel(rFullRaw) ~= numel(rFullConfigured)
@@ -2417,8 +2417,10 @@ for requestedMethod = requestedMethods
     else
         eqCfgNow = rxSyncCfg.multipathEq;
         eqCfgNow.method = actualMethod;
+        preambleForEqNow = local_preamble_for_equalizer_estimation_local( ...
+            rFullRaw(1:numel(txPreamble)), symbolAction, mitigation);
         eqNow = local_design_multipath_equalizer_local( ...
-            txPreamble, rFullRaw(1:numel(txPreamble)), eqCfgNow, N0, chLenSymbols, freqBySymbol);
+            txPreamble, preambleForEqNow, eqCfgNow, N0, chLenSymbols, freqBySymbol);
         rFullNow = local_apply_frequency_aware_equalizer_block_local(rFullRaw, eqNow, freqBySymbol);
     end
 
@@ -3624,6 +3626,21 @@ end
 function tf = local_action_prefers_per_hop_local(actionName)
 actionName = lower(string(actionName));
 tf = any(actionName == ["fft_notch" "fft_bandstop" "adaptive_notch" "stft_notch" "ml_narrowband"]);
+end
+
+function tf = local_action_is_narrowband_local(actionName)
+tf = local_action_prefers_per_hop_local(actionName);
+end
+
+function preambleOut = local_preamble_for_equalizer_estimation_local(preambleIn, actionName, mitigation)
+preambleOut = preambleIn(:);
+if isempty(preambleOut)
+    return;
+end
+if ~local_action_is_narrowband_local(actionName)
+    return;
+end
+[preambleOut, ~] = mitigate_impulses(preambleOut, actionName, mitigation);
 end
 
 function [rOut, reliability] = local_apply_fh_erasure_action_local(rIn, hopInfoUsed, mitigation, modCfg)
@@ -5449,7 +5466,8 @@ for pktIdx = 1:nPackets
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
         eqCfg = rxSyncCfg.multipathEq;
         freqBySymbol = local_packet_equalizer_frequency_vector_local(txPackets(pktIdx), fhCaptureCfg, totalLen);
-        eq = local_design_multipath_equalizer_local(syncSymRef, rFull(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+        preambleForEq = local_preamble_for_equalizer_estimation_local(rFull(1:preLen), decision.symbolAction, mitigation);
+        eq = local_design_multipath_equalizer_local(syncSymRef, preambleForEq, eqCfg, N0, chLenSymbols, freqBySymbol);
         multipathEq = eq;
         multipathEqReliabilityFull = local_multipath_equalizer_reliability_vector_local(eq, freqBySymbol, mitigation);
         if local_sc_fde_equalizer_method_local(rxSyncCfg)
@@ -5463,7 +5481,7 @@ for pktIdx = 1:nPackets
             rFullForHeader = rFull;
         end
         headerDecodeCandidates = local_build_header_decode_candidates_local( ...
-            rFullRaw, rFullForHeader, syncSymRef, rxSyncCfg, N0, chLenSymbols, freqBySymbol);
+            rFullRaw, rFullForHeader, syncSymRef, rxSyncCfg, N0, chLenSymbols, freqBySymbol, decision.symbolAction, mitigation);
     end
 
     nom.frontEndOk(pktIdx) = true;
@@ -5489,7 +5507,7 @@ for pktIdx = 1:nPackets
     end
     if local_rx_state_sc_fde_enabled_local(rxState)
         rxState.scFdeDiversity = local_build_sc_fde_diversity_state_local( ...
-            front, preLen, hdrLen, syncSymRef, p.channel, rxSyncCfg, p.mod, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState);
+            front, preLen, hdrLen, syncSymRef, p.channel, rxSyncCfg, p.mod, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState, decision.symbolAction, mitigation);
     end
     if local_sc_fde_equalizer_method_local(rxSyncCfg)
         if isempty(multipathEq)
@@ -5563,7 +5581,8 @@ for frameIdx = 1:numel(sessionFrames)
         chLenSymbols = local_multipath_channel_len_symbols_local(p.channel, waveform);
         eqCfg = rxSyncCfg.multipathEq;
         freqBySymbol = local_session_equalizer_frequency_vector_local(sessionFrame, fhCaptureCfg, totalLen);
-        eq = local_design_multipath_equalizer_local(sessionFrame.syncSym(:), rFull(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+        preambleForEq = local_preamble_for_equalizer_estimation_local(rFull(1:preLen), decision.symbolAction, mitigation);
+        eq = local_design_multipath_equalizer_local(sessionFrame.syncSym(:), preambleForEq, eqCfg, N0, chLenSymbols, freqBySymbol);
         rFull = local_apply_frequency_aware_equalizer_block_local(rFull, eq, freqBySymbol);
     end
 
@@ -5988,7 +6007,7 @@ if ~isfield(metaOut, "rsParityPacketsPerBlock")
 end
 end
 
-function divState = local_build_sc_fde_diversity_state_local(front, preLen, hdrLen, syncSymRef, channelCfg, rxSyncCfg, modCfg, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState)
+function divState = local_build_sc_fde_diversity_state_local(front, preLen, hdrLen, syncSymRef, channelCfg, rxSyncCfg, modCfg, waveform, fhCaptureCfg, N0, chLenSymbols, freqBySymbol, rxState, symbolAction, mitigation)
 divState = local_disabled_sc_fde_diversity_state_local();
 if ~local_rx_state_sc_fde_enabled_local(rxState)
     return;
@@ -6023,8 +6042,9 @@ for branchIdx = 1:numel(branchFronts)
     eqBranch = struct();
     rFullEqGuardBranch = complex(zeros(0, 1));
     if multipathEqEnabled
+        preambleForEqBranch = local_preamble_for_equalizer_estimation_local(rFullBranch(1:preLen), symbolAction, mitigation);
         eqBranch = local_design_multipath_equalizer_local( ...
-            syncSymRef, rFullBranch(1:preLen), eqCfg, N0, chLenSymbols, freqBySymbol);
+            syncSymRef, preambleForEqBranch, eqCfg, N0, chLenSymbols, freqBySymbol);
         rFullEqGuardBranch = local_apply_frequency_aware_equalizer_block_local(rFullBranch, eqBranch, freqBySymbol);
         if ~useScFdeEq
             payloadFullBranch = rFullEqGuardBranch;
