@@ -40,9 +40,10 @@ p.linkBudget.jsrDbList = [0];
 %% 发送端（TX）
 % 1) 图像源
 p.source = struct();
-p.source.useBuiltinImage = false;
-p.source.imagePath = "images/maodie.png"; % useBuiltinImage=false时使用
-p.source.resizeTo = []; % [行 列]，[]保持原始尺寸
+p.source.useBuiltinImage = true;
+p.source.imagePath = "images/chongni.jpeg"; % useBuiltinImage=false时使用
+p.source.resizeTo = []; % [行 列]，[]保持原始尺寸；显式指定会绕过 maxDimension
+p.source.maxDimension = 256; % 自动等比上限：max(rows,cols) 超过该值时按比例缩小
 p.source.grayscale = true; % 开题报告任务1：默认灰度化后再编码
 
 % 2) 混沌加密（图像层面的置乱+扩散加密）

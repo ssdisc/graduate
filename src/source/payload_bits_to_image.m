@@ -5,8 +5,7 @@ function img = payload_bits_to_image(bits, meta, payload)
 %   bits - 载荷比特流
 %   meta - 图像元数据结构体
 %          .rows, .cols, .channels
-%   payload - 载荷配置结构体（可选）
-%             .codec - 'raw' | 'dct'
+%   payload - 载荷配置结%             .%             .codec - 'raw' | 'dct'
 %             .dct   - DCT解压配置（codec='dct'）
 %
 % 输出:
