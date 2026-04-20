@@ -4,7 +4,7 @@ function s = make_summary(results)
 % 输入:
 %   results - 仿真结果结构体
 %             .methods, .ebN0dB, .ber
-%             .imageMetrics.communication/.compensated（或兼容字段.mse/.psnr/.ssim）
+%             .imageMetrics.resized/original.communication/.compensated
 %             .kl（含signalVsNoise/noiseVsSignal/symmetric）
 %             .spectrum（含bw99Hz, etaBpsHz）, .tx（可选）, .linkBudget（可选）
 %             .eve（可选）, .covert.warden（可选）
@@ -25,18 +25,21 @@ end
 if isfield(results, "params") && isfield(results.params, "dsss")
     s.dsss = results.params.dsss;
 end
-[commMetrics, compMetrics] = local_get_image_metrics(results);
+imageMetrics = local_get_image_metrics(results);
 s.berAtMaxEbN0 = results.ber(:, end);
 s.perAtMaxEbN0 = results.per(:, end);
-s.mseAtMaxEbN0 = commMetrics.mse(:, end);
-s.psnrAtMaxEbN0 = commMetrics.psnr(:, end);
-s.ssimAtMaxEbN0 = commMetrics.ssim(:, end);
-s.commMseAtMaxEbN0 = commMetrics.mse(:, end);
-s.commPsnrAtMaxEbN0 = commMetrics.psnr(:, end);
-s.commSsimAtMaxEbN0 = commMetrics.ssim(:, end);
-s.compMseAtMaxEbN0 = compMetrics.mse(:, end);
-s.compPsnrAtMaxEbN0 = compMetrics.psnr(:, end);
-s.compSsimAtMaxEbN0 = compMetrics.ssim(:, end);
+s.originalCommMseAtMaxEbN0 = imageMetrics.original.communication.mse(:, end);
+s.originalCommPsnrAtMaxEbN0 = imageMetrics.original.communication.psnr(:, end);
+s.originalCommSsimAtMaxEbN0 = imageMetrics.original.communication.ssim(:, end);
+s.originalCompMseAtMaxEbN0 = imageMetrics.original.compensated.mse(:, end);
+s.originalCompPsnrAtMaxEbN0 = imageMetrics.original.compensated.psnr(:, end);
+s.originalCompSsimAtMaxEbN0 = imageMetrics.original.compensated.ssim(:, end);
+s.resizedCommMseAtMaxEbN0 = imageMetrics.resized.communication.mse(:, end);
+s.resizedCommPsnrAtMaxEbN0 = imageMetrics.resized.communication.psnr(:, end);
+s.resizedCommSsimAtMaxEbN0 = imageMetrics.resized.communication.ssim(:, end);
+s.resizedCompMseAtMaxEbN0 = imageMetrics.resized.compensated.mse(:, end);
+s.resizedCompPsnrAtMaxEbN0 = imageMetrics.resized.compensated.psnr(:, end);
+s.resizedCompSsimAtMaxEbN0 = imageMetrics.resized.compensated.ssim(:, end);
 s.lastPointEbN0dB = results.ebN0dB(end);
 s.lastPointJsrDb = results.jsrDb(end);
 s.packetConcealActive = false;
@@ -81,18 +84,21 @@ if isfield(results, "eve")
     if isfield(results.eve, "assumptions")
         s.eveAssumptions = results.eve.assumptions;
     end
-    [commMetricsEve, compMetricsEve] = local_get_image_metrics(results.eve);
+    imageMetricsEve = local_get_image_metrics(results.eve);
     s.eveBerAtMaxEbN0 = results.eve.ber(:, end);
     s.evePerAtMaxEbN0 = results.eve.per(:, end);
-    s.eveMseAtMaxEbN0 = commMetricsEve.mse(:, end);
-    s.evePsnrAtMaxEbN0 = commMetricsEve.psnr(:, end);
-    s.eveSsimAtMaxEbN0 = commMetricsEve.ssim(:, end);
-    s.eveCommMseAtMaxEbN0 = commMetricsEve.mse(:, end);
-    s.eveCommPsnrAtMaxEbN0 = commMetricsEve.psnr(:, end);
-    s.eveCommSsimAtMaxEbN0 = commMetricsEve.ssim(:, end);
-    s.eveCompMseAtMaxEbN0 = compMetricsEve.mse(:, end);
-    s.eveCompPsnrAtMaxEbN0 = compMetricsEve.psnr(:, end);
-    s.eveCompSsimAtMaxEbN0 = compMetricsEve.ssim(:, end);
+    s.eveOriginalCommMseAtMaxEbN0 = imageMetricsEve.original.communication.mse(:, end);
+    s.eveOriginalCommPsnrAtMaxEbN0 = imageMetricsEve.original.communication.psnr(:, end);
+    s.eveOriginalCommSsimAtMaxEbN0 = imageMetricsEve.original.communication.ssim(:, end);
+    s.eveOriginalCompMseAtMaxEbN0 = imageMetricsEve.original.compensated.mse(:, end);
+    s.eveOriginalCompPsnrAtMaxEbN0 = imageMetricsEve.original.compensated.psnr(:, end);
+    s.eveOriginalCompSsimAtMaxEbN0 = imageMetricsEve.original.compensated.ssim(:, end);
+    s.eveResizedCommMseAtMaxEbN0 = imageMetricsEve.resized.communication.mse(:, end);
+    s.eveResizedCommPsnrAtMaxEbN0 = imageMetricsEve.resized.communication.psnr(:, end);
+    s.eveResizedCommSsimAtMaxEbN0 = imageMetricsEve.resized.communication.ssim(:, end);
+    s.eveResizedCompMseAtMaxEbN0 = imageMetricsEve.resized.compensated.mse(:, end);
+    s.eveResizedCompPsnrAtMaxEbN0 = imageMetricsEve.resized.compensated.psnr(:, end);
+    s.eveResizedCompSsimAtMaxEbN0 = imageMetricsEve.resized.compensated.ssim(:, end);
     if isfield(results.eve, "packetDiagnostics")
         eveDiag = results.eve.packetDiagnostics;
         if isfield(eveDiag, "frontEndSuccessRate")
@@ -156,28 +162,27 @@ if isfield(results.spectrum, "basebandEtaBpsHz")
 end
 end
 
-function [commMetrics, compMetrics] = local_get_image_metrics(results)
-commMetrics = struct("mse", results.mse, "psnr", results.psnr, "ssim", results.ssim);
-compMetrics = commMetrics;
-
-if isfield(results, "imageMetrics") && isstruct(results.imageMetrics)
-    if isfield(results.imageMetrics, "communication")
-        commMetrics = results.imageMetrics.communication;
+function imageMetrics = local_get_image_metrics(results)
+if ~(isfield(results, "imageMetrics") && isstruct(results.imageMetrics))
+    error("make_summary:MissingImageMetrics", "results.imageMetrics is required.");
+end
+requiredRefs = ["resized" "original"];
+requiredStates = ["communication" "compensated"];
+for refIdx = 1:numel(requiredRefs)
+    refName = requiredRefs(refIdx);
+    if ~(isfield(results.imageMetrics, refName) && isstruct(results.imageMetrics.(refName)))
+        error("make_summary:MissingImageMetricReference", ...
+            "results.imageMetrics.%s is required.", refName);
     end
-    if isfield(results.imageMetrics, "compensated")
-        compMetrics = results.imageMetrics.compensated;
+    for stateIdx = 1:numel(requiredStates)
+        stateName = requiredStates(stateIdx);
+        if ~(isfield(results.imageMetrics.(refName), stateName) && isstruct(results.imageMetrics.(refName).(stateName)))
+            error("make_summary:MissingImageMetricState", ...
+                "results.imageMetrics.%s.%s is required.", refName, stateName);
+        end
     end
 end
-
-if isfield(results, "mseCompensated")
-    compMetrics.mse = results.mseCompensated;
-end
-if isfield(results, "psnrCompensated")
-    compMetrics.psnr = results.psnrCompensated;
-end
-if isfield(results, "ssimCompensated")
-    compMetrics.ssim = results.ssimCompensated;
-end
+imageMetrics = results.imageMetrics;
 end
 
 function layerName = local_get_primary_warden_layer(w)

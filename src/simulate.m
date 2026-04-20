@@ -48,7 +48,7 @@ methodEqualizers = receiverMethodPlan.equalizerMethods;
 
 %% 发送端（TRANSMITTER）
 
-imgTx = load_source_image(p.source);
+[imgTx, imgTxOriginal] = load_source_image(p.source);
 
 payloadCodec = get_payload_codec(p.payload);
 usePayloadBitChaos = payloadCodec == "dct";
@@ -155,12 +155,18 @@ adaptiveClassBobVals = zeros(numel(adaptiveDiagCfgGlobal.classNames), numel(meth
 adaptiveActionBobVals = zeros(numel(adaptiveDiagCfgGlobal.actionNames), numel(methods), numel(EbN0dBList));
 adaptivePathBobVals = zeros(numel(adaptiveDiagCfgGlobal.bootstrapPaths), numel(methods), numel(EbN0dBList));
 adaptiveMeanConfidenceBobVals = nan(numel(methods), numel(EbN0dBList));
-mseCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的MSE
-psnrCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的PSNR
-ssimCommVals = nan(numel(methods), numel(EbN0dBList)); % 纯通信重建图像的SSIM
-mseCompVals = nan(numel(methods), numel(EbN0dBList)); % 丢包补偿/修复后的MSE
-psnrCompVals = nan(numel(methods), numel(EbN0dBList)); % 丢包补偿/修复后的PSNR
-ssimCompVals = nan(numel(methods), numel(EbN0dBList)); % 丢包补偿/修复后的SSIM
+mseResizedCommVals = nan(numel(methods), numel(EbN0dBList)); % 接收图与缩小尺寸参考图的通信态MSE
+psnrResizedCommVals = nan(numel(methods), numel(EbN0dBList));
+ssimResizedCommVals = nan(numel(methods), numel(EbN0dBList));
+mseResizedCompVals = nan(numel(methods), numel(EbN0dBList)); % 接收图与缩小尺寸参考图的补偿态MSE
+psnrResizedCompVals = nan(numel(methods), numel(EbN0dBList));
+ssimResizedCompVals = nan(numel(methods), numel(EbN0dBList));
+mseOriginalCommVals = nan(numel(methods), numel(EbN0dBList)); % 接收图恢复原尺寸后与原图的通信态MSE
+psnrOriginalCommVals = nan(numel(methods), numel(EbN0dBList));
+ssimOriginalCommVals = nan(numel(methods), numel(EbN0dBList));
+mseOriginalCompVals = nan(numel(methods), numel(EbN0dBList)); % 接收图恢复原尺寸后与原图的补偿态MSE
+psnrOriginalCompVals = nan(numel(methods), numel(EbN0dBList));
+ssimOriginalCompVals = nan(numel(methods), numel(EbN0dBList));
 klSigVsNoise = nan(1, numel(EbN0dBList)); % KL(P_signal || P_noise)
 klNoiseVsSig = nan(1, numel(EbN0dBList)); % KL(P_noise || P_signal)
 klSym = nan(1, numel(EbN0dBList)); % 对称KL
@@ -197,12 +203,18 @@ if eveEnabled
     packetHeaderEveMethodVals = nan(numel(methods), numel(EbN0dBList));
     packetSuccessEveVals = nan(numel(methods), numel(EbN0dBList));
     rawPacketSuccessEveVals = nan(numel(methods), numel(EbN0dBList));
-    mseCommEveVals = nan(numel(methods), numel(EbN0dBList));
-    psnrCommEveVals = nan(numel(methods), numel(EbN0dBList));
-    ssimCommEveVals = nan(numel(methods), numel(EbN0dBList));
-    mseCompEveVals = nan(numel(methods), numel(EbN0dBList));
-    psnrCompEveVals = nan(numel(methods), numel(EbN0dBList));
-    ssimCompEveVals = nan(numel(methods), numel(EbN0dBList));
+    mseResizedCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    psnrResizedCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    ssimResizedCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    mseResizedCompEveVals = nan(numel(methods), numel(EbN0dBList));
+    psnrResizedCompEveVals = nan(numel(methods), numel(EbN0dBList));
+    ssimResizedCompEveVals = nan(numel(methods), numel(EbN0dBList));
+    mseOriginalCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    psnrOriginalCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    ssimOriginalCommEveVals = nan(numel(methods), numel(EbN0dBList));
+    mseOriginalCompEveVals = nan(numel(methods), numel(EbN0dBList));
+    psnrOriginalCompEveVals = nan(numel(methods), numel(EbN0dBList));
+    ssimOriginalCompEveVals = nan(numel(methods), numel(EbN0dBList));
     exampleEve = repmat(struct("EbN0dB", NaN, "methods", struct()), 1, numel(EbN0dBList));
 
     scrambleAssumptionEve = lower(string(eveCfg.scrambleAssumption));
@@ -457,8 +469,10 @@ for ie = 1:numel(EbN0dBList)
     adaptivePathBobAcc = zeros(numel(adaptiveDiagCfgGlobal.bootstrapPaths), numel(methods));
     adaptiveConfidenceBobAcc = zeros(numel(methods), 1);
     adaptiveDecisionBobAcc = zeros(numel(methods), 1);
-    metricAccComm = init_image_metric_acc_local(numel(methods));
-    metricAccComp = init_image_metric_acc_local(numel(methods));
+    metricAccResizedComm = init_image_metric_acc_local(numel(methods));
+    metricAccResizedComp = init_image_metric_acc_local(numel(methods));
+    metricAccOriginalComm = init_image_metric_acc_local(numel(methods));
+    metricAccOriginalComp = init_image_metric_acc_local(numel(methods));
     exampleCandidates = init_example_candidate_bank_local(numel(methods), p.sim.nFramesPerPoint);
 
 
@@ -469,8 +483,10 @@ for ie = 1:numel(EbN0dBList)
         packetHeaderEveAcc = zeros(numel(methods), 1);
         packetSuccessEveAcc = zeros(numel(methods), 1);
         rawPacketSuccessEveAcc = zeros(numel(methods), 1);
-        metricAccCommEve = init_image_metric_acc_local(numel(methods));
-        metricAccCompEve = init_image_metric_acc_local(numel(methods));
+        metricAccResizedCommEve = init_image_metric_acc_local(numel(methods));
+        metricAccResizedCompEve = init_image_metric_acc_local(numel(methods));
+        metricAccOriginalCommEve = init_image_metric_acc_local(numel(methods));
+        metricAccOriginalCompEve = init_image_metric_acc_local(numel(methods));
         exampleCandidatesEve = init_example_candidate_bank_local(numel(methods), p.sim.nFramesPerPoint);
     end
 
@@ -538,6 +554,7 @@ for ie = 1:numel(EbN0dBList)
     frameCtx.packetConcealActive = packetConcealActive;
     frameCtx.packetConcealMode = packetConcealMode;
     frameCtx.imgTx = imgTx;
+    frameCtx.imgTxOriginal = imgTxOriginal;
     frameCtx.meta = meta;
     frameCtx.totalPayloadBits = totalPayloadBits;
     frameCtx.bobRxSync = bobRxSync;
@@ -593,10 +610,14 @@ for ie = 1:numel(EbN0dBList)
         adaptiveConfidenceBobAcc = adaptiveConfidenceBobAcc + bobFrame.adaptiveFrontEnd.confidenceSum;
         adaptiveDecisionBobAcc = adaptiveDecisionBobAcc + bobFrame.adaptiveFrontEnd.decisionCount;
         for im = 1:numel(methods)
-            metricAccComm = accumulate_image_metric_acc_local(metricAccComm, im, ...
-                bobFrame.metricsComm.mse(im), bobFrame.metricsComm.psnr(im), bobFrame.metricsComm.ssim(im));
-            metricAccComp = accumulate_image_metric_acc_local(metricAccComp, im, ...
-                bobFrame.metricsComp.mse(im), bobFrame.metricsComp.psnr(im), bobFrame.metricsComp.ssim(im));
+            metricAccResizedComm = accumulate_image_metric_acc_local(metricAccResizedComm, im, ...
+                bobFrame.metricsResizedComm.mse(im), bobFrame.metricsResizedComm.psnr(im), bobFrame.metricsResizedComm.ssim(im));
+            metricAccResizedComp = accumulate_image_metric_acc_local(metricAccResizedComp, im, ...
+                bobFrame.metricsResizedComp.mse(im), bobFrame.metricsResizedComp.psnr(im), bobFrame.metricsResizedComp.ssim(im));
+            metricAccOriginalComm = accumulate_image_metric_acc_local(metricAccOriginalComm, im, ...
+                bobFrame.metricsOriginalComm.mse(im), bobFrame.metricsOriginalComm.psnr(im), bobFrame.metricsOriginalComm.ssim(im));
+            metricAccOriginalComp = accumulate_image_metric_acc_local(metricAccOriginalComp, im, ...
+                bobFrame.metricsOriginalComp.mse(im), bobFrame.metricsOriginalComp.psnr(im), bobFrame.metricsOriginalComp.ssim(im));
         end
 
         if eveEnabled
@@ -609,10 +630,14 @@ for ie = 1:numel(EbN0dBList)
             packetSuccessEveAcc = packetSuccessEveAcc + eveFrame.packetSuccessRate;
             rawPacketSuccessEveAcc = rawPacketSuccessEveAcc + eveFrame.rawPacketSuccessRate;
             for im = 1:numel(methods)
-                metricAccCommEve = accumulate_image_metric_acc_local(metricAccCommEve, im, ...
-                    eveFrame.metricsComm.mse(im), eveFrame.metricsComm.psnr(im), eveFrame.metricsComm.ssim(im));
-                metricAccCompEve = accumulate_image_metric_acc_local(metricAccCompEve, im, ...
-                    eveFrame.metricsComp.mse(im), eveFrame.metricsComp.psnr(im), eveFrame.metricsComp.ssim(im));
+                metricAccResizedCommEve = accumulate_image_metric_acc_local(metricAccResizedCommEve, im, ...
+                    eveFrame.metricsResizedComm.mse(im), eveFrame.metricsResizedComm.psnr(im), eveFrame.metricsResizedComm.ssim(im));
+                metricAccResizedCompEve = accumulate_image_metric_acc_local(metricAccResizedCompEve, im, ...
+                    eveFrame.metricsResizedComp.mse(im), eveFrame.metricsResizedComp.psnr(im), eveFrame.metricsResizedComp.ssim(im));
+                metricAccOriginalCommEve = accumulate_image_metric_acc_local(metricAccOriginalCommEve, im, ...
+                    eveFrame.metricsOriginalComm.mse(im), eveFrame.metricsOriginalComm.psnr(im), eveFrame.metricsOriginalComm.ssim(im));
+                metricAccOriginalCompEve = accumulate_image_metric_acc_local(metricAccOriginalCompEve, im, ...
+                    eveFrame.metricsOriginalComp.mse(im), eveFrame.metricsOriginalComp.psnr(im), eveFrame.metricsOriginalComp.ssim(im));
             end
         end
     end
@@ -634,18 +659,28 @@ for ie = 1:numel(EbN0dBList)
         adaptiveConfidenceBobAcc(hasAdaptiveDecision) ./ adaptiveDecisionBobAcc(hasAdaptiveDecision);
     adaptiveMeanConfidenceBobVals(:, ie) = adaptiveMeanConfidenceNow;
 
-    [mseOutComm, psnrOutComm, ssimOutComm] = finalize_image_metric_acc_local(metricAccComm);
-    [mseOutComp, psnrOutComp, ssimOutComp] = finalize_image_metric_acc_local(metricAccComp);
-    mseCommVals(:, ie) = mseOutComm;
-    psnrCommVals(:, ie) = psnrOutComm;
-    ssimCommVals(:, ie) = ssimOutComm;
-    mseCompVals(:, ie) = mseOutComp;
-    psnrCompVals(:, ie) = psnrOutComp;
-    ssimCompVals(:, ie) = ssimOutComp;
+    [mseOutResizedComm, psnrOutResizedComm, ssimOutResizedComm] = finalize_image_metric_acc_local(metricAccResizedComm);
+    [mseOutResizedComp, psnrOutResizedComp, ssimOutResizedComp] = finalize_image_metric_acc_local(metricAccResizedComp);
+    [mseOutOriginalComm, psnrOutOriginalComm, ssimOutOriginalComm] = finalize_image_metric_acc_local(metricAccOriginalComm);
+    [mseOutOriginalComp, psnrOutOriginalComp, ssimOutOriginalComp] = finalize_image_metric_acc_local(metricAccOriginalComp);
+    mseResizedCommVals(:, ie) = mseOutResizedComm;
+    psnrResizedCommVals(:, ie) = psnrOutResizedComm;
+    ssimResizedCommVals(:, ie) = ssimOutResizedComm;
+    mseResizedCompVals(:, ie) = mseOutResizedComp;
+    psnrResizedCompVals(:, ie) = psnrOutResizedComp;
+    ssimResizedCompVals(:, ie) = ssimOutResizedComp;
+    mseOriginalCommVals(:, ie) = mseOutOriginalComm;
+    psnrOriginalCommVals(:, ie) = psnrOutOriginalComm;
+    ssimOriginalCommVals(:, ie) = ssimOutOriginalComm;
+    mseOriginalCompVals(:, ie) = mseOutOriginalComp;
+    psnrOriginalCompVals(:, ie) = psnrOutOriginalComp;
+    ssimOriginalCompVals(:, ie) = ssimOutOriginalComp;
     example(ie) = select_example_point_nearest_mean_local( ...
         EbN0dB, methods, exampleCandidates, ...
-        struct("mse", mseOutComm, "psnr", psnrOutComm, "ssim", ssimOutComm), ...
-        struct("mse", mseOutComp, "psnr", psnrOutComp, "ssim", ssimOutComp), ...
+        struct("mse", mseOutResizedComm, "psnr", psnrOutResizedComm, "ssim", ssimOutResizedComm), ...
+        struct("mse", mseOutResizedComp, "psnr", psnrOutResizedComp, "ssim", ssimOutResizedComp), ...
+        struct("mse", mseOutOriginalComm, "psnr", psnrOutOriginalComm, "ssim", ssimOutOriginalComm), ...
+        struct("mse", mseOutOriginalComp, "psnr", psnrOutOriginalComp, "ssim", ssimOutOriginalComp), ...
         packetConcealActive, "Bob");
 
 
@@ -658,18 +693,28 @@ for ie = 1:numel(EbN0dBList)
         packetSuccessEveVals(:, ie) = packetSuccessEveAcc / p.sim.nFramesPerPoint;
         rawPacketSuccessEveVals(:, ie) = rawPacketSuccessEveAcc / p.sim.nFramesPerPoint;
 
-        [mseOutCommEve, psnrOutCommEve, ssimOutCommEve] = finalize_image_metric_acc_local(metricAccCommEve);
-        [mseOutCompEve, psnrOutCompEve, ssimOutCompEve] = finalize_image_metric_acc_local(metricAccCompEve);
-        mseCommEveVals(:, ie) = mseOutCommEve;
-        psnrCommEveVals(:, ie) = psnrOutCommEve;
-        ssimCommEveVals(:, ie) = ssimOutCommEve;
-        mseCompEveVals(:, ie) = mseOutCompEve;
-        psnrCompEveVals(:, ie) = psnrOutCompEve;
-        ssimCompEveVals(:, ie) = ssimOutCompEve;
+        [mseOutResizedCommEve, psnrOutResizedCommEve, ssimOutResizedCommEve] = finalize_image_metric_acc_local(metricAccResizedCommEve);
+        [mseOutResizedCompEve, psnrOutResizedCompEve, ssimOutResizedCompEve] = finalize_image_metric_acc_local(metricAccResizedCompEve);
+        [mseOutOriginalCommEve, psnrOutOriginalCommEve, ssimOutOriginalCommEve] = finalize_image_metric_acc_local(metricAccOriginalCommEve);
+        [mseOutOriginalCompEve, psnrOutOriginalCompEve, ssimOutOriginalCompEve] = finalize_image_metric_acc_local(metricAccOriginalCompEve);
+        mseResizedCommEveVals(:, ie) = mseOutResizedCommEve;
+        psnrResizedCommEveVals(:, ie) = psnrOutResizedCommEve;
+        ssimResizedCommEveVals(:, ie) = ssimOutResizedCommEve;
+        mseResizedCompEveVals(:, ie) = mseOutResizedCompEve;
+        psnrResizedCompEveVals(:, ie) = psnrOutResizedCompEve;
+        ssimResizedCompEveVals(:, ie) = ssimOutResizedCompEve;
+        mseOriginalCommEveVals(:, ie) = mseOutOriginalCommEve;
+        psnrOriginalCommEveVals(:, ie) = psnrOutOriginalCommEve;
+        ssimOriginalCommEveVals(:, ie) = ssimOutOriginalCommEve;
+        mseOriginalCompEveVals(:, ie) = mseOutOriginalCompEve;
+        psnrOriginalCompEveVals(:, ie) = psnrOutOriginalCompEve;
+        ssimOriginalCompEveVals(:, ie) = ssimOutOriginalCompEve;
         exampleEve(ie) = select_example_point_nearest_mean_local( ...
             EbN0dBEve, methods, exampleCandidatesEve, ...
-            struct("mse", mseOutCommEve, "psnr", psnrOutCommEve, "ssim", ssimOutCommEve), ...
-            struct("mse", mseOutCompEve, "psnr", psnrOutCompEve, "ssim", ssimOutCompEve), ...
+            struct("mse", mseOutResizedCommEve, "psnr", psnrOutResizedCommEve, "ssim", ssimOutResizedCommEve), ...
+            struct("mse", mseOutResizedCompEve, "psnr", psnrOutResizedCompEve, "ssim", ssimOutResizedCompEve), ...
+            struct("mse", mseOutOriginalCommEve, "psnr", psnrOutOriginalCommEve, "ssim", ssimOutOriginalCommEve), ...
+            struct("mse", mseOutOriginalCompEve, "psnr", psnrOutOriginalCompEve, "ssim", ssimOutOriginalCompEve), ...
             packetConcealActive, "Eve");
     end
 
@@ -717,6 +762,7 @@ results.scan = struct( ...
     "nJsr", double(linkBudget.nJsr));
 results.methods = methods;
 results.tx = txReport;
+results.sourceImages = struct("resized", imgTx, "original", imgTxOriginal);
 results.linkBudget = linkBudget;
 results.ber = ber;
 results.rawPer = max(min(1 - rawPacketSuccessBobVals, 1), 0);
@@ -742,15 +788,13 @@ results.receiver = struct( ...
     "rxDiversity", local_pack_rx_diversity_summary_local(bobRxDiversity), ...
     "mitigation", local_pack_mitigation_summary_local(bobMitigation));
 results.packetConceal = struct("configured", packetConcealEnable, "active", packetConcealActive, "mode", packetConcealMode);
-results.imageMetrics = struct();
-results.imageMetrics.communication = struct("mse", mseCommVals, "psnr", psnrCommVals, "ssim", ssimCommVals);
-results.imageMetrics.compensated = struct("mse", mseCompVals, "psnr", psnrCompVals, "ssim", ssimCompVals);
-results.mse = mseCommVals;
-results.psnr = psnrCommVals;
-results.ssim = ssimCommVals;
-results.mseCompensated = mseCompVals;
-results.psnrCompensated = psnrCompVals;
-results.ssimCompensated = ssimCompVals;
+results.imageMetrics = struct( ...
+    "resized", struct( ...
+        "communication", struct("mse", mseResizedCommVals, "psnr", psnrResizedCommVals, "ssim", ssimResizedCommVals), ...
+        "compensated", struct("mse", mseResizedCompVals, "psnr", psnrResizedCompVals, "ssim", ssimResizedCompVals)), ...
+    "original", struct( ...
+        "communication", struct("mse", mseOriginalCommVals, "psnr", psnrOriginalCommVals, "ssim", ssimOriginalCommVals), ...
+        "compensated", struct("mse", mseOriginalCompVals, "psnr", psnrOriginalCompVals, "ssim", ssimOriginalCompVals)));
 results.example = example;
 results.spectrum = struct( ...
     "freqHz", freqHz, ...
@@ -801,15 +845,13 @@ if eveEnabled
         "rxSync", local_pack_rx_sync_summary_local(eveRxSync), ...
         "rxDiversity", local_pack_rx_diversity_summary_local(eveRxDiversity), ...
         "mitigation", local_pack_mitigation_summary_local(eveMitigation));
-    results.eve.imageMetrics = struct();
-    results.eve.imageMetrics.communication = struct("mse", mseCommEveVals, "psnr", psnrCommEveVals, "ssim", ssimCommEveVals);
-    results.eve.imageMetrics.compensated = struct("mse", mseCompEveVals, "psnr", psnrCompEveVals, "ssim", ssimCompEveVals);
-    results.eve.mse = mseCommEveVals;
-    results.eve.psnr = psnrCommEveVals;
-    results.eve.ssim = ssimCommEveVals;
-    results.eve.mseCompensated = mseCompEveVals;
-    results.eve.psnrCompensated = psnrCompEveVals;
-    results.eve.ssimCompensated = ssimCompEveVals;
+    results.eve.imageMetrics = struct( ...
+        "resized", struct( ...
+            "communication", struct("mse", mseResizedCommEveVals, "psnr", psnrResizedCommEveVals, "ssim", ssimResizedCommEveVals), ...
+            "compensated", struct("mse", mseResizedCompEveVals, "psnr", psnrResizedCompEveVals, "ssim", ssimResizedCompEveVals)), ...
+        "original", struct( ...
+            "communication", struct("mse", mseOriginalCommEveVals, "psnr", psnrOriginalCommEveVals, "ssim", ssimOriginalCommEveVals), ...
+            "compensated", struct("mse", mseOriginalCompEveVals, "psnr", psnrOriginalCompEveVals, "ssim", ssimOriginalCompEveVals)));
     results.eve.example = exampleEve;
     results.eve.scrambleAssumption = string(scrambleAssumptionEve);
     results.eve.fhAssumption = string(fhAssumptionEve);
@@ -835,7 +877,7 @@ if p.sim.saveFigures
     fprintf('[SIM] 保存结果与图像...\n');
     outDir = make_results_dir(p.sim.resultsDir);
     save(fullfile(outDir, "results.mat"), "-struct", "results");
-    save_figures(outDir, imgTx, results);
+    save_figures(outDir, results);
     export_thesis_tables(outDir, results);
     fprintf('[SIM] 已保存至: %s\n', outDir);
 end
@@ -881,14 +923,40 @@ psnrOut(validPsnr) = acc.psnr(validPsnr) ./ acc.nPsnr(validPsnr);
 ssimOut(validSsim) = acc.ssim(validSsim) ./ acc.nSsim(validSsim);
 end
 
+function imgOut = local_resize_to_reference_local(imgIn, refImg)
+imgIn = im2uint8(imgIn);
+refImg = im2uint8(refImg);
+
+if size(imgIn, 3) ~= size(refImg, 3)
+    error("接收图像与参考图像通道数不一致，无法恢复到参考尺寸。");
+end
+
+targetRows = size(refImg, 1);
+targetCols = size(refImg, 2);
+if size(imgIn, 1) == targetRows && size(imgIn, 2) == targetCols
+    imgOut = imgIn;
+    return;
+end
+
+imgOut = imresize(imgIn, [targetRows, targetCols], "bicubic");
+end
+
 function bank = init_example_candidate_bank_local(nMethods, nFrames)
 bank = struct();
 bank.examples = cell(nMethods, nFrames);
-bank.comm = struct( ...
+bank.resizedComm = struct( ...
     "mse", nan(nMethods, nFrames), ...
     "psnr", nan(nMethods, nFrames), ...
     "ssim", nan(nMethods, nFrames));
-bank.comp = struct( ...
+bank.resizedComp = struct( ...
+    "mse", nan(nMethods, nFrames), ...
+    "psnr", nan(nMethods, nFrames), ...
+    "ssim", nan(nMethods, nFrames));
+bank.originalComm = struct( ...
+    "mse", nan(nMethods, nFrames), ...
+    "psnr", nan(nMethods, nFrames), ...
+    "ssim", nan(nMethods, nFrames));
+bank.originalComp = struct( ...
     "mse", nan(nMethods, nFrames), ...
     "psnr", nan(nMethods, nFrames), ...
     "ssim", nan(nMethods, nFrames));
@@ -902,12 +970,18 @@ if numel(frameResult.example) ~= nMethods
         char(string(roleName)), frameIdx, nMethods, numel(frameResult.example));
 end
 
-bank.comm.mse(:, frameIdx) = frameResult.metricsComm.mse;
-bank.comm.psnr(:, frameIdx) = frameResult.metricsComm.psnr;
-bank.comm.ssim(:, frameIdx) = frameResult.metricsComm.ssim;
-bank.comp.mse(:, frameIdx) = frameResult.metricsComp.mse;
-bank.comp.psnr(:, frameIdx) = frameResult.metricsComp.psnr;
-bank.comp.ssim(:, frameIdx) = frameResult.metricsComp.ssim;
+bank.resizedComm.mse(:, frameIdx) = frameResult.metricsResizedComm.mse;
+bank.resizedComm.psnr(:, frameIdx) = frameResult.metricsResizedComm.psnr;
+bank.resizedComm.ssim(:, frameIdx) = frameResult.metricsResizedComm.ssim;
+bank.resizedComp.mse(:, frameIdx) = frameResult.metricsResizedComp.mse;
+bank.resizedComp.psnr(:, frameIdx) = frameResult.metricsResizedComp.psnr;
+bank.resizedComp.ssim(:, frameIdx) = frameResult.metricsResizedComp.ssim;
+bank.originalComm.mse(:, frameIdx) = frameResult.metricsOriginalComm.mse;
+bank.originalComm.psnr(:, frameIdx) = frameResult.metricsOriginalComm.psnr;
+bank.originalComm.ssim(:, frameIdx) = frameResult.metricsOriginalComm.ssim;
+bank.originalComp.mse(:, frameIdx) = frameResult.metricsOriginalComp.mse;
+bank.originalComp.psnr(:, frameIdx) = frameResult.metricsOriginalComp.psnr;
+bank.originalComp.ssim(:, frameIdx) = frameResult.metricsOriginalComp.ssim;
 
 for methodIdx = 1:nMethods
     exampleEntry = frameResult.example{methodIdx};
@@ -923,12 +997,12 @@ end
 end
 
 function examplePoint = select_example_point_nearest_mean_local( ...
-    ebN0Val, methods, bank, avgComm, avgComp, packetConcealActive, roleName)
+    ebN0Val, methods, bank, avgResizedComm, avgResizedComp, avgOriginalComm, avgOriginalComp, packetConcealActive, roleName)
 examplePoint = struct("EbN0dB", ebN0Val, "methods", struct());
 for methodIdx = 1:numel(methods)
     methodName = char(methods(methodIdx));
     [exampleEntry, bestFrameIdx, bestDistance] = local_select_nearest_example_candidate_local( ...
-        methodName, bank, avgComm, avgComp, methodIdx, packetConcealActive, roleName);
+        methodName, bank, avgResizedComm, avgResizedComp, avgOriginalComm, avgOriginalComp, methodIdx, packetConcealActive, roleName);
     exampleEntry.selectedFrameIdx = bestFrameIdx;
     exampleEntry.selectionDistanceToMean = bestDistance;
     exampleEntry.selectionRule = "nearest_mean_metrics";
@@ -937,18 +1011,28 @@ end
 end
 
 function [exampleEntry, bestFrameIdx, bestDistance] = local_select_nearest_example_candidate_local( ...
-    methodName, bank, avgComm, avgComp, methodIdx, packetConcealActive, roleName)
+    methodName, bank, avgResizedComm, avgResizedComp, avgOriginalComm, avgOriginalComp, methodIdx, packetConcealActive, roleName)
 metricMatrix = [ ...
-    bank.comm.mse(methodIdx, :).', ...
-    bank.comm.psnr(methodIdx, :).', ...
-    bank.comm.ssim(methodIdx, :).'];
-targetVector = [avgComm.mse(methodIdx), avgComm.psnr(methodIdx), avgComm.ssim(methodIdx)];
+    bank.originalComm.mse(methodIdx, :).', ...
+    bank.originalComm.psnr(methodIdx, :).', ...
+    bank.originalComm.ssim(methodIdx, :).', ...
+    bank.resizedComm.mse(methodIdx, :).', ...
+    bank.resizedComm.psnr(methodIdx, :).', ...
+    bank.resizedComm.ssim(methodIdx, :).'];
+targetVector = [ ...
+    avgOriginalComm.mse(methodIdx), avgOriginalComm.psnr(methodIdx), avgOriginalComm.ssim(methodIdx), ...
+    avgResizedComm.mse(methodIdx), avgResizedComm.psnr(methodIdx), avgResizedComm.ssim(methodIdx)];
 if packetConcealActive
     metricMatrix = [metricMatrix, ...
-        bank.comp.mse(methodIdx, :).', ...
-        bank.comp.psnr(methodIdx, :).', ...
-        bank.comp.ssim(methodIdx, :).'];
-    targetVector = [targetVector, avgComp.mse(methodIdx), avgComp.psnr(methodIdx), avgComp.ssim(methodIdx)];
+        bank.originalComp.mse(methodIdx, :).', ...
+        bank.originalComp.psnr(methodIdx, :).', ...
+        bank.originalComp.ssim(methodIdx, :).', ...
+        bank.resizedComp.mse(methodIdx, :).', ...
+        bank.resizedComp.psnr(methodIdx, :).', ...
+        bank.resizedComp.ssim(methodIdx, :).'];
+    targetVector = [targetVector, ...
+        avgOriginalComp.mse(methodIdx), avgOriginalComp.psnr(methodIdx), avgOriginalComp.ssim(methodIdx), ...
+        avgResizedComp.mse(methodIdx), avgResizedComp.psnr(methodIdx), avgResizedComp.ssim(methodIdx)];
 end
 
 metricMatrix = local_transform_metric_matrix_local(metricMatrix, methodName, roleName);
@@ -1018,7 +1102,7 @@ end
 end
 
 function values = local_transform_metric_matrix_local(values, methodName, roleName)
-for colIdx = [1, 4]
+for colIdx = 1:3:size(values, 2)
     if colIdx > size(values, 2)
         continue;
     end
@@ -1029,7 +1113,7 @@ end
 end
 
 function values = local_transform_metric_vector_local(values, methodName, roleName)
-for colIdx = [1, 4]
+for colIdx = 1:3:numel(values)
     if colIdx > numel(values)
         continue;
     end
@@ -1180,7 +1264,7 @@ end
     frameCtx.methods, frameCtx.methodActions, frameCtx.methodEqualizers, ...
     txPackets, frameCtx.txPktIndex, frameCtx.txPayloadBits, frameCtx.sessionFrames, bobRaw, eveRaw, p, waveform, frameCtx.N0, frameCtx.N0Eve, frameCtx.fhEnabled, ...
     frameCtx.packetIndependentBitChaos, frameCtx.chaosEnabled, frameCtx.chaosEncInfo, ...
-    frameCtx.packetConcealActive, frameCtx.packetConcealMode, frameCtx.imgTx, frameCtx.meta, frameCtx.totalPayloadBits, ...
+    frameCtx.packetConcealActive, frameCtx.packetConcealMode, frameCtx.imgTx, frameCtx.imgTxOriginal, frameCtx.meta, frameCtx.totalPayloadBits, ...
     frameCtx.syncCfgUseBob, frameCtx.syncCfgUseEve, frameCtx.bobRxSync, frameCtx.bobMitigation, frameCtx.eveRxSync, frameCtx.eveMitigation, ...
     eveEnabled, frameCtx.scrambleAssumptionEve, frameCtx.fhAssumptionEve, frameCtx.chaosAssumptionEve, frameCtx.chaosApproxDeltaEve, frameCtx.chaosEncInfoEve, ...
     true, frameCtx.EbN0dB, frameCtx.EbN0dBEve, frameCtx.useParallelMethods);
@@ -1202,7 +1286,7 @@ end
 function [bobFrame, eveFrame] = local_decode_frame_methods_local( ...
     methods, methodActions, methodEqualizers, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobRaw, eveRaw, p, waveform, N0Bob, N0Eve, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
-    packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
+    packetConcealActive, packetConcealMode, imgTx, imgTxOriginal, metaTx, totalPayloadBitsTx, ...
     syncCfgUseBob, syncCfgUseEve, bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
     eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
     captureExample, EbN0dB, EbN0dBEve, useParallelMethods)
@@ -1219,12 +1303,18 @@ nErrBob = zeros(nMethods, 1);
 nTotBob = zeros(nMethods, 1);
 frontEndBob = zeros(nMethods, 1);
 headerBob = zeros(nMethods, 1);
-mseCommBob = nan(nMethods, 1);
-psnrCommBob = nan(nMethods, 1);
-ssimCommBob = nan(nMethods, 1);
-mseCompBob = nan(nMethods, 1);
-psnrCompBob = nan(nMethods, 1);
-ssimCompBob = nan(nMethods, 1);
+mseResizedCommBob = nan(nMethods, 1);
+psnrResizedCommBob = nan(nMethods, 1);
+ssimResizedCommBob = nan(nMethods, 1);
+mseResizedCompBob = nan(nMethods, 1);
+psnrResizedCompBob = nan(nMethods, 1);
+ssimResizedCompBob = nan(nMethods, 1);
+mseOriginalCommBob = nan(nMethods, 1);
+psnrOriginalCommBob = nan(nMethods, 1);
+ssimOriginalCommBob = nan(nMethods, 1);
+mseOriginalCompBob = nan(nMethods, 1);
+psnrOriginalCompBob = nan(nMethods, 1);
+ssimOriginalCompBob = nan(nMethods, 1);
 packetSuccessBob = zeros(nMethods, 1);
 rawPacketSuccessBob = zeros(nMethods, 1);
 exampleBob = cell(nMethods, 1);
@@ -1240,12 +1330,18 @@ nErrEve = zeros(nMethods, 1);
 nTotEve = zeros(nMethods, 1);
 frontEndEve = zeros(nMethods, 1);
 headerEve = zeros(nMethods, 1);
-mseCommEve = nan(nMethods, 1);
-psnrCommEve = nan(nMethods, 1);
-ssimCommEve = nan(nMethods, 1);
-mseCompEve = nan(nMethods, 1);
-psnrCompEve = nan(nMethods, 1);
-ssimCompEve = nan(nMethods, 1);
+mseResizedCommEve = nan(nMethods, 1);
+psnrResizedCommEve = nan(nMethods, 1);
+ssimResizedCommEve = nan(nMethods, 1);
+mseResizedCompEve = nan(nMethods, 1);
+psnrResizedCompEve = nan(nMethods, 1);
+ssimResizedCompEve = nan(nMethods, 1);
+mseOriginalCommEve = nan(nMethods, 1);
+psnrOriginalCommEve = nan(nMethods, 1);
+ssimOriginalCommEve = nan(nMethods, 1);
+mseOriginalCompEve = nan(nMethods, 1);
+psnrOriginalCompEve = nan(nMethods, 1);
+ssimOriginalCompEve = nan(nMethods, 1);
 packetSuccessEve = zeros(nMethods, 1);
 rawPacketSuccessEve = zeros(nMethods, 1);
 exampleEve = cell(nMethods, 1);
@@ -1271,7 +1367,7 @@ if useParfor
             [bobRes, eveRes] = local_decode_single_method_local( ...
                 methodAction, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
                 packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
-                packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
+                packetConcealActive, packetConcealMode, imgTx, imgTxOriginal, metaTx, totalPayloadBitsTx, ...
                 bobRxSyncNow, bobMitigation, eveRxSyncNow, eveMitigation, ...
                 eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
                 captureExample, EbN0dB, EbN0dBEve, nPackets);
@@ -1280,12 +1376,18 @@ if useParfor
             nTotBob(im) = bobRes.nTot;
             frontEndBob(im) = mean(double(bobNom.frontEndOk));
             headerBob(im) = mean(double(bobNom.headerOk));
-            mseCommBob(im) = bobRes.mseComm;
-            psnrCommBob(im) = bobRes.psnrComm;
-            ssimCommBob(im) = bobRes.ssimComm;
-            mseCompBob(im) = bobRes.mseComp;
-            psnrCompBob(im) = bobRes.psnrComp;
-            ssimCompBob(im) = bobRes.ssimComp;
+            mseResizedCommBob(im) = bobRes.mseResizedComm;
+            psnrResizedCommBob(im) = bobRes.psnrResizedComm;
+            ssimResizedCommBob(im) = bobRes.ssimResizedComm;
+            mseResizedCompBob(im) = bobRes.mseResizedComp;
+            psnrResizedCompBob(im) = bobRes.psnrResizedComp;
+            ssimResizedCompBob(im) = bobRes.ssimResizedComp;
+            mseOriginalCommBob(im) = bobRes.mseOriginalComm;
+            psnrOriginalCommBob(im) = bobRes.psnrOriginalComm;
+            ssimOriginalCommBob(im) = bobRes.ssimOriginalComm;
+            mseOriginalCompBob(im) = bobRes.mseOriginalComp;
+            psnrOriginalCompBob(im) = bobRes.psnrOriginalComp;
+            ssimOriginalCompBob(im) = bobRes.ssimOriginalComp;
             packetSuccessBob(im) = bobRes.packetSuccessRate;
             rawPacketSuccessBob(im) = bobRes.rawPacketSuccessRate;
             exampleBob{im} = bobRes.example;
@@ -1300,12 +1402,18 @@ if useParfor
                 nTotEve(im) = eveRes.nTot;
                 frontEndEve(im) = mean(double(eveNom.frontEndOk));
                 headerEve(im) = mean(double(eveNom.headerOk));
-                mseCommEve(im) = eveRes.mseComm;
-                psnrCommEve(im) = eveRes.psnrComm;
-                ssimCommEve(im) = eveRes.ssimComm;
-                mseCompEve(im) = eveRes.mseComp;
-                psnrCompEve(im) = eveRes.psnrComp;
-                ssimCompEve(im) = eveRes.ssimComp;
+                mseResizedCommEve(im) = eveRes.mseResizedComm;
+                psnrResizedCommEve(im) = eveRes.psnrResizedComm;
+                ssimResizedCommEve(im) = eveRes.ssimResizedComm;
+                mseResizedCompEve(im) = eveRes.mseResizedComp;
+                psnrResizedCompEve(im) = eveRes.psnrResizedComp;
+                ssimResizedCompEve(im) = eveRes.ssimResizedComp;
+                mseOriginalCommEve(im) = eveRes.mseOriginalComm;
+                psnrOriginalCommEve(im) = eveRes.psnrOriginalComm;
+                ssimOriginalCommEve(im) = eveRes.ssimOriginalComm;
+                mseOriginalCompEve(im) = eveRes.mseOriginalComp;
+                psnrOriginalCompEve(im) = eveRes.psnrOriginalComp;
+                ssimOriginalCompEve(im) = eveRes.ssimOriginalComp;
                 packetSuccessEve(im) = eveRes.packetSuccessRate;
                 rawPacketSuccessEve(im) = eveRes.rawPacketSuccessRate;
                 exampleEve{im} = eveRes.example;
@@ -1326,12 +1434,18 @@ if useParfor
         nTotBob = zeros(nMethods, 1);
         frontEndBob = zeros(nMethods, 1);
         headerBob = zeros(nMethods, 1);
-        mseCommBob = nan(nMethods, 1);
-        psnrCommBob = nan(nMethods, 1);
-        ssimCommBob = nan(nMethods, 1);
-        mseCompBob = nan(nMethods, 1);
-        psnrCompBob = nan(nMethods, 1);
-        ssimCompBob = nan(nMethods, 1);
+        mseResizedCommBob = nan(nMethods, 1);
+        psnrResizedCommBob = nan(nMethods, 1);
+        ssimResizedCommBob = nan(nMethods, 1);
+        mseResizedCompBob = nan(nMethods, 1);
+        psnrResizedCompBob = nan(nMethods, 1);
+        ssimResizedCompBob = nan(nMethods, 1);
+        mseOriginalCommBob = nan(nMethods, 1);
+        psnrOriginalCommBob = nan(nMethods, 1);
+        ssimOriginalCommBob = nan(nMethods, 1);
+        mseOriginalCompBob = nan(nMethods, 1);
+        psnrOriginalCompBob = nan(nMethods, 1);
+        ssimOriginalCompBob = nan(nMethods, 1);
         packetSuccessBob = zeros(nMethods, 1);
         rawPacketSuccessBob = zeros(nMethods, 1);
         exampleBob = cell(nMethods, 1);
@@ -1345,12 +1459,18 @@ if useParfor
         nTotEve = zeros(nMethods, 1);
         frontEndEve = zeros(nMethods, 1);
         headerEve = zeros(nMethods, 1);
-        mseCommEve = nan(nMethods, 1);
-        psnrCommEve = nan(nMethods, 1);
-        ssimCommEve = nan(nMethods, 1);
-        mseCompEve = nan(nMethods, 1);
-        psnrCompEve = nan(nMethods, 1);
-        ssimCompEve = nan(nMethods, 1);
+        mseResizedCommEve = nan(nMethods, 1);
+        psnrResizedCommEve = nan(nMethods, 1);
+        ssimResizedCommEve = nan(nMethods, 1);
+        mseResizedCompEve = nan(nMethods, 1);
+        psnrResizedCompEve = nan(nMethods, 1);
+        ssimResizedCompEve = nan(nMethods, 1);
+        mseOriginalCommEve = nan(nMethods, 1);
+        psnrOriginalCommEve = nan(nMethods, 1);
+        ssimOriginalCommEve = nan(nMethods, 1);
+        mseOriginalCompEve = nan(nMethods, 1);
+        psnrOriginalCompEve = nan(nMethods, 1);
+        ssimOriginalCompEve = nan(nMethods, 1);
         packetSuccessEve = zeros(nMethods, 1);
         rawPacketSuccessEve = zeros(nMethods, 1);
         exampleEve = cell(nMethods, 1);
@@ -1376,7 +1496,7 @@ if ~useParfor
         [bobRes, eveRes] = local_decode_single_method_local( ...
             methodAction, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
             packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
-            packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
+            packetConcealActive, packetConcealMode, imgTx, imgTxOriginal, metaTx, totalPayloadBitsTx, ...
             bobRxSyncNow, bobMitigation, eveRxSyncNow, eveMitigation, ...
             eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
             captureExample, EbN0dB, EbN0dBEve, nPackets);
@@ -1385,12 +1505,18 @@ if ~useParfor
         nTotBob(im) = bobRes.nTot;
         frontEndBob(im) = mean(double(bobNom.frontEndOk));
         headerBob(im) = mean(double(bobNom.headerOk));
-        mseCommBob(im) = bobRes.mseComm;
-        psnrCommBob(im) = bobRes.psnrComm;
-        ssimCommBob(im) = bobRes.ssimComm;
-        mseCompBob(im) = bobRes.mseComp;
-        psnrCompBob(im) = bobRes.psnrComp;
-        ssimCompBob(im) = bobRes.ssimComp;
+        mseResizedCommBob(im) = bobRes.mseResizedComm;
+        psnrResizedCommBob(im) = bobRes.psnrResizedComm;
+        ssimResizedCommBob(im) = bobRes.ssimResizedComm;
+        mseResizedCompBob(im) = bobRes.mseResizedComp;
+        psnrResizedCompBob(im) = bobRes.psnrResizedComp;
+        ssimResizedCompBob(im) = bobRes.ssimResizedComp;
+        mseOriginalCommBob(im) = bobRes.mseOriginalComm;
+        psnrOriginalCommBob(im) = bobRes.psnrOriginalComm;
+        ssimOriginalCommBob(im) = bobRes.ssimOriginalComm;
+        mseOriginalCompBob(im) = bobRes.mseOriginalComp;
+        psnrOriginalCompBob(im) = bobRes.psnrOriginalComp;
+        ssimOriginalCompBob(im) = bobRes.ssimOriginalComp;
         packetSuccessBob(im) = bobRes.packetSuccessRate;
         rawPacketSuccessBob(im) = bobRes.rawPacketSuccessRate;
         exampleBob{im} = bobRes.example;
@@ -1405,12 +1531,18 @@ if ~useParfor
             nTotEve(im) = eveRes.nTot;
             frontEndEve(im) = mean(double(eveNom.frontEndOk));
             headerEve(im) = mean(double(eveNom.headerOk));
-            mseCommEve(im) = eveRes.mseComm;
-            psnrCommEve(im) = eveRes.psnrComm;
-            ssimCommEve(im) = eveRes.ssimComm;
-            mseCompEve(im) = eveRes.mseComp;
-            psnrCompEve(im) = eveRes.psnrComp;
-            ssimCompEve(im) = eveRes.ssimComp;
+            mseResizedCommEve(im) = eveRes.mseResizedComm;
+            psnrResizedCommEve(im) = eveRes.psnrResizedComm;
+            ssimResizedCommEve(im) = eveRes.ssimResizedComm;
+            mseResizedCompEve(im) = eveRes.mseResizedComp;
+            psnrResizedCompEve(im) = eveRes.psnrResizedComp;
+            ssimResizedCompEve(im) = eveRes.ssimResizedComp;
+            mseOriginalCommEve(im) = eveRes.mseOriginalComm;
+            psnrOriginalCommEve(im) = eveRes.psnrOriginalComm;
+            ssimOriginalCommEve(im) = eveRes.ssimOriginalComm;
+            mseOriginalCompEve(im) = eveRes.mseOriginalComp;
+            psnrOriginalCompEve(im) = eveRes.psnrOriginalComp;
+            ssimOriginalCompEve(im) = eveRes.ssimOriginalComp;
             packetSuccessEve(im) = eveRes.packetSuccessRate;
             rawPacketSuccessEve(im) = eveRes.rawPacketSuccessRate;
             exampleEve{im} = eveRes.example;
@@ -1425,8 +1557,10 @@ bobFrame.frontEndSuccessRate = frontEndBob;
 bobFrame.headerSuccessRate = headerBob;
 bobFrame.packetSuccessRate = packetSuccessBob;
 bobFrame.rawPacketSuccessRate = rawPacketSuccessBob;
-bobFrame.metricsComm = struct("mse", mseCommBob, "psnr", psnrCommBob, "ssim", ssimCommBob);
-bobFrame.metricsComp = struct("mse", mseCompBob, "psnr", psnrCompBob, "ssim", ssimCompBob);
+bobFrame.metricsResizedComm = struct("mse", mseResizedCommBob, "psnr", psnrResizedCommBob, "ssim", ssimResizedCommBob);
+bobFrame.metricsResizedComp = struct("mse", mseResizedCompBob, "psnr", psnrResizedCompBob, "ssim", ssimResizedCompBob);
+bobFrame.metricsOriginalComm = struct("mse", mseOriginalCommBob, "psnr", psnrOriginalCommBob, "ssim", ssimOriginalCommBob);
+bobFrame.metricsOriginalComp = struct("mse", mseOriginalCompBob, "psnr", psnrOriginalCompBob, "ssim", ssimOriginalCompBob);
 bobFrame.adaptiveFrontEnd = struct( ...
     "classNames", adaptiveDiagCfg.classNames, ...
     "actionNames", adaptiveDiagCfg.actionNames, ...
@@ -1446,8 +1580,10 @@ if eveEnabled
     eveFrame.headerSuccessRate = headerEve;
     eveFrame.packetSuccessRate = packetSuccessEve;
     eveFrame.rawPacketSuccessRate = rawPacketSuccessEve;
-    eveFrame.metricsComm = struct("mse", mseCommEve, "psnr", psnrCommEve, "ssim", ssimCommEve);
-    eveFrame.metricsComp = struct("mse", mseCompEve, "psnr", psnrCompEve, "ssim", ssimCompEve);
+    eveFrame.metricsResizedComm = struct("mse", mseResizedCommEve, "psnr", psnrResizedCommEve, "ssim", ssimResizedCommEve);
+    eveFrame.metricsResizedComp = struct("mse", mseResizedCompEve, "psnr", psnrResizedCompEve, "ssim", ssimResizedCompEve);
+    eveFrame.metricsOriginalComm = struct("mse", mseOriginalCommEve, "psnr", psnrOriginalCommEve, "ssim", ssimOriginalCommEve);
+    eveFrame.metricsOriginalComp = struct("mse", mseOriginalCompEve, "psnr", psnrOriginalCompEve, "ssim", ssimOriginalCompEve);
     eveFrame.example = exampleEve;
 end
 end
@@ -1455,7 +1591,7 @@ end
 function [bobRes, eveRes] = local_decode_single_method_local( ...
     methodName, txPackets, txPktIndex, txPayloadBits, sessionFrames, bobNom, eveNom, p, fhEnabled, ...
     packetIndependentBitChaos, chaosEnabled, chaosEncInfo, ...
-    packetConcealActive, packetConcealMode, imgTx, metaTx, totalPayloadBitsTx, ...
+    packetConcealActive, packetConcealMode, imgTx, imgTxOriginal, metaTx, totalPayloadBitsTx, ...
     bobRxSync, bobMitigation, eveRxSync, eveMitigation, ...
     eveEnabled, scrambleAssumptionEve, fhAssumptionEve, chaosAssumptionEve, chaosApproxDeltaEve, chaosEncInfoEve, ...
     captureExample, EbN0dB, EbN0dBEve, nPackets)
@@ -1537,36 +1673,46 @@ end
 rxLayoutBob = derive_packet_layout_local(totalPayloadBitsBob, p);
 
 if packetIndependentBitChaos && chaosEnabled
-    imgRxComm = payload_bits_to_image(payloadFrameBob, metaBobUse, p.payload);
+    imgRxCommResized = payload_bits_to_image(payloadFrameBob, metaBobUse, p.payload);
 elseif chaosEnabled && isfield(chaosEncInfo, "enabled") && chaosEncInfo.enabled
     if isfield(chaosEncInfo, "mode") && lower(string(chaosEncInfo.mode)) == "payload_bits"
         payloadBitsRxDec = chaos_decrypt_bits(payloadFrameBob, chaosEncInfo);
-        imgRxComm = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
+        imgRxCommResized = payload_bits_to_image(payloadBitsRxDec, metaBobUse, p.payload);
     else
         imgRxEnc = payload_bits_to_image(payloadFrameBob, metaBobUse, p.payload);
-        imgRxComm = chaos_decrypt(imgRxEnc, chaosEncInfo);
+        imgRxCommResized = chaos_decrypt(imgRxEnc, chaosEncInfo);
     end
 else
-    imgRxComm = payload_bits_to_image(payloadFrameBob, metaBobUse, p.payload);
+    imgRxCommResized = payload_bits_to_image(payloadFrameBob, metaBobUse, p.payload);
 end
 
-imgRxComp = imgRxComm;
+imgRxCompResized = imgRxCommResized;
 if packetConcealActive
-    imgRxComp = conceal_image_from_packets(imgRxComp, packetOkBob, rxLayoutBob, metaBobUse, p.payload, packetConcealMode);
+    imgRxCompResized = conceal_image_from_packets(imgRxCompResized, packetOkBob, rxLayoutBob, metaBobUse, p.payload, packetConcealMode);
 end
 
-[psnrNowComm, ssimNowComm, mseNowComm] = image_quality(imgTx, imgRxComm);
-[psnrNowComp, ssimNowComp, mseNowComp] = image_quality(imgTx, imgRxComp);
+[psnrNowResizedComm, ssimNowResizedComm, mseNowResizedComm] = image_quality(imgTx, imgRxCommResized);
+[psnrNowResizedComp, ssimNowResizedComp, mseNowResizedComp] = image_quality(imgTx, imgRxCompResized);
+imgRxComm = local_resize_to_reference_local(imgRxCommResized, imgTxOriginal);
+imgRxComp = local_resize_to_reference_local(imgRxCompResized, imgTxOriginal);
+[psnrNowOriginalComm, ssimNowOriginalComm, mseNowOriginalComm] = image_quality(imgTxOriginal, imgRxComm);
+[psnrNowOriginalComp, ssimNowOriginalComp, mseNowOriginalComp] = image_quality(imgTxOriginal, imgRxComp);
 
 bobRes = struct();
 bobRes.nErr = nErrBob;
 bobRes.nTot = nTotBob;
-bobRes.mseComm = mseNowComm;
-bobRes.psnrComm = psnrNowComm;
-bobRes.ssimComm = ssimNowComm;
-bobRes.mseComp = mseNowComp;
-bobRes.psnrComp = psnrNowComp;
-bobRes.ssimComp = ssimNowComp;
+bobRes.mseResizedComm = mseNowResizedComm;
+bobRes.psnrResizedComm = psnrNowResizedComm;
+bobRes.ssimResizedComm = ssimNowResizedComm;
+bobRes.mseResizedComp = mseNowResizedComp;
+bobRes.psnrResizedComp = psnrNowResizedComp;
+bobRes.ssimResizedComp = ssimNowResizedComp;
+bobRes.mseOriginalComm = mseNowOriginalComm;
+bobRes.psnrOriginalComm = psnrNowOriginalComm;
+bobRes.ssimOriginalComm = ssimNowOriginalComm;
+bobRes.mseOriginalComp = mseNowOriginalComp;
+bobRes.psnrOriginalComp = psnrNowOriginalComp;
+bobRes.ssimOriginalComp = ssimNowOriginalComp;
 bobRes.packetSuccessRate = mean(packetOkBob);
 bobRes.rawPacketSuccessRate = outerRsInfoBob.rawDataPacketSuccessRate;
 bobRes.outerRs = outerRsInfoBob;
@@ -1580,6 +1726,9 @@ if captureExample
     bobRes.example.headerSuccessRate = mean(double(bobNom.headerOk));
     bobRes.example.sessionKnown = logical(sessionBob.known);
     bobRes.example.sessionFrameFrontEndSuccessRate = local_nominal_success_rate_local(bobNom.session);
+    bobRes.example.imgRxCommResized = imgRxCommResized;
+    bobRes.example.imgRxCompensatedResized = imgRxCompResized;
+    bobRes.example.imgRxResized = imgRxCompResized;
     bobRes.example.imgRxComm = imgRxComm;
     bobRes.example.imgRxCompensated = imgRxComp;
     bobRes.example.imgRx = imgRxComp;
@@ -1668,35 +1817,45 @@ end
 rxLayoutEve = derive_packet_layout_local(totalPayloadBitsEve, p);
 
 if packetIndependentBitChaos && chaosEnabled
-    imgEveComm = payload_bits_to_image(payloadFrameEve, metaEveUse, p.payload);
+    imgEveCommResized = payload_bits_to_image(payloadFrameEve, metaEveUse, p.payload);
 elseif chaosEnabled && isfield(chaosEncInfoEve, "enabled") && chaosEncInfoEve.enabled
     if isfield(chaosEncInfoEve, "mode") && lower(string(chaosEncInfoEve.mode)) == "payload_bits"
         payloadBitsEveDec = chaos_decrypt_bits(payloadFrameEve, chaosEncInfoEve);
-        imgEveComm = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
+        imgEveCommResized = payload_bits_to_image(payloadBitsEveDec, metaEveUse, p.payload);
     else
         imgEveEnc = payload_bits_to_image(payloadFrameEve, metaEveUse, p.payload);
-        imgEveComm = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
+        imgEveCommResized = chaos_decrypt(imgEveEnc, chaosEncInfoEve);
     end
 else
-    imgEveComm = payload_bits_to_image(payloadFrameEve, metaEveUse, p.payload);
+    imgEveCommResized = payload_bits_to_image(payloadFrameEve, metaEveUse, p.payload);
 end
 
-imgEveComp = imgEveComm;
+imgEveCompResized = imgEveCommResized;
 if packetConcealActive
-    imgEveComp = conceal_image_from_packets(imgEveComp, packetOkEve, rxLayoutEve, metaEveUse, p.payload, packetConcealMode);
+    imgEveCompResized = conceal_image_from_packets(imgEveCompResized, packetOkEve, rxLayoutEve, metaEveUse, p.payload, packetConcealMode);
 end
 
-[psnrNowCommEve, ssimNowCommEve, mseNowCommEve] = image_quality(imgTx, imgEveComm);
-[psnrNowCompEve, ssimNowCompEve, mseNowCompEve] = image_quality(imgTx, imgEveComp);
+[psnrNowResizedCommEve, ssimNowResizedCommEve, mseNowResizedCommEve] = image_quality(imgTx, imgEveCommResized);
+[psnrNowResizedCompEve, ssimNowResizedCompEve, mseNowResizedCompEve] = image_quality(imgTx, imgEveCompResized);
+imgEveComm = local_resize_to_reference_local(imgEveCommResized, imgTxOriginal);
+imgEveComp = local_resize_to_reference_local(imgEveCompResized, imgTxOriginal);
+[psnrNowOriginalCommEve, ssimNowOriginalCommEve, mseNowOriginalCommEve] = image_quality(imgTxOriginal, imgEveComm);
+[psnrNowOriginalCompEve, ssimNowOriginalCompEve, mseNowOriginalCompEve] = image_quality(imgTxOriginal, imgEveComp);
 
 eveRes.nErr = nErrEve;
 eveRes.nTot = nTotEve;
-eveRes.mseComm = mseNowCommEve;
-eveRes.psnrComm = psnrNowCommEve;
-eveRes.ssimComm = ssimNowCommEve;
-eveRes.mseComp = mseNowCompEve;
-eveRes.psnrComp = psnrNowCompEve;
-eveRes.ssimComp = ssimNowCompEve;
+eveRes.mseResizedComm = mseNowResizedCommEve;
+eveRes.psnrResizedComm = psnrNowResizedCommEve;
+eveRes.ssimResizedComm = ssimNowResizedCommEve;
+eveRes.mseResizedComp = mseNowResizedCompEve;
+eveRes.psnrResizedComp = psnrNowResizedCompEve;
+eveRes.ssimResizedComp = ssimNowResizedCompEve;
+eveRes.mseOriginalComm = mseNowOriginalCommEve;
+eveRes.psnrOriginalComm = psnrNowOriginalCommEve;
+eveRes.ssimOriginalComm = ssimNowOriginalCommEve;
+eveRes.mseOriginalComp = mseNowOriginalCompEve;
+eveRes.psnrOriginalComp = psnrNowOriginalCompEve;
+eveRes.ssimOriginalComp = ssimNowOriginalCompEve;
 eveRes.packetSuccessRate = mean(packetOkEve);
 eveRes.rawPacketSuccessRate = outerRsInfoEve.rawDataPacketSuccessRate;
 eveRes.outerRs = outerRsInfoEve;
@@ -1712,6 +1871,9 @@ if captureExample
     eveRes.example.sessionFrameFrontEndSuccessRate = local_nominal_success_rate_local(eveNom.session);
     eveRes.example.packetSuccessRate = eveRes.packetSuccessRate;
     eveRes.example.rawPacketSuccessRate = eveRes.rawPacketSuccessRate;
+    eveRes.example.imgRxCommResized = imgEveCommResized;
+    eveRes.example.imgRxCompensatedResized = imgEveCompResized;
+    eveRes.example.imgRxResized = imgEveCompResized;
     eveRes.example.imgRxComm = imgEveComm;
     eveRes.example.imgRxCompensated = imgEveComp;
     eveRes.example.imgRx = imgEveComp;

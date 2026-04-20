@@ -40,7 +40,7 @@ p.linkBudget.jsrDbList = [0];
 %% 发送端（TX）
 % 1) 图像源
 p.source = struct();
-p.source.useBuiltinImage = true;
+p.source.useBuiltinImage = false;
 p.source.imagePath = "images/chongni.jpeg"; % useBuiltinImage=false时使用
 p.source.resizeTo = []; % [行 列]，[]保持原始尺寸；显式指定会绕过 maxDimension
 p.source.maxDimension = 256; % 自动等比上限：max(rows,cols) 超过该值时按比例缩小
