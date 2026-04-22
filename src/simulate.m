@@ -2245,6 +2245,8 @@ sessionFramesOut = repmat(struct( ...
     "dsssCfg", struct("enable", false), ...
     "symbolRepeat", 1, ...
     "infoBitsLen", 0, ...
+    "bodyDiversityCopies", 1, ...
+    "bodyDiversityCopyLen", 0, ...
     "bitRepeat", 1, ...
     "fecCfg", struct(), ...
     "intState", struct()), nFrames, 1);
@@ -2271,6 +2273,12 @@ for frameIdx = 1:nFrames
     end
     if isfield(frame, "infoBitsLen") && ~isempty(frame.infoBitsLen)
         sessionFramesOut(frameIdx).infoBitsLen = frame.infoBitsLen;
+    end
+    if isfield(frame, "bodyDiversityCopies") && ~isempty(frame.bodyDiversityCopies)
+        sessionFramesOut(frameIdx).bodyDiversityCopies = frame.bodyDiversityCopies;
+    end
+    if isfield(frame, "bodyDiversityCopyLen") && ~isempty(frame.bodyDiversityCopyLen)
+        sessionFramesOut(frameIdx).bodyDiversityCopyLen = frame.bodyDiversityCopyLen;
     end
     if isfield(frame, "bitRepeat") && ~isempty(frame.bitRepeat)
         sessionFramesOut(frameIdx).bitRepeat = frame.bitRepeat;
@@ -5830,6 +5838,40 @@ end
 nSym = max(0, round(nSym));
 end
 
+function nSym = local_session_decode_symbol_count_local(sessionFrame)
+nSym = local_session_demod_symbol_count_local(sessionFrame);
+if string(sessionFrame.decodeKind) ~= "protected_header"
+    return;
+end
+[copies, copyLen] = local_session_header_body_diversity_info_local(sessionFrame);
+if copies > 1
+    nSym = copies * copyLen;
+end
+end
+
+function [copies, copyLen] = local_session_header_body_diversity_info_local(sessionFrame)
+copies = 1;
+copyLen = local_session_demod_symbol_count_local(sessionFrame);
+if isfield(sessionFrame, "bodyDiversityCopies") && ~isempty(sessionFrame.bodyDiversityCopies)
+    copies = round(double(sessionFrame.bodyDiversityCopies));
+end
+if isfield(sessionFrame, "bodyDiversityCopyLen") && ~isempty(sessionFrame.bodyDiversityCopyLen)
+    copyLen = round(double(sessionFrame.bodyDiversityCopyLen));
+end
+if ~(isscalar(copies) && isfinite(copies) && copies >= 1)
+    error("Session header body diversity copies must be a positive integer scalar.");
+end
+if ~(isscalar(copyLen) && isfinite(copyLen) && copyLen >= 0)
+    error("Session header body diversity copyLen must be a nonnegative integer scalar.");
+end
+copies = round(copies);
+copyLen = round(copyLen);
+if copies > 1 && double(sessionFrame.nDataSym) ~= copies * copyLen
+    error("Session header body diversity length mismatch: nDataSym=%d, copies=%d, copyLen=%d.", ...
+        double(sessionFrame.nDataSym), copies, copyLen);
+end
+end
+
 function [sessionOut, calState] = local_recover_session_from_nominal_local(sessionIn, sessionNom, sessionFrames, methodName, mitigation, p, calState)
 sessionOut = sessionIn;
 if sessionOut.known || isempty(sessionFrames)
@@ -5848,12 +5890,12 @@ for frameIdx = 1:min(numel(sessionFrames), numel(sessionNom.ok))
         continue;
     end
 
-    nDemodSym = local_session_demod_symbol_count_local(sessionFrames(frameIdx));
-    rData = fit_complex_length_local(sessionNom.rDataPrepared{frameIdx}, nDemodSym);
+    nDecodeSym = local_session_decode_symbol_count_local(sessionFrames(frameIdx));
+    rData = fit_complex_length_local(sessionNom.rDataPrepared{frameIdx}, nDecodeSym);
     reliability = [];
     if isfield(sessionNom, "rDataReliability") && numel(sessionNom.rDataReliability) >= frameIdx ...
             && ~isempty(sessionNom.rDataReliability{frameIdx})
-        reliability = local_fit_reliability_length_local(sessionNom.rDataReliability{frameIdx}, nDemodSym);
+        reliability = local_fit_reliability_length_local(sessionNom.rDataReliability{frameIdx}, nDecodeSym);
     end
     primaryAction = "none";
     if isfield(sessionNom, "symbolAction") && numel(sessionNom.symbolAction) >= frameIdx ...
@@ -5867,7 +5909,7 @@ for frameIdx = 1:min(numel(sessionFrames), numel(sessionNom.ok))
         return;
     end
 
-    rMitList{end+1, 1} = fit_complex_length_local(rData, nDemodSym); %#ok<AGROW>
+    rMitList{end+1, 1} = fit_complex_length_local(rData, nDecodeSym); %#ok<AGROW>
 end
 
 if numel(rMitList) >= 2
@@ -5909,6 +5951,34 @@ switch string(sessionFrame.decodeKind)
             symbolRepeat = 1;
             if isfield(sessionFrame, "symbolRepeat") && ~isempty(sessionFrame.symbolRepeat)
                 symbolRepeat = max(1, round(double(sessionFrame.symbolRepeat)));
+            end
+            [bodyCopies, bodyCopyLen] = local_session_header_body_diversity_info_local(sessionFrame);
+            if bodyCopies > 1
+                if numel(rUse) ~= bodyCopies * bodyCopyLen
+                    error("Session header body diversity decode length mismatch: len=%d, copies=%d, copyLen=%d.", ...
+                        numel(rUse), bodyCopies, bodyCopyLen);
+                end
+                rUseCopies = cell(bodyCopies, 1);
+                for copyIdx = 1:bodyCopies
+                    copyRange = (copyIdx - 1) * bodyCopyLen + (1:bodyCopyLen);
+                    rCopy = rUse(copyRange);
+                    if symbolRepeat > 1
+                        rCopy = local_repeat_combine_symbols_local(rCopy, symbolRepeat);
+                    end
+                    rUseCopies{copyIdx} = rCopy;
+                    sessionBits = decode_protected_header_symbols(rCopy, sessionFrame.infoBitsLen, p.frame, p.fec, p.softMetric);
+                    [metaSession, ~, ok] = parse_session_header_bits(sessionBits, p.frame);
+                    if ok
+                        return;
+                    end
+                end
+                rCombined = local_average_session_symbols_local(rUseCopies);
+                sessionBits = decode_protected_header_symbols(rCombined, sessionFrame.infoBitsLen, p.frame, p.fec, p.softMetric);
+                [metaSession, ~, ok] = parse_session_header_bits(sessionBits, p.frame);
+                if ok
+                    return;
+                end
+                continue;
             end
             if symbolRepeat > 1
                 rUse = local_repeat_combine_symbols_local(rUse, symbolRepeat);

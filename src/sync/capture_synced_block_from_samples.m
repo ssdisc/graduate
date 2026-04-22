@@ -766,6 +766,14 @@ bestWinnerStartIdxFinal = NaN;
 bestWinnerSyncInfoStage = struct();
 bestTimingInfo = struct();
 rxStageByFreq = cell(K, 1);
+candidateList = repmat(struct( ...
+    'k', 0, ...
+    'capture', struct('ok', false), ...
+    'packetStart', NaN, ...
+    'winnerStartIdxStage', NaN, ...
+    'winnerStartIdxFinal', NaN, ...
+    'winnerSyncInfoStage', struct(), ...
+    'timingInfo', struct()), 0, 1);
 
 for k = 1:K
     fk = double(freqSet(k));
@@ -807,20 +815,32 @@ for k = 1:K
         continue;
     end
 
+    candidateList(end + 1, 1) = struct( ...
+        'k', k, ...
+        'capture', captureK, ...
+        'packetStart', packetStartCandidate, ...
+        'winnerStartIdxStage', winnerStartIdxStageK, ...
+        'winnerStartIdxFinal', winnerStartIdxFinalK, ...
+        'winnerSyncInfoStage', winnerSyncInfoStageK, ...
+        'timingInfo', timingInfoK); %#ok<AGROW>
+end
+
+for candidateIdx = 1:numel(candidateList)
+    candidate = candidateList(candidateIdx);
     peakK = local_score_preamble_diversity_packet_start_local( ...
-        packetStartCandidate, rxStageByFreq, syncRefStageSingle, syncCfgUse, modCfg, syncStageSps, copyLenStage);
+        candidate.packetStart, rxStageByFreq, syncRefStageSingle, syncCfgUse, modCfg, syncStageSps, copyLenStage);
     if ~(isfinite(peakK))
         continue;
     end
     if peakK > bestPeak
         bestPeak = peakK;
-        bestK = k;
-        bestCapture = captureK;
-        bestPacketStart = packetStartCandidate;
-        bestWinnerStartIdxStage = winnerStartIdxStageK;
-        bestWinnerStartIdxFinal = winnerStartIdxFinalK;
-        bestWinnerSyncInfoStage = winnerSyncInfoStageK;
-        bestTimingInfo = timingInfoK;
+        bestK = candidate.k;
+        bestCapture = candidate.capture;
+        bestPacketStart = candidate.packetStart;
+        bestWinnerStartIdxStage = candidate.winnerStartIdxStage;
+        bestWinnerStartIdxFinal = candidate.winnerStartIdxFinal;
+        bestWinnerSyncInfoStage = candidate.winnerSyncInfoStage;
+        bestTimingInfo = candidate.timingInfo;
     end
 end
 
