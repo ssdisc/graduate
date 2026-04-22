@@ -16,9 +16,9 @@ domainCfg = ml_require_selector_training_domain(p);
 if ~isequal(classNames, string(domainCfg.classNames(:).'))
     error("Selector dataset opts.classNames must match mitigation.adaptiveFrontend.trainingDomain.classNames.");
 end
+
 featureNames = ml_interference_selector_feature_names();
 waveform = resolve_waveform_cfg(p);
-[~, syncSym] = make_packet_sync(p.frame, 1);
 [~, modInfo] = modulate_bits(uint8(zeros(bits_per_symbol_local(p.mod), 1)), p.mod, p.fec);
 modInfo.spreadFactor = dsss_effective_spread_factor(p.dsss);
 bitsPerSym = modInfo.bitsPerSymbol;
@@ -40,6 +40,7 @@ dataset.primaryLabelIndex = zeros(nBlocks, 1);
 dataset.labelMatrix = zeros(nBlocks, numel(classNames));
 dataset.ebN0dBPerBlock = zeros(nBlocks, 1);
 dataset.bootstrapPath = strings(nBlocks, 1);
+dataset.frameKindPerBlock = strings(nBlocks, 1);
 
 for b = 1:nBlocks
     primaryLabel = labelSchedule(b);
@@ -56,25 +57,28 @@ for b = 1:nBlocks
         auxiliaryClasses = local_selector_enabled_auxiliary_classes_local(domainCfg, primaryLabel, classNames);
         [pBlock, labelMask] = local_selector_apply_auxiliary_classes_local( ...
             pBlock, domainCfg, auxiliaryClasses, classNames, labelMask);
+
         syncCfg = local_selector_sync_cfg(p.rxSync, pBlock.channel, waveform);
-        [txFrame, fhCaptureCfg] = local_build_training_packet(pBlock, dataSymbolsPerBlock);
+        payloadBitsLen = local_training_payload_bits_len(pBlock, dataSymbolsPerBlock, bitsPerSym);
+        payloadBits = randi([0 1], payloadBitsLen, 1, "uint8");
+        training = ml_build_training_tx_burst(pBlock, payloadBits, waveform);
+        frameRef = local_select_training_frame_local(training, pBlock);
+
         frameDelaySym = randi([0, max(0, round(double(pBlock.channel.maxDelaySymbols)))], 1, 1);
         frameDelay = round(double(frameDelaySym) * waveform.sps);
-        txSampleFrame = pulse_tx_from_symbol_rate(txFrame, waveform);
-        txSampleFrame = local_apply_fast_training_packet_samples(txSampleFrame, fhCaptureCfg, waveform);
-        txSample = [zeros(frameDelay, 1); txSampleFrame];
+        txSample = [zeros(frameDelay, 1); frameRef.txSymForChannel(:)];
         channelSample = adapt_channel_for_sps(pBlock.channel, waveform, pBlock.fh);
         rxSample = channel_bg_impulsive(txSample, N0, channelSample);
 
-        totalLen = numel(txFrame);
         front = capture_synced_block_from_samples( ...
-            rxSample, syncSym, totalLen, syncCfg, pBlock.mitigation, pBlock.mod, waveform, "none", strings(1, 0), fhCaptureCfg);
+            rxSample, frameRef.syncSym, frameRef.totalSymbols, syncCfg, ...
+            pBlock.mitigation, frameRef.modCfg, waveform, "none", strings(1, 0), frameRef.fhCaptureCfg);
         if ~front.ok
             continue;
         end
 
         channelLenSymbols = local_selector_channel_len_symbols(pBlock.channel, waveform);
-        [featureRow, ~] = adaptive_frontend_extract_features(front, syncSym, N0, ...
+        [featureRow, ~] = adaptive_frontend_extract_features(front, frameRef.syncSym, N0, ...
             "channelLenSymbols", channelLenSymbols);
         if any(~isfinite(featureRow))
             continue;
@@ -86,6 +90,7 @@ for b = 1:nBlocks
         dataset.labelMatrix(b, :) = double(labelMask);
         dataset.ebN0dBPerBlock(b) = ebN0dB;
         dataset.bootstrapPath(b) = string(front.bootstrapPath);
+        dataset.frameKindPerBlock(b) = frameRef.kind;
         success = true;
         break;
     end
@@ -319,98 +324,95 @@ end
 gainsDb(1) = 0;
 end
 
-function [txFrame, fhCaptureCfg] = local_build_training_packet(p, dataSymbolsPerBlock)
-packetIdx = 1;
-bitsPerSym = bits_per_symbol_local(p.mod);
-packetDataBitsLen = local_training_packet_data_bits_len(p, dataSymbolsPerBlock, bitsPerSym);
-packetDataBits = randi([0 1], packetDataBitsLen, 1, "uint8");
-packetDataBytes = ceil(packetDataBitsLen / 8);
-
-phyMeta = struct();
-phyMeta.hasSessionHeader = false;
-phyMeta.packetIndex = uint16(packetIdx);
-phyMeta.packetDataBytes = uint16(packetDataBytes);
-phyMeta.packetDataCrc16 = crc16_ccitt_bits(packetDataBits);
-[phyHeaderBits, ~] = build_phy_header_bits(phyMeta, p.frame);
-phyHeaderSym = encode_phy_header_symbols(phyHeaderBits, p.frame, p.fec);
-phyHeaderFhCfg = phy_header_fh_cfg(p.frame, p.fh, p.fec);
-phyHeaderFast = phyHeaderFhCfg.enable && fh_is_fast(phyHeaderFhCfg);
-if phyHeaderFast
-    [phyHeaderSym, ~] = fh_fast_symbol_expand(phyHeaderSym, phyHeaderFhCfg);
+function frameRef = local_select_training_frame_local(training, p)
+nSession = numel(training.sessionFrames);
+nPackets = numel(training.txPackets);
+nFrames = nSession + nPackets;
+if nFrames < 1
+    error("Selector dataset training burst contains no session frames or packets.");
 end
 
-scrambleCfg = derive_packet_scramble_cfg(p.scramble, packetIdx, 0);
-dataBitsScr = scramble_bits(packetDataBits, scrambleCfg);
-codedBits = fec_encode(dataBitsScr, p.fec);
-[codedBitsInt, ~] = interleave_bits(codedBits, p.interleaver);
-[dataSym, ~] = modulate_bits(codedBitsInt, p.mod, p.fec);
-dataDsssCfg = derive_packet_dsss_cfg(p.dsss, packetIdx, 0, numel(dataSym));
-[dataSym, ~] = dsss_spread(dataSym, dataDsssCfg);
-fhCfg = struct("enable", false);
-if isfield(p, "fh") && isfield(p.fh, "enable") && p.fh.enable
-    fhCfg = derive_packet_fh_cfg(p.fh, packetIdx, 0, numel(dataSym));
-    if fh_is_fast(fhCfg)
-        [dataSym, ~] = fh_fast_symbol_expand(dataSym, fhCfg);
-    end
-end
-
-[~, syncSym] = make_packet_sync(p.frame, packetIdx);
-txFrame = [syncSym(:); phyHeaderSym(:); dataSym(:)];
-fhCaptureCfg = struct( ...
-    "enable", logical((isfield(phyHeaderFhCfg, "enable") && phyHeaderFhCfg.enable) ...
-        || (isfield(fhCfg, "enable") && fhCfg.enable)), ...
-    "syncSymbols", double(numel(syncSym)), ...
-    "headerSymbols", double(numel(phyHeaderSym)), ...
-    "headerFhCfg", phyHeaderFhCfg, ...
-    "dataFhCfg", fhCfg);
-end
-
-function txOut = local_apply_fast_training_packet_samples(txIn, fhCaptureCfg, waveform)
-txOut = txIn(:);
-if ~(isstruct(fhCaptureCfg) && isfield(fhCaptureCfg, "enable") && fhCaptureCfg.enable)
+pick = randi([1, nFrames], 1, 1);
+if pick <= nSession
+    sessionFrame = training.sessionFrames(pick);
+    frameRef = struct( ...
+        "kind", "session", ...
+        "syncSym", sessionFrame.syncSym(:), ...
+        "totalSymbols", double(numel(sessionFrame.txSymFrame)), ...
+        "modCfg", sessionFrame.modCfg, ...
+        "txSymForChannel", sessionFrame.txSymForChannel(:), ...
+        "fhCaptureCfg", local_session_sample_fh_capture_cfg_local(sessionFrame));
     return;
 end
 
-headerStart = local_symbol_boundary_sample_index(double(fhCaptureCfg.syncSymbols), waveform);
-dataStart = local_symbol_boundary_sample_index(double(fhCaptureCfg.syncSymbols + fhCaptureCfg.headerSymbols), waveform);
-if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
-        && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable
-    headerStop = min(numel(txOut), dataStart - 1);
-    if headerStart <= headerStop
-        [segOut, ~] = fh_modulate_samples(txOut(headerStart:headerStop), fhCaptureCfg.headerFhCfg, waveform);
-        txOut(headerStart:headerStop) = segOut;
-    end
+txPacket = training.txPackets(pick - nSession);
+frameRef = struct( ...
+    "kind", "packet", ...
+    "syncSym", txPacket.syncSym(:), ...
+    "totalSymbols", double(numel(txPacket.txSymPkt)), ...
+    "modCfg", p.mod, ...
+    "txSymForChannel", txPacket.txSymForChannel(:), ...
+    "fhCaptureCfg", local_packet_sample_fh_capture_cfg_local(txPacket));
 end
 
-if isfield(fhCaptureCfg, "dataFhCfg") && isstruct(fhCaptureCfg.dataFhCfg) ...
-        && isfield(fhCaptureCfg.dataFhCfg, "enable") && fhCaptureCfg.dataFhCfg.enable
-    if dataStart <= numel(txOut)
-        [segOut, ~] = fh_modulate_samples(txOut(dataStart:end), fhCaptureCfg.dataFhCfg, waveform);
-        txOut(dataStart:end) = segOut;
-    end
+function fhCaptureCfg = local_packet_sample_fh_capture_cfg_local(txPacket)
+preambleFhCfg = local_enabled_fh_cfg_or_disabled_local(txPacket, "preambleFhCfg");
+headerFhCfg = local_enabled_fh_cfg_or_disabled_local(txPacket, "phyHeaderFhCfg");
+dataFhCfg = local_enabled_fh_cfg_or_disabled_local(txPacket, "fhCfg");
+if ~(preambleFhCfg.enable || headerFhCfg.enable || dataFhCfg.enable)
+    fhCaptureCfg = struct("enable", false);
+    return;
+end
+
+fhCaptureCfg = struct( ...
+    "enable", true, ...
+    "syncSymbols", double(numel(txPacket.syncSym)), ...
+    "headerSymbols", double(numel(txPacket.phyHeaderSymTx)), ...
+    "preambleFhCfg", preambleFhCfg, ...
+    "headerFhCfg", headerFhCfg, ...
+    "dataFhCfg", dataFhCfg);
+end
+
+function fhCaptureCfg = local_session_sample_fh_capture_cfg_local(sessionFrame)
+preambleFhCfg = local_enabled_fh_cfg_or_disabled_local(sessionFrame, "preambleFhCfg");
+dataFhCfg = local_enabled_fh_cfg_or_disabled_local(sessionFrame, "fhCfg");
+if ~(preambleFhCfg.enable || dataFhCfg.enable)
+    fhCaptureCfg = struct("enable", false);
+    return;
+end
+
+fhCaptureCfg = struct( ...
+    "enable", true, ...
+    "syncSymbols", double(numel(sessionFrame.syncSym)), ...
+    "headerSymbols", 0, ...
+    "preambleFhCfg", preambleFhCfg, ...
+    "headerFhCfg", struct("enable", false), ...
+    "dataFhCfg", dataFhCfg);
+end
+
+function fhCfg = local_enabled_fh_cfg_or_disabled_local(s, fieldName)
+fhCfg = struct("enable", false);
+if isfield(s, fieldName) && isstruct(s.(fieldName)) ...
+        && isfield(s.(fieldName), "enable") && s.(fieldName).enable
+    fhCfg = s.(fieldName);
 end
 end
 
-function sampleIdx = local_symbol_boundary_sample_index(nLeadingSym, waveform)
-nLeadingSym = max(0, round(double(nLeadingSym)));
-sampleIdx = nLeadingSym * round(double(waveform.sps)) + 1;
-end
-
-function packetDataBitsLen = local_training_packet_data_bits_len(p, dataSymbolsPerBlock, bitsPerSym)
+function payloadBitsLen = local_training_payload_bits_len(p, dataSymbolsPerBlock, bitsPerSym)
 dataSymbolsPerBlock = max(1, round(double(dataSymbolsPerBlock)));
 fecInfo = fec_get_info(p.fec);
 targetInfoBits = round(double(dataSymbolsPerBlock) * double(bitsPerSym) * double(fecInfo.codeRate));
 switch string(fecInfo.kind)
     case "conv"
-        packetDataBitsLen = max(8, targetInfoBits);
+        payloadBitsLen = max(8, targetInfoBits);
     case "ldpc"
-        packetDataBitsLen = max(8, min(double(fecInfo.numInfoBits), targetInfoBits));
+        payloadBitsLen = max(8, min(double(fecInfo.numInfoBits), targetInfoBits));
     otherwise
         error("Unsupported selector payload FEC kind: %s", char(string(fecInfo.kind)));
 end
-packetDataBitsLen = 8 * floor(double(packetDataBitsLen) / 8);
-if packetDataBitsLen <= 0
-    packetDataBitsLen = 8;
+payloadBitsLen = 8 * floor(double(payloadBitsLen) / 8);
+if payloadBitsLen <= 0
+    payloadBitsLen = 8;
 end
 end
 

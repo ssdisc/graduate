@@ -268,6 +268,7 @@ report.ebN0dBPerBlock = dataset.ebN0dBPerBlock;
 report.rngSeed = rngSeed;
 report.trainingOptions = opts;
 report.trainingContext = ml_capture_training_context(p);
+report.reloadContext = ml_capture_reload_context(p);
 report.datasetSummary = datasetSummary;
 report.channelSampling = dataset.channelSampling;
 report.channelProfileSummary = dataset.channelProfileSummary;

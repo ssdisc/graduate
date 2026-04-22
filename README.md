@@ -193,6 +193,7 @@ disp(results.summary);
 - `default_params()` 默认要求 `models/` 中已有训练好的 ML 模型。
 - 如果模型不存在，当前代码会直接报错，不做静默降级。
 - 如果你只想先跑非 ML 方法，可以手动去掉 ML 方法。
+- `run_demo` 现在只负责加载离线模型并跑主仿真，不再在仿真入口里自动重训模型。
 
 示例：
 
@@ -204,23 +205,16 @@ results = simulate(p);
 disp(results.summary);
 ```
 
-### 3. 手动训练 ML 模型
+### 3. 离线训练 ML 模型
 
-如果你想单独训练再用于仿真，可以直接调用训练入口：
+如果你想单独训练再用于仿真，先运行离线训练入口：
 
 ```matlab
-addpath(genpath('src'));
-p = default_params("strictModelLoad", false, "requireTrainedMlModels", false);
-
-[lrModel, lrReport] = ml_train_impulse_lr(p, 'nBlocks', 1000, 'epochs', 100);
-[cnnModel, cnnReport] = ml_train_cnn_impulse(p, 'nBlocks', 1000, 'epochs', 100);
-[gruModel, gruReport] = ml_train_gru_impulse(p, 'nBlocks', 1000, 'epochs', 100);
-
-p.mitigation.ml = lrModel;
-p.mitigation.mlCnn = cnnModel;
-p.mitigation.mlGru = gruModel;
-results = simulate(p);
+run_offline_training
+run_demo
 ```
+
+脉冲干扰模型的加载匹配现在基于 `p.mitigation.offlineTraining.impulse` 描述的离线训练场景，而不是当前在线仿真的 `p.channel.impulseProb` / `p.channel.impulseToBgRatio`。因此在线改脉冲场景参数不会触发主仿真入口重训；如果你要切换离线训练场景，应先修改离线训练配置，再重新运行 `run_offline_training`。
 
 ## 协议层次、元信息与成帧设计
 
@@ -758,7 +752,7 @@ graduate/
 ## 注意事项
 
 - 当前代码对关键配置缺失是直接报错，不做回退兼容。
-- `default_params()` 默认要求训练好的 ML 模型存在；最省心的入口仍然是 `run_demo`。
+- `default_params()` 默认要求训练好的 ML 模型存在；推荐先运行 `run_offline_training`，再运行 `run_demo`。
 - 默认 `sessionHeaderMode = "session_frame_repeat"`，表示会话元信息先以 dedicated session frame 连续突发 3 次再发送数据帧；如果你只想评估主链路而不想让会话层占用空口，可以改成 `preshared`。
 - 默认 `resyncIntervalPackets = 1`，因此当前主线其实是“每个分包独立成帧且使用长前导”方案，短同步字还不是默认主路径。
 - Eve 如果自定义接收机配置，`p.eve.rxSync` 和 `p.eve.mitigation` 需要是完整结构体，并且 `p.eve.mitigation.methods` 必须与主链路完全一致。

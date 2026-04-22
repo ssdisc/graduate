@@ -9,14 +9,22 @@ fullCtx = ml_capture_training_context(p);
 ctx = struct();
 ctx.domain = fullCtx.domain;
 ctx.rxArchitecture = fullCtx.rxArchitecture;
+ctx.trainingChainVersion = fullCtx.trainingChainVersion;
 ctx.mod = fullCtx.mod;
 ctx.waveform = fullCtx.waveform;
 ctx.fh = fullCtx.fh;
 ctx.frame = fullCtx.frame;
 ctx.dsss = fullCtx.dsss;
+ctx.packet = fullCtx.packet;
+ctx.outerRs = fullCtx.outerRs;
+ctx.scramble = fullCtx.scramble;
+ctx.interleaver = fullCtx.interleaver;
+ctx.fec = fullCtx.fec;
+ctx.softMetric = fullCtx.softMetric;
 ctx.scFde = fullCtx.scFde;
 ctx.rxDiversity = fullCtx.rxDiversity;
 ctx.rxSync = fullCtx.rxSync;
+ctx.chaosEncrypt = fullCtx.chaosEncrypt;
 ctx.fhErasure = local_fh_erasure_context(p);
 end
 

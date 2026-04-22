@@ -70,9 +70,9 @@ for b = 1:nBlocks
     dataset.channelProfile = local_store_channel_profile(dataset.channelProfile, b, blockProfile);
 
     nTrainSymbols = local_training_symbol_count_for_sample_window(pBlock, blockLen, waveform);
-    bits = randi([0 1], nTrainSymbols * bitsPerSym, 1, 'uint8');
-    txSym = modulate_bits(bits, p.mod);
-    [txClean, rxInput, ~, impScore] = ml_simulate_training_chain(txSym, pBlock, N0, blockLen);
+    payloadBitsLen = max(512, 8 * ceil(double(nTrainSymbols * bitsPerSym) / 8));
+    bits = randi([0 1], payloadBitsLen, 1, 'uint8');
+    [txClean, rxInput, ~, impScore] = ml_simulate_training_chain(bits, pBlock, N0, blockLen);
     impMask = impScore >= opts.labelScoreThreshold;
 
     dataset.txClean{b} = txClean;

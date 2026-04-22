@@ -1,4 +1,4 @@
-function [txClean, rxInput, impMask, impScore] = ml_simulate_training_chain(txSym, p, N0, targetLen)
+function [txClean, rxInput, impMask, impScore] = ml_simulate_training_chain(payloadBits, p, N0, targetLen)
 %ML_SIMULATE_TRAINING_CHAIN  Generate paired raw-sample training windows on the new RX architecture.
 %
 % 输出:
@@ -8,31 +8,19 @@ function [txClean, rxInput, impMask, impScore] = ml_simulate_training_chain(txSy
 %   impScore- 样本级连续得分（当前直接等于 double(impMask)）
 
 arguments
-    txSym (:,1)
+    payloadBits (:,1)
     p (1,1) struct
     N0 (1,1) double {mustBeNonnegative}
     targetLen (1,1) double {mustBeInteger, mustBePositive}
 end
 
-txSym = txSym(:);
+payloadBits = uint8(payloadBits(:) ~= 0);
 targetLen = round(double(targetLen));
 
 waveform = resolve_waveform_cfg(p);
 channelSample = adapt_channel_for_sps(p.channel, waveform, p.fh);
-
-txChannelSym = txSym;
-dsssCfg = derive_packet_dsss_cfg(p.dsss, 1, 0, numel(txSym));
-[txChannelSym, ~] = dsss_spread(txChannelSym, dsssCfg);
-if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable
-    if fh_is_fast(p.fh)
-        [txChannelSym, ~] = fh_fast_symbol_expand(txChannelSym, p.fh);
-    end
-end
-
-txSample = pulse_tx_from_symbol_rate(txChannelSym, waveform);
-if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable
-    [txSample, ~] = fh_modulate_samples(txSample, p.fh, waveform);
-end
+training = ml_build_training_tx_burst(p, payloadBits, waveform);
+txSample = training.txBurstForChannel(:);
 cleanChannel = channelSample;
 cleanChannel.impulseProb = 0;
 

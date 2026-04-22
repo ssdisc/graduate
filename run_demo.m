@@ -1,5 +1,5 @@
 function results = run_demo()
-%RUN_DEMO Run the main demo pipeline from the repository root.
+%RUN_DEMO Run the main simulation pipeline from the repository root.
 
 addpath(genpath(fullfile(fileparts(mfilename('fullpath')), 'src')));
 
@@ -15,28 +15,13 @@ if ~exist(modelDir, 'dir')
     mkdir(modelDir);
 end
 
-forceRetrain = false;
-batchTag = string(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
-generalizedTrainArgs = local_generalized_training_args(p);
-impulseDlTrainArgs = local_impulse_dl_training_args();
-selectorTrainArgs = local_selector_training_args(p);
-narrowbandTrainArgs = local_narrowband_training_args();
-fhErasureTrainArgs = local_fh_erasure_training_args(p);
-multipathEqTrainArgs = local_multipath_eq_training_args();
 requiredModels = local_required_ml_models(activeMethods, p);
 expectedReloadContext = ml_capture_reload_context(p);
 expectedSelectorReloadContext = ml_capture_selector_reload_context(p);
 expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
 expectedFhErasureContext = ml_capture_fh_erasure_reload_context(p);
 expectedMultipathEqContext = ml_capture_multipath_equalizer_reload_context(p);
-impulseTrainingArmed = forceRetrain || local_impulse_training_enabled(p);
-narrowbandTrainingArmed = forceRetrain || local_narrowband_training_enabled(p);
-fhErasureTrainingArmed = forceRetrain || requiredModels.fhErasure;
-if impulseTrainingArmed
-    expectedImpulseReloadContext = expectedReloadContext;
-else
-    expectedImpulseReloadContext = [];
-end
+impulseProfileName = local_impulse_profile_name(requiredModels, p);
 
 fprintf('========================================\n');
 fprintf('Demo config source: src/default_params.m\n');
@@ -52,229 +37,90 @@ fprintf('Frames per point: %d\n', p.sim.nFramesPerPoint);
 fprintf('Parallel: %s\n', local_on_off_text(p.sim.useParallel));
 fprintf('Bob RX diversity: %s, nRx=%d, combine=%s\n', ...
     local_on_off_text(p.rxDiversity.enable), double(p.rxDiversity.nRx), char(p.rxDiversity.combineMethod));
-fprintf('Eve: %s, Warden: %s\n\n', ...
+fprintf('Eve: %s, Warden: %s\n', ...
     local_on_off_text(p.eve.enable), local_on_off_text(p.covert.enable && p.covert.warden.enable));
-fprintf('Impulse model retrain armed: %s (forceRetrain=%s, impulseProb=%.6g)\n\n', ...
-    local_on_off_text(impulseTrainingArmed), local_on_off_text(forceRetrain), double(p.channel.impulseProb));
-fprintf('Narrowband model retrain armed: %s (forceRetrain=%s, narrowbandEnable=%s, narrowbandWeight=%.6g)\n\n', ...
-    local_on_off_text(narrowbandTrainingArmed), local_on_off_text(forceRetrain), ...
-    local_on_off_text(local_narrowband_enable_flag(p)), double(p.channel.narrowband.weight));
-fprintf('FH erasure model retrain armed: %s (requiredByMethods=%s)\n\n', ...
-    local_on_off_text(fhErasureTrainingArmed), local_on_off_text(requiredModels.fhErasure));
+if strlength(impulseProfileName) > 0
+    fprintf('Impulse offline profile: %s\n', char(impulseProfileName));
+end
+fprintf('\n');
 
 fprintf('========================================\n');
-fprintf('Loading or training required ML models...\n');
+fprintf('Loading required ML models...\n');
 fprintf('========================================\n\n');
 
 if requiredModels.lr
-    lrModelPath = fullfile(modelDir, 'impulse_lr_model.mat');
-    if ~forceRetrain
-        [p.mitigation.ml, loadedLr, loadedLrPath] = load_pretrained_model( ...
-            lrModelPath, @ml_impulse_lr_model, "expectedContext", expectedImpulseReloadContext);
-        loadedLr = loadedLr && isfield(p.mitigation.ml, 'trained') && logical(p.mitigation.ml.trained);
-        if ~loadedLr
-            loadedLrPath = "";
-        end
-    else
-        loadedLr = false;
-        loadedLrPath = "";
-    end
-    if loadedLr
-        fprintf('Loaded LR model: %s\n\n', char(loadedLrPath));
-    elseif impulseTrainingArmed
-        fprintf('Training LR model...\n');
-        [p.mitigation.ml, lrReport] = ml_train_impulse_lr(p, ...
-            generalizedTrainArgs{:}, ...
-            'nBlocks', 1000, 'blockLen', 4096, 'epochs', 100, ...
-            'saveArtifacts', true, 'saveDir', string(modelDir), ...
-            'saveTag', batchTag, 'savedBy', "run_demo");
-        fprintf('LR model saved (latest): %s\n', char(lrReport.artifacts.latestPath));
-        fprintf('LR model saved (batch): %s\n\n', char(lrReport.artifacts.batchPath));
-    else
-        fprintf('Skipping LR model training: forceRetrain=OFF and impulseProb<=0.\n\n');
-    end
+    [p.mitigation.ml, ~, loadedLrPath] = load_pretrained_model( ...
+        fullfile(modelDir, 'impulse_lr_model.mat'), @ml_impulse_lr_model, ...
+        "strict", true, ...
+        "requireTrained", true, ...
+        "expectedContext", expectedReloadContext);
+    fprintf('Loaded LR model: %s\n\n', char(loadedLrPath));
 else
     fprintf('Skipping LR model load: current methods do not use ml_blanking.\n\n');
 end
 
 if requiredModels.cnn
-    cnnModelPath = fullfile(modelDir, 'impulse_cnn_model.mat');
-    if ~forceRetrain
-        [p.mitigation.mlCnn, loadedCnn, loadedCnnPath] = load_pretrained_model( ...
-            cnnModelPath, @ml_cnn_impulse_model, "expectedContext", expectedImpulseReloadContext);
-        loadedCnn = loadedCnn && isfield(p.mitigation.mlCnn, 'trained') && logical(p.mitigation.mlCnn.trained);
-        if ~loadedCnn
-            loadedCnnPath = "";
-        end
-    else
-        loadedCnn = false;
-        loadedCnnPath = "";
-    end
-    if loadedCnn
-        fprintf('Loaded CNN model: %s\n\n', char(loadedCnnPath));
-    elseif impulseTrainingArmed
-        fprintf('Training CNN model...\n');
-        [p.mitigation.mlCnn, cnnReport] = ml_train_cnn_impulse(p, ...
-            generalizedTrainArgs{:}, ...
-            impulseDlTrainArgs{:}, ...
-            'saveArtifacts', true, 'saveDir', string(modelDir), ...
-            'saveTag', batchTag, 'savedBy', "run_demo");
-        fprintf('CNN model saved (latest): %s\n', char(cnnReport.artifacts.latestPath));
-        fprintf('CNN model saved (batch): %s\n\n', char(cnnReport.artifacts.batchPath));
-    else
-        fprintf('Skipping CNN model training: forceRetrain=OFF and impulseProb<=0.\n\n');
-    end
+    [p.mitigation.mlCnn, ~, loadedCnnPath] = load_pretrained_model( ...
+        fullfile(modelDir, 'impulse_cnn_model.mat'), @ml_cnn_impulse_model, ...
+        "strict", true, ...
+        "requireTrained", true, ...
+        "expectedContext", expectedReloadContext);
+    fprintf('Loaded CNN model: %s\n\n', char(loadedCnnPath));
 else
     fprintf('Skipping CNN model load: current methods do not use ml_cnn/ml_cnn_hard.\n\n');
 end
 
 if requiredModels.gru
-    gruModelPath = fullfile(modelDir, 'impulse_gru_model.mat');
-    if ~forceRetrain
-        [p.mitigation.mlGru, loadedGru, loadedGruPath] = load_pretrained_model( ...
-            gruModelPath, @ml_gru_impulse_model, "expectedContext", expectedImpulseReloadContext);
-        loadedGru = loadedGru && isfield(p.mitigation.mlGru, 'trained') && logical(p.mitigation.mlGru.trained);
-        if ~loadedGru
-            loadedGruPath = "";
-        end
-    else
-        loadedGru = false;
-        loadedGruPath = "";
-    end
-    if loadedGru
-        fprintf('Loaded GRU model: %s\n\n', char(loadedGruPath));
-    elseif impulseTrainingArmed
-        fprintf('Training GRU model...\n');
-        [p.mitigation.mlGru, gruReport] = ml_train_gru_impulse(p, ...
-            generalizedTrainArgs{:}, ...
-            impulseDlTrainArgs{:}, ...
-            'saveArtifacts', true, 'saveDir', string(modelDir), ...
-            'saveTag', batchTag, 'savedBy', "run_demo");
-        fprintf('GRU model saved (latest): %s\n', char(gruReport.artifacts.latestPath));
-        fprintf('GRU model saved (batch): %s\n\n', char(gruReport.artifacts.batchPath));
-    else
-        fprintf('Skipping GRU model training: forceRetrain=OFF and impulseProb<=0.\n\n');
-    end
+    [p.mitigation.mlGru, ~, loadedGruPath] = load_pretrained_model( ...
+        fullfile(modelDir, 'impulse_gru_model.mat'), @ml_gru_impulse_model, ...
+        "strict", true, ...
+        "requireTrained", true, ...
+        "expectedContext", expectedReloadContext);
+    fprintf('Loaded GRU model: %s\n\n', char(loadedGruPath));
 else
     fprintf('Skipping GRU model load: current methods do not use ml_gru/ml_gru_hard.\n\n');
 end
 
 if requiredModels.selector
-    selectorModelPath = fullfile(modelDir, 'interference_selector_model.mat');
-    if ~forceRetrain
-        [p.mitigation.selector, loadedSelector, loadedSelectorPath] = load_pretrained_model( ...
-            selectorModelPath, @ml_interference_selector_model, "expectedContext", expectedSelectorReloadContext);
-        loadedSelector = loadedSelector && isfield(p.mitigation.selector, 'trained') && logical(p.mitigation.selector.trained);
-        if ~loadedSelector
-            loadedSelectorPath = "";
-        end
-    else
-        loadedSelector = false;
-        loadedSelectorPath = "";
-    end
-    if loadedSelector
-        fprintf('Loaded selector model: %s\n\n', char(loadedSelectorPath));
-    else
-        fprintf('Training selector model...\n');
-        [p.mitigation.selector, selectorReport] = ml_train_interference_selector(p, ...
-            selectorTrainArgs{:}, ...
-            'nBlocks', 900, 'dataSymbolsPerBlock', 512, 'epochs', 60, ...
-            'saveArtifacts', true, 'saveDir', string(modelDir), ...
-            'saveTag', batchTag, 'savedBy', "run_demo");
-        fprintf('Selector model saved (latest): %s\n', char(selectorReport.artifacts.latestPath));
-        fprintf('Selector model saved (batch): %s\n\n', char(selectorReport.artifacts.batchPath));
-    end
+    [p.mitigation.selector, ~, loadedSelectorPath] = load_pretrained_model( ...
+        fullfile(modelDir, 'interference_selector_model.mat'), @ml_interference_selector_model, ...
+        "strict", true, ...
+        "requireTrained", true, ...
+        "expectedContext", expectedSelectorReloadContext);
+    fprintf('Loaded selector model: %s\n\n', char(loadedSelectorPath));
 else
     fprintf('Skipping selector model load: current methods do not use adaptive_ml_frontend.\n\n');
 end
 
 if requiredModels.narrowband
-    narrowbandModelPath = fullfile(modelDir, 'narrowband_action_model.mat');
-    if ~forceRetrain
-        [p.mitigation.mlNarrowband, loadedNarrowband, loadedNarrowbandPath] = load_pretrained_model( ...
-            narrowbandModelPath, @ml_narrowband_action_model, "expectedContext", expectedNarrowbandContext);
-        loadedNarrowband = loadedNarrowband && isfield(p.mitigation.mlNarrowband, 'trained') ...
-            && logical(p.mitigation.mlNarrowband.trained);
-        if ~loadedNarrowband
-            loadedNarrowbandPath = "";
-        end
-    else
-        loadedNarrowband = false;
-        loadedNarrowbandPath = "";
-    end
-    if loadedNarrowband
-        fprintf('Loaded narrowband action model: %s\n\n', char(loadedNarrowbandPath));
-    elseif narrowbandTrainingArmed
-        fprintf('Training narrowband action model...\n');
-        [p.mitigation.mlNarrowband, narrowbandReport] = ml_train_narrowband_action(p, ...
-            narrowbandTrainArgs{:}, ...
-            'saveArtifacts', true, 'saveDir', string(modelDir), ...
-            'saveTag', batchTag, 'savedBy', "run_demo");
-        fprintf('Narrowband action model saved (latest): %s\n', char(narrowbandReport.artifacts.latestPath));
-        fprintf('Narrowband action model saved (batch): %s\n\n', char(narrowbandReport.artifacts.batchPath));
-    else
-        fprintf('Skipping narrowband action model training: forceRetrain=OFF or narrowband interference is inactive.\n\n');
-    end
+    [p.mitigation.mlNarrowband, ~, loadedNarrowbandPath] = load_pretrained_model( ...
+        fullfile(modelDir, 'narrowband_action_model.mat'), @ml_narrowband_action_model, ...
+        "strict", true, ...
+        "requireTrained", true, ...
+        "expectedContext", expectedNarrowbandContext);
+    fprintf('Loaded narrowband action model: %s\n\n', char(loadedNarrowbandPath));
 else
     fprintf('Skipping narrowband action model load: effective methods do not use ml_narrowband.\n\n');
 end
 
 if requiredModels.fhErasure
-    fhErasureModelPath = fullfile(modelDir, 'fh_erasure_model.mat');
-    if ~forceRetrain
-        [p.mitigation.mlFhErasure, loadedFhErasure, loadedFhErasurePath] = load_pretrained_model( ...
-            fhErasureModelPath, @ml_fh_erasure_model, "expectedContext", expectedFhErasureContext);
-        loadedFhErasure = loadedFhErasure && isfield(p.mitigation.mlFhErasure, 'trained') ...
-            && logical(p.mitigation.mlFhErasure.trained);
-        if ~loadedFhErasure
-            loadedFhErasurePath = "";
-        end
-    else
-        loadedFhErasure = false;
-        loadedFhErasurePath = "";
-    end
-    if loadedFhErasure
-        fprintf('Loaded FH erasure model: %s\n\n', char(loadedFhErasurePath));
-    elseif fhErasureTrainingArmed
-        fprintf('Training FH erasure model...\n');
-        [p.mitigation.mlFhErasure, fhErasureReport] = ml_train_fh_erasure(p, ...
-            fhErasureTrainArgs{:}, ...
-            'saveArtifacts', true, 'saveDir', string(modelDir), ...
-            'saveTag', batchTag, 'savedBy', "run_demo");
-        fprintf('FH erasure model saved (latest): %s\n', char(fhErasureReport.artifacts.latestPath));
-        fprintf('FH erasure model saved (batch): %s\n\n', char(fhErasureReport.artifacts.batchPath));
-    else
-        fprintf('Skipping FH erasure model training: current methods do not require ml_fh_erasure.\n\n');
-    end
+    [p.mitigation.mlFhErasure, ~, loadedFhErasurePath] = load_pretrained_model( ...
+        fullfile(modelDir, 'fh_erasure_model.mat'), @ml_fh_erasure_model, ...
+        "strict", true, ...
+        "requireTrained", true, ...
+        "expectedContext", expectedFhErasureContext);
+    fprintf('Loaded FH erasure model: %s\n\n', char(loadedFhErasurePath));
 else
     fprintf('Skipping FH erasure model load: effective methods do not use ml_fh_erasure.\n\n');
 end
 
 if requiredModels.multipathEq
-    multipathEqModelPath = fullfile(modelDir, 'multipath_equalizer_model.mat');
-    if ~forceRetrain
-        [p.rxSync.multipathEq.mlMlp, loadedMultipathEq, loadedMultipathEqPath] = load_pretrained_model( ...
-            multipathEqModelPath, @ml_multipath_equalizer_model, "expectedContext", expectedMultipathEqContext);
-        loadedMultipathEq = loadedMultipathEq && isfield(p.rxSync.multipathEq.mlMlp, 'trained') ...
-            && logical(p.rxSync.multipathEq.mlMlp.trained);
-        if ~loadedMultipathEq
-            loadedMultipathEqPath = "";
-        end
-    else
-        loadedMultipathEq = false;
-        loadedMultipathEqPath = "";
-    end
-    if loadedMultipathEq
-        fprintf('Loaded multipath equalizer model: %s\n\n', char(loadedMultipathEqPath));
-    else
-        fprintf('Training multipath equalizer model...\n');
-        [p.rxSync.multipathEq.mlMlp, multipathEqReport] = ml_train_multipath_equalizer(p, ...
-            multipathEqTrainArgs{:}, ...
-            'saveArtifacts', true, 'saveDir', string(modelDir), ...
-            'saveTag', batchTag, 'savedBy', "run_demo");
-        fprintf('Multipath equalizer model saved (latest): %s\n', char(multipathEqReport.artifacts.latestPath));
-        fprintf('Multipath equalizer model saved (batch): %s\n\n', char(multipathEqReport.artifacts.batchPath));
-    end
+    [p.rxSync.multipathEq.mlMlp, ~, loadedMultipathEqPath] = load_pretrained_model( ...
+        fullfile(modelDir, 'multipath_equalizer_model.mat'), @ml_multipath_equalizer_model, ...
+        "strict", true, ...
+        "requireTrained", true, ...
+        "expectedContext", expectedMultipathEqContext);
+    fprintf('Loaded multipath equalizer model: %s\n\n', char(loadedMultipathEqPath));
 else
     fprintf('Skipping multipath equalizer model load: compareMethods does not use ml_mlp.\n\n');
 end
@@ -358,72 +204,6 @@ end
 fprintf('========================================\n');
 end
 
-function args = local_generalized_training_args(p)
-[narrowbandCenterFreqPointsRange, narrowbandBandwidthFreqPointsRange] = ...
-    local_narrowband_training_ranges(p, [-2500, 2500], [200, 1800]);
-
-args = { ...
-    'ebN0dBRange', [-2, 16], ...
-    'labelScoreThreshold', 0.1, ...
-    'thresholdPolicy', "min_pe_under_pfa", ...
-    'minPositiveRate', 0.002, ...
-    'maxPositiveRate', 0.30, ...
-    'impulseEnableProbability', 0.85, ...
-    'impulseProbRange', [0.002, 0.05], ...
-    'impulseToBgRatioRange', [10, 80], ...
-    'singleToneProbability', 0.35, ...
-    'singleTonePowerRange', [0.0025, 0.12], ...
-    'singleToneFreqHzRange', [-2500, 2500], ...
-    'narrowbandProbability', 0.35, ...
-    'narrowbandPowerRange', [0.0025, 0.12], ...
-    'narrowbandCenterFreqPointsRange', narrowbandCenterFreqPointsRange, ...
-    'narrowbandBandwidthFreqPointsRange', narrowbandBandwidthFreqPointsRange, ...
-    'sweepProbability', 0.20, ...
-    'sweepPowerRange', [0.0025, 0.08], ...
-    'sweepStartHzRange', [-3500, -500], ...
-    'sweepStopHzRange', [500, 3500], ...
-    'sweepPeriodSymbolsRange', [64, 512], ...
-    'syncImpairmentProbability', 0.15, ...
-    'timingOffsetSymbolsRange', [-0.35, 0.35], ...
-    'phaseOffsetRadRange', [-pi, pi], ...
-    'multipathProbability', 0.20, ...
-    'multipathRayleighProbability', 0.50, ...
-    'maxAdditionalImpairments', 2, ...
-    'verbose', true};
-end
-
-function [centerFreqPointsRange, bandwidthFreqPointsRange] = local_narrowband_training_ranges(p, centerHzRange, bandwidthHzRange)
-waveform = resolve_waveform_cfg(p);
-spacingHz = fh_frequency_spacing_hz(p.fh, waveform);
-
-centerHzRange = double(centerHzRange(:).');
-bandwidthHzRange = double(bandwidthHzRange(:).');
-if numel(centerHzRange) ~= 2 || any(~isfinite(centerHzRange)) || centerHzRange(1) > centerHzRange(2)
-    error("local_generalized_training_args:InvalidCenterHzRange", ...
-        "centerHzRange must be an ascending finite 1x2 range.");
-end
-if numel(bandwidthHzRange) ~= 2 || any(~isfinite(bandwidthHzRange)) || bandwidthHzRange(1) <= 0 || bandwidthHzRange(1) > bandwidthHzRange(2)
-    error("local_generalized_training_args:InvalidBandwidthHzRange", ...
-        "bandwidthHzRange must be a positive ascending finite 1x2 range.");
-end
-
-bandwidthFreqPointsRange = bandwidthHzRange / spacingHz;
-bandwidthFreqPointsRange = max(bandwidthFreqPointsRange, 1e-6);
-[maxCenterFreqPoints, ~] = narrowband_center_freq_points_limit(p.fh, waveform, bandwidthFreqPointsRange(2));
-centerFreqPointsRange = centerHzRange / spacingHz;
-centerFreqPointsRange = max(min(centerFreqPointsRange, maxCenterFreqPoints), -maxCenterFreqPoints);
-centerFreqPointsRange = sort(centerFreqPointsRange);
-end
-
-function args = local_impulse_dl_training_args()
-args = { ...
-    'nBlocks', 1000, ...
-    'blockLen', 1024, ...
-    'epochs', 100, ...
-    'batchSize', 64, ...
-    'lr', 1e-3};
-end
-
 function required = local_required_ml_models(methods, p)
 methods = lower(string(methods(:).'));
 required = struct();
@@ -452,18 +232,6 @@ if isfield(eqCfg, "compareMethods") && ~isempty(eqCfg.compareMethods)
 end
 end
 
-function tf = local_impulse_training_enabled(p)
-tf = false;
-if ~(isfield(p, "channel") && isstruct(p.channel) && isfield(p.channel, "impulseProb") && ~isempty(p.channel.impulseProb))
-    return;
-end
-impulseProb = double(p.channel.impulseProb);
-if ~(isscalar(impulseProb) && isfinite(impulseProb))
-    error("channel.impulseProb must be a finite scalar.");
-end
-tf = impulseProb > 0;
-end
-
 function txt = local_on_off_text(tf)
 if tf
     txt = 'ON';
@@ -481,118 +249,11 @@ else
 end
 end
 
-function args = local_selector_training_args(p)
-dataSymbolsPerBlock = local_selector_training_symbol_count(p);
-args = { ...
-    'ebN0dBRange', [-4, 16], ...
-    'dataSymbolsPerBlock', dataSymbolsPerBlock, ...
-    'maxRetriesPerBlock', 10, ...
-    'verbose', true};
-end
-
-function args = local_narrowband_training_args()
-args = { ...
-    'ebN0dBRange', [-4, 16], ...
-    'blockLenRange', [96 1024], ...
-    'bpskProbability', 0.35, ...
-    'verbose', true};
-end
-
-function args = local_fh_erasure_training_args(p)
-if ~(isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "nFreqs") && double(p.fh.nFreqs) >= 2)
-    error("FH erasure training requires at least two FH frequencies.");
-end
-args = { ...
-    'nBlocks', 900, ...
-    'ebN0dBRange', [-4, 16], ...
-    'hopsPerBlockRange', [64 256], ...
-    'jsrDbRange', [-12, 3], ...
-    'bandwidthFreqPointsRange', [0.6, 1.4], ...
-    'configuredCenterProbability', 0.35, ...
-    'narrowbandProbability', 0.90, ...
-    'epochs', 45, ...
-    'batchSize', 256, ...
-    'lr', 1e-3, ...
-    'verbose', true};
-end
-
-function args = local_multipath_eq_training_args()
-args = { ...
-    'nChannels', 2500, ...
-    'samplesPerChannel', 32, ...
-    'blockLen', 192, ...
-    'ebN0dBRange', [6, 14], ...
-    'rayleighProbability', 0.85, ...
-    'bpskProbability', 0.35, ...
-    'epochs', 45, ...
-    'batchSize', 512, ...
-    'lr', 1e-3, ...
-    'verbose', true};
-end
-
-function tf = local_narrowband_training_enabled(p)
-tf = false;
-if ~(isfield(p, "channel") && isstruct(p.channel) ...
-        && isfield(p.channel, "narrowband") && isstruct(p.channel.narrowband))
+function profileName = local_impulse_profile_name(requiredModels, p)
+if ~(requiredModels.lr || requiredModels.cnn || requiredModels.gru)
+    profileName = "";
     return;
 end
-narrowbandCfg = p.channel.narrowband;
-if ~(isfield(narrowbandCfg, "enable") && ~isempty(narrowbandCfg.enable))
-    return;
-end
-enable = logical(narrowbandCfg.enable);
-if ~isscalar(enable)
-    error("channel.narrowband.enable must be a logical scalar.");
-end
-weight = 1;
-if isfield(narrowbandCfg, "weight") && ~isempty(narrowbandCfg.weight)
-    weight = double(narrowbandCfg.weight);
-end
-if ~(isscalar(weight) && isfinite(weight))
-    error("channel.narrowband.weight must be a finite scalar.");
-end
-tf = enable && weight > 0;
-end
-
-function tf = local_narrowband_enable_flag(p)
-tf = false;
-if isfield(p, "channel") && isstruct(p.channel) ...
-        && isfield(p.channel, "narrowband") && isstruct(p.channel.narrowband) ...
-        && isfield(p.channel.narrowband, "enable") && ~isempty(p.channel.narrowband.enable)
-    tf = logical(p.channel.narrowband.enable);
-    if ~isscalar(tf)
-        error("channel.narrowband.enable must be a logical scalar.");
-    end
-end
-end
-
-function nSym = local_selector_training_symbol_count(p)
-bitsPerSym = local_bits_per_symbol(p.mod);
-payloadBits = max(8, round(double(p.packet.payloadBitsPerPacket)));
-payloadBits = 8 * floor(payloadBits / 8);
-codedBits = fec_coded_bits_length(payloadBits, p.fec);
-nSym = ceil(double(codedBits) / double(bitsPerSym));
-if isfield(p, "dsss") && isstruct(p.dsss)
-    nSym = nSym * dsss_effective_spread_factor(p.dsss);
-end
-nSym = max(1024, min(nSym, 4096));
-if isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && p.fh.enable ...
-        && ~fh_is_fast(p.fh) ...
-        && isfield(p.fh, "symbolsPerHop") && double(p.fh.symbolsPerHop) > 0
-    hopLen = round(double(p.fh.symbolsPerHop));
-    nSym = hopLen * ceil(double(nSym) / double(hopLen));
-end
-end
-
-function bitsPerSym = local_bits_per_symbol(modCfg)
-switch upper(string(modCfg.type))
-    case "BPSK"
-        bitsPerSym = 1;
-    case "QPSK"
-        bitsPerSym = 2;
-    case "MSK"
-        bitsPerSym = 1;
-    otherwise
-        error("Unsupported modulation for selector training args: %s", char(modCfg.type));
-end
+profile = ml_require_impulse_offline_training_profile(p);
+profileName = profile.profileName;
 end

@@ -1,141 +1,127 @@
 function ctx = ml_capture_training_context(p)
-%ML_CAPTURE_TRAINING_CONTEXT  提取与新分层接收架构训练直接相关的链路上下文。
+%ML_CAPTURE_TRAINING_CONTEXT  提取离线训练与主链路对齐后的上下文快照。
+
 arguments
     p (1,1) struct
 end
 
+waveform = resolve_waveform_cfg(p);
+
 ctx = struct();
 ctx.domain = "raw_samples";
-ctx.rxArchitecture = "sample_mitigation_mf_2sps_sync_1sps_decode_scfde_rxdiv";
-ctx.rngSeed = local_get_numeric(p, "rngSeed", NaN);
-ctx.mod = struct("type", local_get_nested_string(p, "mod", "type", ""));
-ctx.waveform = struct( ...
-    "enable", local_get_nested_logical(p, "waveform", "enable", false), ...
-    "sampleRateHz", local_get_nested_numeric(p, "waveform", "sampleRateHz", NaN), ...
-    "symbolRateHz", local_get_nested_numeric(p, "waveform", "symbolRateHz", NaN), ...
-    "sps", local_get_nested_numeric(p, "waveform", "sps", NaN), ...
-    "rolloff", local_get_nested_numeric(p, "waveform", "rolloff", NaN), ...
-    "spanSymbols", local_get_nested_numeric(p, "waveform", "spanSymbols", NaN), ...
-    "rxMatchedFilter", local_get_nested_logical(p, "waveform", "rxMatchedFilter", false));
-ctx.channel = struct( ...
-    "impulseProb", local_get_nested_numeric(p, "channel", "impulseProb", NaN), ...
-    "impulseToBgRatio", local_get_nested_numeric(p, "channel", "impulseToBgRatio", NaN), ...
-    "multipathEnable", local_get_nested_logical(local_get_struct(p, "channel"), "multipath", "enable", false), ...
-    "rayleigh", local_get_nested_logical(local_get_struct(p, "channel"), "multipath", "rayleigh", false), ...
-    "singleToneEnable", local_get_nested_logical(local_get_struct(p, "channel"), "singleTone", "enable", false), ...
-    "narrowbandEnable", local_get_nested_logical(local_get_struct(p, "channel"), "narrowband", "enable", false), ...
-    "sweepEnable", local_get_nested_logical(local_get_struct(p, "channel"), "sweep", "enable", false), ...
-    "syncImpairmentEnable", local_get_nested_logical(local_get_struct(p, "channel"), "syncImpairment", "enable", false));
-ctx.fh = struct( ...
-    "enable", local_get_nested_logical(p, "fh", "enable", false), ...
-    "mode", local_get_nested_string(p, "fh", "mode", "slow"), ...
-    "nFreqs", local_get_nested_numeric(p, "fh", "nFreqs", NaN), ...
-    "symbolsPerHop", local_get_nested_numeric(p, "fh", "symbolsPerHop", NaN), ...
-    "hopsPerSymbol", local_get_nested_numeric(p, "fh", "hopsPerSymbol", NaN), ...
-    "sequenceType", local_get_nested_string(p, "fh", "sequenceType", ""), ...
-    "freqSet", local_get_nested_row_numeric(p, "fh", "freqSet"));
-ctx.frame = struct( ...
-    "phyHeaderMode", local_get_nested_string(p, "frame", "phyHeaderMode", ""), ...
-    "phyHeaderRepeatCompact", local_get_nested_numeric(p, "frame", "phyHeaderRepeatCompact", NaN), ...
-    "phyHeaderFhEnable", local_get_nested_logical(p, "frame", "phyHeaderFhEnable", false), ...
-    "phyHeaderFhMode", local_get_nested_string(p, "frame", "phyHeaderFhMode", "slow"), ...
-    "phyHeaderFhHopsPerSymbol", local_get_nested_numeric(p, "frame", "phyHeaderFhHopsPerSymbol", NaN), ...
-    "phyHeaderFhSymbolsPerHop", local_get_nested_numeric(p, "frame", "phyHeaderFhSymbolsPerHop", NaN), ...
-    "phyHeaderFhFreqSet", local_get_nested_row_numeric(p, "frame", "phyHeaderFhFreqSet"));
-ctx.dsss = struct( ...
-    "enable", local_get_nested_logical(p, "dsss", "enable", false), ...
-    "spreadFactor", local_get_nested_numeric(p, "dsss", "spreadFactor", NaN));
-ctx.scFde = struct( ...
-    "enable", local_get_nested_logical(p, "scFde", "enable", false), ...
-    "cpLenSymbols", local_get_nested_numeric(p, "scFde", "cpLenSymbols", NaN), ...
-    "pilotLength", local_get_nested_numeric(p, "scFde", "pilotLength", NaN), ...
-    "lambdaFactor", local_get_nested_numeric(p, "scFde", "lambdaFactor", NaN), ...
-    "pilotMinAbsGain", local_get_nested_numeric(p, "scFde", "pilotMinAbsGain", NaN), ...
-    "pilotMseReference", local_get_nested_numeric(p, "scFde", "pilotMseReference", NaN), ...
-    "fdePilotMseThreshold", local_get_nested_numeric(p, "scFde", "fdePilotMseThreshold", NaN), ...
-    "fdePilotMseMargin", local_get_nested_numeric(p, "scFde", "fdePilotMseMargin", NaN), ...
-    "minReliability", local_get_nested_numeric(p, "scFde", "minReliability", NaN));
-ctx.rxDiversity = struct( ...
-    "enable", local_get_nested_logical(p, "rxDiversity", "enable", false), ...
-    "nRx", local_get_nested_numeric(p, "rxDiversity", "nRx", NaN), ...
-    "combineMethod", local_get_nested_string(p, "rxDiversity", "combineMethod", ""));
-ctx.rxSync = struct( ...
-    "compensateCarrier", local_get_nested_logical(p, "rxSync", "compensateCarrier", false), ...
-    "estimateCfo", local_get_nested_logical(p, "rxSync", "estimateCfo", false), ...
-    "fractionalTiming", local_get_nested_logical(p, "rxSync", "enableFractionalTiming", false), ...
-    "fractionalRange", local_get_nested_numeric(p, "rxSync", "fractionalRange", NaN), ...
-    "fractionalStep", local_get_nested_numeric(p, "rxSync", "fractionalStep", NaN), ...
-    "timingDllEnable", local_get_nested_logical(local_get_struct(p, "rxSync"), "timingDll", "enable", false), ...
-    "carrierPllEnable", local_get_nested_logical(local_get_struct(p, "rxSync"), "carrierPll", "enable", false), ...
-    "multipathEqEnable", local_get_nested_logical(local_get_struct(p, "rxSync"), "multipathEq", "enable", false), ...
-    "multipathEqMethod", local_get_nested_string(local_get_struct(p, "rxSync"), "multipathEq", "method", ""));
+ctx.rxArchitecture = "sample_mitigation_mf_2sps_sync_1sps_decode_scfde_rxdiv_v2";
+ctx.trainingChainVersion = "build_tx_packets_full_burst_v2";
+ctx.rngSeed = local_require_numeric_scalar(p, "rngSeed");
+ctx.mod = local_capture_required_substruct(p, "mod");
+ctx.waveform = local_capture_value(waveform, "waveform");
+ctx.channel = local_capture_required_substruct(p, "channel");
+ctx.fh = local_capture_required_substruct(p, "fh");
+ctx.frame = local_capture_required_substruct(p, "frame");
+ctx.dsss = local_capture_required_substruct(p, "dsss");
+ctx.packet = local_capture_required_substruct(p, "packet");
+ctx.outerRs = local_capture_required_substruct(p, "outerRs");
+ctx.scramble = local_capture_required_substruct(p, "scramble");
+ctx.interleaver = local_capture_required_substruct(p, "interleaver");
+ctx.fec = local_capture_required_substruct(p, "fec");
+ctx.softMetric = local_capture_required_substruct(p, "softMetric");
+ctx.scFde = local_capture_required_substruct(p, "scFde");
+ctx.rxDiversity = local_capture_required_substruct(p, "rxDiversity");
+ctx.rxSync = local_capture_rx_sync_context(p);
+ctx.chaosEncrypt = local_capture_required_substruct(p, "chaosEncrypt");
 end
 
-function value = local_get_numeric(s, fieldName, defaultValue)
-if isfield(s, fieldName) && ~isempty(s.(fieldName))
-    value = double(s.(fieldName));
-else
-    value = defaultValue;
+function value = local_require_numeric_scalar(s, fieldName)
+if ~(isfield(s, fieldName) && ~isempty(s.(fieldName)))
+    error("ml_capture_training_context requires p.%s.", fieldName);
+end
+value = double(s.(fieldName));
+if ~(isscalar(value) && isfinite(value))
+    error("p.%s must be a finite scalar.", fieldName);
 end
 end
 
-function value = local_get_logical(s, fieldName, defaultValue)
-if isfield(s, fieldName) && ~isempty(s.(fieldName))
-    value = logical(s.(fieldName));
-else
-    value = defaultValue;
+function out = local_capture_required_substruct(s, fieldName)
+if ~(isfield(s, fieldName) && isstruct(s.(fieldName)) && isscalar(s.(fieldName)))
+    error("ml_capture_training_context requires p.%s as a scalar struct.", fieldName);
 end
-end
-
-function value = local_get_string(s, fieldName, defaultValue)
-if isfield(s, fieldName) && ~isempty(s.(fieldName))
-    value = string(s.(fieldName));
-else
-    value = string(defaultValue);
-end
+out = local_capture_value(s.(fieldName), "p." + string(fieldName));
 end
 
-function value = local_get_row_numeric(s, fieldName)
-value = zeros(1, 0);
-if isfield(s, fieldName) && ~isempty(s.(fieldName))
-    value = double(s.(fieldName)(:)).';
+function out = local_capture_rx_sync_context(p)
+if ~(isfield(p, "rxSync") && isstruct(p.rxSync) && isscalar(p.rxSync))
+    error("ml_capture_training_context requires p.rxSync as a scalar struct.");
 end
+rxSyncCfg = p.rxSync;
+if ~(isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq) && isscalar(rxSyncCfg.multipathEq))
+    error("ml_capture_training_context requires p.rxSync.multipathEq as a scalar struct.");
 end
-
-function value = local_get_nested_logical(s, parentField, childField, defaultValue)
-if isfield(s, parentField) && isstruct(s.(parentField))
-    value = local_get_logical(s.(parentField), childField, defaultValue);
-else
-    value = defaultValue;
+if ~isfield(rxSyncCfg.multipathEq, "mlMlp")
+    error("ml_capture_training_context requires p.rxSync.multipathEq.mlMlp.");
 end
-end
-
-function value = local_get_nested_numeric(s, parentField, childField, defaultValue)
-if isfield(s, parentField) && isstruct(s.(parentField))
-    value = local_get_numeric(s.(parentField), childField, defaultValue);
-else
-    value = defaultValue;
-end
+rxSyncCfg.multipathEq = rmfield(rxSyncCfg.multipathEq, "mlMlp");
+out = local_capture_value(rxSyncCfg, "p.rxSync");
 end
 
-function value = local_get_nested_string(s, parentField, childField, defaultValue)
-if isfield(s, parentField) && isstruct(s.(parentField))
-    value = local_get_string(s.(parentField), childField, defaultValue);
-else
-    value = string(defaultValue);
-end
+function valueOut = local_capture_value(valueIn, path)
+if nargin < 2
+    path = "value";
 end
 
-function value = local_get_nested_row_numeric(s, parentField, childField)
-value = zeros(1, 0);
-if isfield(s, parentField) && isstruct(s.(parentField))
-    value = local_get_row_numeric(s.(parentField), childField);
-end
+if isstruct(valueIn)
+    if isempty(valueIn)
+        valueOut = struct();
+        return;
+    end
+    if ~isscalar(valueIn)
+        valueOut = local_capture_value(valueIn(1), path + "(" + string(1) + ")");
+        valueOut = repmat(valueOut, size(valueIn));
+        for idx = 2:numel(valueIn)
+            valueOut(idx) = local_capture_value(valueIn(idx), path + "(" + string(idx) + ")");
+        end
+        return;
+    end
+
+    fields = sort(fieldnames(valueIn));
+    valueOut = struct();
+    for idx = 1:numel(fields)
+        fieldName = fields{idx};
+        valueOut.(fieldName) = local_capture_value(valueIn.(fieldName), path + "." + string(fieldName));
+    end
+    return;
 end
 
-function value = local_get_struct(s, fieldName)
-value = struct();
-if isfield(s, fieldName) && isstruct(s.(fieldName))
-    value = s.(fieldName);
+if iscell(valueIn)
+    valueOut = cell(size(valueIn));
+    for idx = 1:numel(valueIn)
+        valueOut{idx} = local_capture_value(valueIn{idx}, path + "{" + string(idx) + "}");
+    end
+    return;
 end
+
+if isstring(valueIn)
+    valueOut = reshape(string(valueIn), size(valueIn));
+    return;
+end
+
+if ischar(valueIn)
+    valueOut = string(valueIn);
+    return;
+end
+
+if isnumeric(valueIn)
+    valueOut = double(valueIn);
+    return;
+end
+
+if islogical(valueIn)
+    valueOut = logical(valueIn);
+    return;
+end
+
+if isa(valueIn, "categorical")
+    valueOut = string(valueIn);
+    return;
+end
+
+error("Unsupported training-context type at %s: %s.", char(string(path)), class(valueIn));
 end
