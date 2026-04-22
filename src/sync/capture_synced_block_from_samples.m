@@ -28,6 +28,13 @@ front = struct( ...
     "relSamplePrepForCapture", zeros(0, 1), ...
     "syncStageSps", double(syncStageSps));
 
+if local_preamble_diversity_enabled_local(fhCaptureCfg)
+    front = local_capture_with_preamble_diversity_local( ...
+        rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, ...
+        sampleAction, bootstrapChain, fhCaptureCfg, syncStageSps, front);
+    return;
+end
+
 [rxStage, rawReliability, rxPrep, relSamplePrep] = local_sync_stage_observation_from_samples_local( ...
     rxSampleRaw, waveform, sampleAction, mitigation, syncStageSps);
 syncRefStage = local_sync_reference_stage_local(syncSymRef, waveform, syncStageSps);
@@ -160,6 +167,15 @@ syncSymbols = local_fast_fh_capture_scalar_local(fhCaptureCfg, "syncSymbols");
 headerSymbols = local_fast_fh_capture_scalar_local(fhCaptureCfg, "headerSymbols");
 headerStart = local_symbol_boundary_sample_index_local(syncSymbols, waveform);
 dataStart = local_symbol_boundary_sample_index_local(syncSymbols + headerSymbols, waveform);
+
+if isfield(fhCaptureCfg, "preambleFhCfg") && isstruct(fhCaptureCfg.preambleFhCfg) ...
+        && isfield(fhCaptureCfg.preambleFhCfg, "enable") && fhCaptureCfg.preambleFhCfg.enable
+    preambleStop = min(numel(pktOut), headerStart - 1);
+    if 1 <= preambleStop
+        pktOut(1:preambleStop) = local_fast_fh_segment_demod_local( ...
+            pktOut(1:preambleStop), fhCaptureCfg.preambleFhCfg, waveform);
+    end
+end
 
 if isfield(fhCaptureCfg, "headerFhCfg") && isstruct(fhCaptureCfg.headerFhCfg) ...
         && isfield(fhCaptureCfg.headerFhCfg, "enable") && fhCaptureCfg.headerFhCfg.enable
@@ -573,4 +589,158 @@ if numel(x) >= targetLen
 else
     y = [x; complex(zeros(targetLen - numel(x), 1))];
 end
+end
+
+function tf = local_preamble_diversity_enabled_local(fhCaptureCfg)
+tf = false;
+if ~(isstruct(fhCaptureCfg) && isfield(fhCaptureCfg, "preambleFhCfg") ...
+        && isstruct(fhCaptureCfg.preambleFhCfg))
+    return;
+end
+pf = fhCaptureCfg.preambleFhCfg;
+if ~(isfield(pf, "enable") && logical(pf.enable))
+    return;
+end
+if ~(isfield(pf, "nFreqs") && ~isempty(pf.nFreqs) && double(pf.nFreqs) >= 1)
+    return;
+end
+if ~(isfield(pf, "freqSet") && ~isempty(pf.freqSet))
+    return;
+end
+if ~(isfield(pf, "symbolsPerHop") && ~isempty(pf.symbolsPerHop))
+    return;
+end
+tf = true;
+end
+
+function front = local_capture_with_preamble_diversity_local( ...
+    rxSampleRaw, syncSymRef, totalLen, syncCfgUse, mitigation, modCfg, waveform, ...
+    sampleAction, bootstrapChain, fhCaptureCfg, syncStageSps, front)
+% Multi-frequency preamble diversity capture. The long preamble was split
+% into K copies, each on a different FH frequency. Search at each known
+% frequency, pick the strongest peak as the winner, then snap to packet
+% start and run the normal extraction on the non-rotated stream (letting
+% local_apply_fast_fh_packet_demod_local dehop all three regions).
+
+rxSampleRaw = rxSampleRaw(:);
+syncSymRef = syncSymRef(:);
+
+preambleFhCfg = fhCaptureCfg.preambleFhCfg;
+K = max(1, round(double(preambleFhCfg.nFreqs)));
+freqSet = double(preambleFhCfg.freqSet(:).');
+if numel(freqSet) < K
+    return;
+end
+copyLenSym = max(1, round(double(preambleFhCfg.symbolsPerHop)));
+
+if numel(syncSymRef) < copyLenSym
+    return;
+end
+singleCopyRef = syncSymRef(1:copyLenSym);
+
+stageTotalLenSingle = local_stage_symbol_sequence_length_local(copyLenSym, syncStageSps);
+syncRefStageSingle = local_sync_reference_stage_local(singleCopyRef, waveform, syncStageSps);
+syncCfgStage = local_sync_cfg_for_stage_local(syncCfgUse, syncStageSps);
+
+sps = max(1, round(double(waveform.sps)));
+nSample = numel(rxSampleRaw);
+nAbs = (0:nSample-1).';
+
+bestPeak = -inf;
+bestK = 0;
+bestCapture = struct('ok', false);
+
+for k = 1:K
+    fk = double(freqSet(k));
+    phaseRot = exp(-1j * 2 * pi * fk * nAbs / sps);
+    rxRot = rxSampleRaw .* phaseRot;
+
+    [rxStageK, ~, ~, ~] = local_sync_stage_observation_from_samples_local( ...
+        rxRot, waveform, sampleAction, mitigation, syncStageSps);
+
+    captureK = adaptive_frontend_bootstrap_capture( ...
+        rxStageK, syncRefStageSingle, stageTotalLenSingle, syncCfgStage, mitigation, modCfg, bootstrapChain);
+    if ~captureK.ok
+        continue;
+    end
+
+    peakK = -inf;
+    if isstruct(captureK.syncInfo) && isfield(captureK.syncInfo, "corrPeak") ...
+            && ~isempty(captureK.syncInfo.corrPeak)
+        peakK = double(captureK.syncInfo.corrPeak);
+    end
+    if ~(isfinite(peakK))
+        continue;
+    end
+    if peakK > bestPeak
+        bestPeak = peakK;
+        bestK = k;
+        bestCapture = captureK;
+    end
+end
+
+if ~isstruct(bestCapture) || ~(isfield(bestCapture, 'ok') && bestCapture.ok) || bestK < 1
+    return;
+end
+
+copyLenStage = round(double(copyLenSym) * double(syncStageSps));
+
+fineSearchRadiusStage = 0;
+if isfield(syncCfgStage, "fineSearchRadius") && ~isempty(syncCfgStage.fineSearchRadius)
+    fineSearchRadiusStage = round(double(syncCfgStage.fineSearchRadius));
+end
+searchRadiusWinner = max([8 * syncStageSps, round(numel(syncRefStageSingle) / 4), ...
+    fineSearchRadiusStage + 4 * syncStageSps]);
+
+[winnerStartIdxStage, winnerSyncInfoStage] = local_refine_stage_capture_local( ...
+    bestCapture.rxSync, syncRefStageSingle, bestCapture.startIdx, syncCfgStage, searchRadiusWinner);
+if isempty(winnerStartIdxStage) || ~isfinite(winnerStartIdxStage)
+    return;
+end
+
+[winnerStartIdxFinal, timingInfo] = local_estimate_symbol_timing_from_stage_local( ...
+    bestCapture.rxSync, winnerStartIdxStage, singleCopyRef, syncCfgUse, modCfg, syncStageSps);
+if isempty(winnerStartIdxFinal) || ~isfinite(winnerStartIdxFinal)
+    return;
+end
+
+packetStartFinal = double(winnerStartIdxFinal) - (double(bestK) - 1) * double(copyLenStage);
+if ~isfinite(packetStartFinal) || packetStartFinal < 1
+    return;
+end
+
+[rxStageOrig, rawReliability, rxPrep, relSamplePrep] = local_sync_stage_observation_from_samples_local( ...
+    rxSampleRaw, waveform, sampleAction, mitigation, syncStageSps);
+
+captureMock = bestCapture;
+captureMock.ok = true;
+captureMock.startIdx = packetStartFinal;
+captureMock.rxSync = rxStageOrig;
+captureMock.reliabilityTrack = rawReliability;
+
+[rFull, reliabilityFull, okFull] = local_extract_symbol_block_local( ...
+    captureMock, rawReliability, rxPrep, relSamplePrep, packetStartFinal, totalLen, ...
+    fhCaptureCfg, syncCfgUse, mitigation, modCfg, waveform, syncStageSps);
+if ~okFull
+    return;
+end
+
+[rFull, syncCompInfo] = local_apply_symbol_block_sync_compensation_local(rFull, syncSymRef, syncCfgUse);
+syncInfo = local_merge_stage_sync_info_local(winnerSyncInfoStage, timingInfo, syncCompInfo, ...
+    winnerStartIdxStage, packetStartFinal, syncStageSps);
+syncInfo.preambleDiversityCopyIndex = double(bestK);
+syncInfo.preambleDiversityCorrPeak = double(bestPeak);
+syncInfo.preambleDiversityCopies = double(K);
+
+front.ok = true;
+front.startIdx = packetStartFinal;
+front.syncInfo = syncInfo;
+front.rxSync = rxStageOrig;
+front.rFull = rFull;
+front.reliabilityFull = local_fit_reliability_length_local(reliabilityFull, totalLen);
+front.rxPrepForCapture = rxPrep;
+front.relSamplePrepForCapture = relSamplePrep;
+front.syncStageSps = double(syncStageSps);
+front.bootstrapPath = string(bestCapture.bootstrapPath);
+front.bootstrapCapture = bestCapture;
 end

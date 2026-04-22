@@ -122,6 +122,10 @@ p.frame.phyHeaderFhFreqSet = [];
 p.frame.phyHeaderPilotLength = 0;          % 默认关闭；当前这版pilot补偿会拉低PHY头成功率
 p.frame.phyHeaderPilotPolynomial = [1 0 0 1 1]; % x^4 + x + 1
 p.frame.phyHeaderPilotInit = [0 0 0 1];
+p.frame.preambleDiversity = struct();
+p.frame.preambleDiversity.enable = true;   % 长前导频点分集：K 份前导拆到 K 个远离窄带的 FH 频点
+p.frame.preambleDiversity.copies = 3;
+p.frame.preambleDiversity.freqSet = [];     % 空=从 p.fh.freqSet 自动挑选 K 个避开 narrowband 的频点
 
 if ~p.packet.enable
     % compact_fec不携带packetDataBytes，关闭分包时无法从PHY头恢复整图受保护长度。
@@ -239,14 +243,14 @@ p.channel.impulseWeight =0;   % JSR总干扰功率分配权重；weight>0且impu
 % 可选：单音干扰（窄带强干扰）
 p.channel.singleTone = struct();
 p.channel.singleTone.enable = false;
-p.channel.singleTone.weight = 1;      % JSR总干扰功率分配权重；enable=false时忽略
+p.channel.singleTone.weight = 0;      % JSR总干扰功率分配权重；enable=false时忽略
 p.channel.singleTone.freqHz = 1500;      % 单音频率（Hz），默认避开近DC区域并保持在当前训练覆盖范围内
 p.channel.singleTone.randomPhase = true;
 % 可选：窄带噪声干扰
 p.channel.narrowband = struct();
 p.channel.narrowband.enable = true;
 p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；enable=false时忽略
-p.channel.narrowband.centerFreqPoints = -1; % 对齐旧基线：约1500 Hz中心频率
+p.channel.narrowband.centerFreqPoints = 0; % 对齐旧基线：约1500 Hz中心频率
 p.channel.narrowband.bandwidthFreqPoints = 1; % 对齐旧基线：约1000 Hz双边带宽
 % 可选：扫频干扰（线性chirp）
 p.channel.sweep = struct();

@@ -2206,6 +2206,7 @@ txPacketsOut = repmat(struct( ...
     "blockParityCount", 0, ...
     "startBit", 0, ...
     "endBit", 0, ...
+    "preambleFhCfg", struct("enable", false), ...
     "phyHeaderFhCfg", struct("enable", false), ...
     "fhCfg", struct("enable", false)), nPackets, 1);
 for pktIdx = 1:nPackets
@@ -2220,6 +2221,9 @@ for pktIdx = 1:nPackets
     txPacketsOut(pktIdx).blockParityCount = pkt.blockParityCount;
     txPacketsOut(pktIdx).startBit = pkt.startBit;
     txPacketsOut(pktIdx).endBit = pkt.endBit;
+    if isfield(pkt, "preambleFhCfg") && isstruct(pkt.preambleFhCfg)
+        txPacketsOut(pktIdx).preambleFhCfg = pkt.preambleFhCfg;
+    end
     txPacketsOut(pktIdx).phyHeaderFhCfg = pkt.phyHeaderFhCfg;
     txPacketsOut(pktIdx).fhCfg = pkt.fhCfg;
 end
@@ -2237,6 +2241,7 @@ sessionFramesOut = repmat(struct( ...
     "decodeKind", "", ...
     "hopInfo", struct("enable", false), ...
     "fhCfg", struct("enable", false), ...
+    "preambleFhCfg", struct("enable", false), ...
     "dsssCfg", struct("enable", false), ...
     "symbolRepeat", 1, ...
     "infoBitsLen", 0, ...
@@ -2257,6 +2262,9 @@ for frameIdx = 1:nFrames
     sessionFramesOut(frameIdx).decodeKind = frame.decodeKind;
     sessionFramesOut(frameIdx).hopInfo = frame.hopInfo;
     sessionFramesOut(frameIdx).fhCfg = frame.fhCfg;
+    if isfield(frame, "preambleFhCfg") && isstruct(frame.preambleFhCfg)
+        sessionFramesOut(frameIdx).preambleFhCfg = frame.preambleFhCfg;
+    end
     sessionFramesOut(frameIdx).dsssCfg = frame.dsssCfg;
     if isfield(frame, "symbolRepeat") && ~isempty(frame.symbolRepeat)
         sessionFramesOut(frameIdx).symbolRepeat = frame.symbolRepeat;
@@ -2320,19 +2328,32 @@ if ~(isstruct(txPacket) && isfield(txPacket, "syncSym") && isfield(txPacket, "ph
 end
 txSymPkt = [txPacket.syncSym(:); txPacket.phyHeaderSymTx(:); txPacket.dataSymHop(:)];
 txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
+preambleFhCfg = struct("enable", false);
+if isfield(txPacket, "preambleFhCfg") && isstruct(txPacket.preambleFhCfg)
+    preambleFhCfg = txPacket.preambleFhCfg;
+end
 headerFhCfg = txPacket.phyHeaderFhCfg;
 dataFhCfg = txPacket.fhCfg;
-if (isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable) ...
+if (isstruct(preambleFhCfg) && isfield(preambleFhCfg, "enable") && preambleFhCfg.enable) ...
+        || (isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable) ...
         || (isstruct(dataFhCfg) && isfield(dataFhCfg, "enable") && dataFhCfg.enable)
     txSymForChannel = local_apply_fh_segments_to_packet_samples_local( ...
-        txSymForChannel, numel(txPacket.syncSym), numel(txPacket.phyHeaderSymTx), headerFhCfg, dataFhCfg, waveform);
+        txSymForChannel, numel(txPacket.syncSym), numel(txPacket.phyHeaderSymTx), preambleFhCfg, headerFhCfg, dataFhCfg, waveform);
 end
 end
 
-function txOut = local_apply_fh_segments_to_packet_samples_local(txIn, nSyncSym, nHeaderSym, headerFhCfg, dataFhCfg, waveform)
+function txOut = local_apply_fh_segments_to_packet_samples_local(txIn, nSyncSym, nHeaderSym, preambleFhCfg, headerFhCfg, dataFhCfg, waveform)
 txOut = txIn(:);
 headerStart = local_symbol_boundary_sample_index_rx_local(nSyncSym, waveform);
 dataStart = local_symbol_boundary_sample_index_rx_local(nSyncSym + nHeaderSym, waveform);
+
+if isstruct(preambleFhCfg) && isfield(preambleFhCfg, "enable") && preambleFhCfg.enable
+    preambleStop = min(numel(txOut), headerStart - 1);
+    if 1 <= preambleStop
+        [segOut, ~] = fh_modulate_samples(txOut(1:preambleStop), preambleFhCfg, waveform);
+        txOut(1:preambleStop) = segOut;
+    end
+end
 
 if isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable
     headerStop = min(numel(txOut), dataStart - 1);
@@ -4386,6 +4407,11 @@ if nargin < 2 || strlength(string(fhAssumption)) == 0
     fhAssumption = "known";
 end
 
+preambleFhCfg = struct("enable", false);
+if isfield(txPacket, "preambleFhCfg") && isstruct(txPacket.preambleFhCfg)
+    preambleFhCfg = local_assumed_packet_fh_cfg_local(txPacket.preambleFhCfg, fhAssumption);
+end
+
 headerFhCfg = struct("enable", false);
 if isfield(txPacket, "phyHeaderFhCfg") && isstruct(txPacket.phyHeaderFhCfg)
     headerFhCfg = local_assumed_packet_fh_cfg_local(txPacket.phyHeaderFhCfg, fhAssumption);
@@ -4396,9 +4422,10 @@ if isfield(txPacket, "fhCfg") && isstruct(txPacket.fhCfg)
     dataFhCfg = local_assumed_packet_fh_cfg_local(txPacket.fhCfg, fhAssumption);
 end
 
+preambleEnabled = isfield(preambleFhCfg, "enable") && preambleFhCfg.enable;
 headerEnabled = isfield(headerFhCfg, "enable") && headerFhCfg.enable;
 dataEnabled = isfield(dataFhCfg, "enable") && dataFhCfg.enable;
-if ~(headerEnabled || dataEnabled)
+if ~(preambleEnabled || headerEnabled || dataEnabled)
     return;
 end
 
@@ -4406,6 +4433,7 @@ fhCaptureCfg = struct( ...
     "enable", true, ...
     "syncSymbols", double(numel(txPacket.syncSym)), ...
     "headerSymbols", double(numel(txPacket.phyHeaderSymTx)), ...
+    "preambleFhCfg", preambleFhCfg, ...
     "headerFhCfg", headerFhCfg, ...
     "dataFhCfg", dataFhCfg);
 end
@@ -4416,12 +4444,19 @@ if nargin < 2 || strlength(string(fhAssumption)) == 0
     fhAssumption = "known";
 end
 
+preambleFhCfg = struct("enable", false);
+if isfield(sessionFrame, "preambleFhCfg") && isstruct(sessionFrame.preambleFhCfg)
+    preambleFhCfg = local_assumed_packet_fh_cfg_local(sessionFrame.preambleFhCfg, fhAssumption);
+end
+
 dataFhCfg = struct("enable", false);
 if isfield(sessionFrame, "fhCfg") && isstruct(sessionFrame.fhCfg)
     dataFhCfg = local_assumed_packet_fh_cfg_local(sessionFrame.fhCfg, fhAssumption);
 end
 
-if ~(isfield(dataFhCfg, "enable") && dataFhCfg.enable)
+preambleEnabled = isfield(preambleFhCfg, "enable") && preambleFhCfg.enable;
+dataEnabled = isfield(dataFhCfg, "enable") && dataFhCfg.enable;
+if ~(preambleEnabled || dataEnabled)
     return;
 end
 
@@ -4429,6 +4464,7 @@ fhCaptureCfg = struct( ...
     "enable", true, ...
     "syncSymbols", double(numel(sessionFrame.syncSym)), ...
     "headerSymbols", 0, ...
+    "preambleFhCfg", preambleFhCfg, ...
     "headerFhCfg", struct("enable", false), ...
     "dataFhCfg", dataFhCfg);
 end
