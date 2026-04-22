@@ -198,7 +198,98 @@ end
 
 function segOut = local_fast_fh_segment_demod_local(segIn, fhCfg, waveform)
 hopInfo = fh_sample_hop_info_from_cfg(fhCfg, waveform, numel(segIn));
-segOut = fh_demodulate_samples(segIn, hopInfo, waveform);
+if fh_is_fast(fhCfg)
+    segOut = fh_demodulate_samples(segIn, hopInfo, waveform);
+    return;
+end
+segOut = local_slow_fh_segment_demod_with_preselect_local(segIn, hopInfo, waveform);
+end
+
+function segOut = local_slow_fh_segment_demod_with_preselect_local(segIn, hopInfo, waveform)
+segIn = segIn(:);
+segOut = complex(zeros(size(segIn)));
+if isempty(segIn)
+    return;
+end
+if ~(isstruct(hopInfo) && isfield(hopInfo, "enable") && hopInfo.enable)
+    segOut = segIn;
+    return;
+end
+if ~(isfield(hopInfo, "hopLenSamples") && ~isempty(hopInfo.hopLenSamples))
+    error("slow FH sample demodulation requires hopInfo.hopLenSamples.");
+end
+if ~(isfield(hopInfo, "freqOffsets") && ~isempty(hopInfo.freqOffsets))
+    error("slow FH sample demodulation requires hopInfo.freqOffsets.");
+end
+
+hopLenSamples = round(double(hopInfo.hopLenSamples));
+if hopLenSamples < 1
+    error("slow FH sample demodulation requires hopLenSamples >= 1.");
+end
+nSample = numel(segIn);
+nHops = ceil(double(nSample) / double(hopLenSamples));
+freqOffsets = double(hopInfo.freqOffsets(:));
+if numel(freqOffsets) < nHops
+    error("slow FH sample demodulation needs %d hop frequencies, got %d.", nHops, numel(freqOffsets));
+end
+
+phaseRotFull = conj(fh_phase_sequence_samples(freqOffsets, hopLenSamples, nSample, waveform));
+overlap = local_fh_preselect_overlap_samples_local(waveform);
+
+for hopIdx = 1:nHops
+    coreStart = (hopIdx - 1) * hopLenSamples + 1;
+    coreStop = min(nSample, hopIdx * hopLenSamples);
+    winStart = max(1, coreStart - overlap);
+    winStop = min(nSample, coreStop + overlap);
+    win = segIn(winStart:winStop);
+    win = local_band_select_samples_local(win, freqOffsets(hopIdx), waveform);
+    win = win .* phaseRotFull(winStart:winStop);
+    coreRange = (coreStart:coreStop) - winStart + 1;
+    segOut(coreStart:coreStop) = win(coreRange);
+end
+end
+
+function overlap = local_fh_preselect_overlap_samples_local(waveform)
+if ~(isstruct(waveform) && isfield(waveform, "enable") && waveform.enable)
+    overlap = 0;
+    return;
+end
+if ~(isfield(waveform, "rrcTaps") && ~isempty(waveform.rrcTaps))
+    error("waveform.rrcTaps is required for FH sample preselection.");
+end
+overlap = max(0, round(double(numel(waveform.rrcTaps))));
+end
+
+function y = local_band_select_samples_local(x, centerFreqRs, waveform)
+x = x(:);
+if isempty(x)
+    y = x;
+    return;
+end
+if ~(isstruct(waveform) && isfield(waveform, "enable") && waveform.enable)
+    y = x;
+    return;
+end
+if ~(isfield(waveform, "sps") && isfinite(double(waveform.sps)) && double(waveform.sps) > 0)
+    error("waveform.sps must be a positive finite scalar for FH sample preselection.");
+end
+if ~(isfield(waveform, "rolloff") && isfinite(double(waveform.rolloff)) && double(waveform.rolloff) >= 0)
+    error("waveform.rolloff must be a nonnegative finite scalar for FH sample preselection.");
+end
+
+sps = double(waveform.sps);
+centerNorm = double(centerFreqRs) / sps;
+halfWidthNorm = (1 + double(waveform.rolloff)) / (2 * sps);
+if ~(isfinite(centerNorm) && isfinite(halfWidthNorm) && halfWidthNorm > 0)
+    error("FH sample preselection requires finite center frequency and positive channel width.");
+end
+
+n = numel(x);
+f = ((0:n-1).' / n) - 0.5;
+dist = abs(mod(f - centerNorm + 0.5, 1.0) - 0.5);
+mask = double(dist <= halfWidthNorm);
+X = fftshift(fft(x));
+y = ifft(ifftshift(X .* mask));
 end
 
 function value = local_fast_fh_capture_scalar_local(fhCaptureCfg, fieldName)
@@ -472,6 +563,11 @@ timingInfo.timingCompensated = abs(bestOffsetSym) > 1e-12;
 end
 
 function [rComp, compInfo] = local_apply_symbol_block_sync_compensation_local(rSym, syncSymRef, syncCfgUse)
+[rComp, compInfo] = local_apply_symbol_block_sync_compensation_window_local( ...
+    rSym, syncSymRef, syncCfgUse, 1);
+end
+
+function [rComp, compInfo] = local_apply_symbol_block_sync_compensation_window_local(rSym, syncSymRef, syncCfgUse, segStartIdx)
 rSym = rSym(:);
 syncSymRef = syncSymRef(:);
 rComp = rSym;
@@ -484,12 +580,20 @@ compInfo = struct( ...
 if isempty(rSym) || isempty(syncSymRef)
     return;
 end
+if nargin < 4 || isempty(segStartIdx)
+    segStartIdx = 1;
+end
+segStartIdx = max(1, round(double(segStartIdx)));
+if segStartIdx > numel(rSym)
+    return;
+end
 
 if ~isfield(syncCfgUse, "compensateCarrier") || ~logical(syncCfgUse.compensateCarrier)
     return;
 end
 
-pre = rSym(1:min(numel(rSym), numel(syncSymRef)));
+segStopIdx = min(numel(rSym), segStartIdx + numel(syncSymRef) - 1);
+pre = rSym(segStartIdx:segStopIdx);
 syncRefUse = syncSymRef(1:numel(pre));
 if numel(pre) ~= numel(syncRefUse) || isempty(pre) || ~any(abs(pre) > 0)
     return;
@@ -504,11 +608,12 @@ cfoRad = 0;
 phiHat = 0;
 if isfield(syncCfgUse, "estimateCfo") && logical(syncCfgUse.estimateCfo)
     symAxis = (0:numel(pre)-1).';
-    [cfoRad, phiHat] = local_estimate_cfo_phase_local(pre, syncRefUse, symAxis);
+    [cfoRad, phiHatLocal] = local_estimate_cfo_phase_local(pre, syncRefUse, symAxis);
+    phiHat = phiHatLocal - cfoRad * double(segStartIdx - 1);
     rComp = rSym .* exp(-1j * (cfoRad * (0:numel(rSym)-1).' + phiHat));
 end
 
-preComp = rComp(1:numel(syncRefUse));
+preComp = rComp(segStartIdx:segStartIdx + numel(syncRefUse) - 1);
 hHat = sum(preComp .* conj(syncRefUse)) / denom;
 if abs(hHat) <= 1e-12
     return;
@@ -641,6 +746,12 @@ singleCopyRef = syncSymRef(1:copyLenSym);
 stageTotalLenSingle = local_stage_symbol_sequence_length_local(copyLenSym, syncStageSps);
 syncRefStageSingle = local_sync_reference_stage_local(singleCopyRef, waveform, syncStageSps);
 syncCfgStage = local_sync_cfg_for_stage_local(syncCfgUse, syncStageSps);
+syncCfgStageSearch = syncCfgStage;
+copyLenStage = round(double(copyLenSym) * double(syncStageSps));
+if isfield(syncCfgStageSearch, "maxSearchIndex") && isfinite(double(syncCfgStageSearch.maxSearchIndex))
+    syncCfgStageSearch.maxSearchIndex = double(syncCfgStageSearch.maxSearchIndex) + ...
+        double(K - 1) * double(copyLenStage);
+end
 
 sps = max(1, round(double(waveform.sps)));
 nSample = numel(rxSampleRaw);
@@ -649,26 +760,55 @@ nAbs = (0:nSample-1).';
 bestPeak = -inf;
 bestK = 0;
 bestCapture = struct('ok', false);
+bestPacketStart = NaN;
+bestWinnerStartIdxStage = NaN;
+bestWinnerStartIdxFinal = NaN;
+bestWinnerSyncInfoStage = struct();
+bestTimingInfo = struct();
+rxStageByFreq = cell(K, 1);
 
 for k = 1:K
     fk = double(freqSet(k));
+    rxBand = local_band_select_samples_local(rxSampleRaw, fk, waveform);
     phaseRot = exp(-1j * 2 * pi * fk * nAbs / sps);
-    rxRot = rxSampleRaw .* phaseRot;
+    rxRot = rxBand .* phaseRot;
 
     [rxStageK, ~, ~, ~] = local_sync_stage_observation_from_samples_local( ...
         rxRot, waveform, sampleAction, mitigation, syncStageSps);
+    rxStageByFreq{k} = rxStageK;
 
     captureK = adaptive_frontend_bootstrap_capture( ...
-        rxStageK, syncRefStageSingle, stageTotalLenSingle, syncCfgStage, mitigation, modCfg, bootstrapChain);
+        rxStageK, syncRefStageSingle, stageTotalLenSingle, syncCfgStageSearch, mitigation, modCfg, bootstrapChain);
     if ~captureK.ok
         continue;
     end
 
-    peakK = -inf;
-    if isstruct(captureK.syncInfo) && isfield(captureK.syncInfo, "corrPeak") ...
-            && ~isempty(captureK.syncInfo.corrPeak)
-        peakK = double(captureK.syncInfo.corrPeak);
+    fineSearchRadiusStage = 0;
+    if isfield(syncCfgStage, "fineSearchRadius") && ~isempty(syncCfgStage.fineSearchRadius)
+        fineSearchRadiusStage = round(double(syncCfgStage.fineSearchRadius));
     end
+    searchRadiusWinner = max([8 * syncStageSps, round(numel(syncRefStageSingle) / 4), ...
+        fineSearchRadiusStage + 4 * syncStageSps]);
+
+    [winnerStartIdxStageK, winnerSyncInfoStageK] = local_refine_stage_capture_local( ...
+        captureK.rxSync, syncRefStageSingle, captureK.startIdx, syncCfgStage, searchRadiusWinner);
+    if isempty(winnerStartIdxStageK) || ~isfinite(winnerStartIdxStageK)
+        continue;
+    end
+
+    [winnerStartIdxFinalK, timingInfoK] = local_estimate_symbol_timing_from_stage_local( ...
+        captureK.rxSync, winnerStartIdxStageK, singleCopyRef, syncCfgUse, modCfg, syncStageSps);
+    if isempty(winnerStartIdxFinalK) || ~isfinite(winnerStartIdxFinalK)
+        continue;
+    end
+
+    packetStartCandidate = double(winnerStartIdxFinalK) - (double(k) - 1) * double(copyLenStage);
+    if ~isfinite(packetStartCandidate) || packetStartCandidate < 1
+        continue;
+    end
+
+    peakK = local_score_preamble_diversity_packet_start_local( ...
+        packetStartCandidate, rxStageByFreq, syncRefStageSingle, syncCfgUse, modCfg, syncStageSps, copyLenStage);
     if ~(isfinite(peakK))
         continue;
     end
@@ -676,36 +816,16 @@ for k = 1:K
         bestPeak = peakK;
         bestK = k;
         bestCapture = captureK;
+        bestPacketStart = packetStartCandidate;
+        bestWinnerStartIdxStage = winnerStartIdxStageK;
+        bestWinnerStartIdxFinal = winnerStartIdxFinalK;
+        bestWinnerSyncInfoStage = winnerSyncInfoStageK;
+        bestTimingInfo = timingInfoK;
     end
 end
 
-if ~isstruct(bestCapture) || ~(isfield(bestCapture, 'ok') && bestCapture.ok) || bestK < 1
-    return;
-end
-
-copyLenStage = round(double(copyLenSym) * double(syncStageSps));
-
-fineSearchRadiusStage = 0;
-if isfield(syncCfgStage, "fineSearchRadius") && ~isempty(syncCfgStage.fineSearchRadius)
-    fineSearchRadiusStage = round(double(syncCfgStage.fineSearchRadius));
-end
-searchRadiusWinner = max([8 * syncStageSps, round(numel(syncRefStageSingle) / 4), ...
-    fineSearchRadiusStage + 4 * syncStageSps]);
-
-[winnerStartIdxStage, winnerSyncInfoStage] = local_refine_stage_capture_local( ...
-    bestCapture.rxSync, syncRefStageSingle, bestCapture.startIdx, syncCfgStage, searchRadiusWinner);
-if isempty(winnerStartIdxStage) || ~isfinite(winnerStartIdxStage)
-    return;
-end
-
-[winnerStartIdxFinal, timingInfo] = local_estimate_symbol_timing_from_stage_local( ...
-    bestCapture.rxSync, winnerStartIdxStage, singleCopyRef, syncCfgUse, modCfg, syncStageSps);
-if isempty(winnerStartIdxFinal) || ~isfinite(winnerStartIdxFinal)
-    return;
-end
-
-packetStartFinal = double(winnerStartIdxFinal) - (double(bestK) - 1) * double(copyLenStage);
-if ~isfinite(packetStartFinal) || packetStartFinal < 1
+if ~isstruct(bestCapture) || ~(isfield(bestCapture, 'ok') && bestCapture.ok) || bestK < 1 ...
+        || ~(isfinite(bestPacketStart))
     return;
 end
 
@@ -714,26 +834,29 @@ end
 
 captureMock = bestCapture;
 captureMock.ok = true;
-captureMock.startIdx = packetStartFinal;
+captureMock.startIdx = bestPacketStart;
 captureMock.rxSync = rxStageOrig;
 captureMock.reliabilityTrack = rawReliability;
 
 [rFull, reliabilityFull, okFull] = local_extract_symbol_block_local( ...
-    captureMock, rawReliability, rxPrep, relSamplePrep, packetStartFinal, totalLen, ...
+    captureMock, rawReliability, rxPrep, relSamplePrep, bestPacketStart, totalLen, ...
     fhCaptureCfg, syncCfgUse, mitigation, modCfg, waveform, syncStageSps);
 if ~okFull
     return;
 end
 
-[rFull, syncCompInfo] = local_apply_symbol_block_sync_compensation_local(rFull, syncSymRef, syncCfgUse);
-syncInfo = local_merge_stage_sync_info_local(winnerSyncInfoStage, timingInfo, syncCompInfo, ...
-    winnerStartIdxStage, packetStartFinal, syncStageSps);
+winnerCopyStartSym = (bestK - 1) * copyLenSym + 1;
+[rFull, syncCompInfo] = local_apply_symbol_block_sync_compensation_window_local( ...
+    rFull, singleCopyRef, syncCfgUse, winnerCopyStartSym);
+syncInfo = local_merge_stage_sync_info_local(bestWinnerSyncInfoStage, bestTimingInfo, syncCompInfo, ...
+    bestWinnerStartIdxStage, bestPacketStart, syncStageSps);
 syncInfo.preambleDiversityCopyIndex = double(bestK);
 syncInfo.preambleDiversityCorrPeak = double(bestPeak);
 syncInfo.preambleDiversityCopies = double(K);
+syncInfo.preambleDiversityWinnerStartIdx = double(bestWinnerStartIdxFinal);
 
 front.ok = true;
-front.startIdx = packetStartFinal;
+front.startIdx = bestPacketStart;
 front.syncInfo = syncInfo;
 front.rxSync = rxStageOrig;
 front.rFull = rFull;
@@ -743,4 +866,45 @@ front.relSamplePrepForCapture = relSamplePrep;
 front.syncStageSps = double(syncStageSps);
 front.bootstrapPath = string(bestCapture.bootstrapPath);
 front.bootstrapCapture = bestCapture;
+end
+
+function score = local_score_preamble_diversity_packet_start_local( ...
+    packetStartStage, rxStageByFreq, syncRefStageSingle, syncCfgUse, modCfg, syncStageSps, copyLenStage)
+score = -inf;
+if ~(isfinite(packetStartStage) && packetStartStage >= 1)
+    return;
+end
+if isempty(rxStageByFreq)
+    return;
+end
+
+copyLenStage = round(double(copyLenStage));
+if copyLenStage < 1
+    error("Preamble-diversity packet-start scoring requires copyLenStage >= 1.");
+end
+
+scoreNow = 0;
+for k = 1:numel(rxStageByFreq)
+    rxStageK = rxStageByFreq{k};
+    if isempty(rxStageK)
+        return;
+    end
+    startK = double(packetStartStage) + double(k - 1) * double(copyLenStage);
+    [segK, okSeg] = extract_fractional_block(rxStageK, startK, numel(syncRefStageSingle), ...
+        local_symbol_extract_sync_cfg_local(syncCfgUse), modCfg, syncStageSps);
+    if ~okSeg
+        return;
+    end
+
+    if isfield(syncCfgUse, "estimateCfo") && logical(syncCfgUse.estimateCfo)
+        symAxis = (0:numel(syncRefStageSingle)-1).';
+        [wTmp, phiTmp] = local_estimate_cfo_phase_local(segK, syncRefStageSingle, symAxis);
+        segUse = segK .* exp(-1j * (wTmp * symAxis + phiTmp));
+    else
+        segUse = segK;
+    end
+    scoreNow = scoreNow + abs(sum(segUse .* conj(syncRefStageSingle)));
+end
+
+score = double(scoreNow);
 end

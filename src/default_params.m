@@ -123,9 +123,9 @@ p.frame.phyHeaderPilotLength = 0;          % 默认关闭；当前这版pilot补
 p.frame.phyHeaderPilotPolynomial = [1 0 0 1 1]; % x^4 + x + 1
 p.frame.phyHeaderPilotInit = [0 0 0 1];
 p.frame.preambleDiversity = struct();
-p.frame.preambleDiversity.enable = true;   % 长前导频点分集：K 份前导拆到 K 个远离窄带的 FH 频点
+p.frame.preambleDiversity.enable = true;   % 长前导频点分集：K 份前导拆到 K 个拉开间隔的 FH 频点
 p.frame.preambleDiversity.copies = 3;
-p.frame.preambleDiversity.freqSet = [];     % 空=从 p.fh.freqSet 自动挑选 K 个避开 narrowband 的频点
+p.frame.preambleDiversity.freqSet = [];     % 空=从 p.fh.freqSet 自动挑选 K 个拉开间隔的频点
 
 if ~p.packet.enable
     % compact_fec不携带packetDataBytes，关闭分包时无法从PHY头恢复整图受保护长度。
@@ -250,8 +250,8 @@ p.channel.singleTone.randomPhase = true;
 p.channel.narrowband = struct();
 p.channel.narrowband.enable = true;
 p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；enable=false时忽略
-p.channel.narrowband.centerFreqPoints = 0; % 对齐旧基线：约1500 Hz中心频率
-p.channel.narrowband.bandwidthFreqPoints = 1; % 对齐旧基线：约1000 Hz双边带宽
+p.channel.narrowband.centerFreqPoints = 2.5; % 
+p.channel.narrowband.bandwidthFreqPoints = 1; % 1频点带宽，约等于 12.5 kHz
 % 可选：扫频干扰（线性chirp）
 p.channel.sweep = struct();
 p.channel.sweep.enable = false;
