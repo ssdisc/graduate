@@ -254,7 +254,7 @@ p.channel.singleTone.randomPhase = true;
 p.channel.narrowband = struct();
 p.channel.narrowband.enable = true;
 p.channel.narrowband.weight = 1;      % JSR总干扰功率分配权重；enable=false时忽略
-p.channel.narrowband.centerFreqPoints = 2.5; % 
+p.channel.narrowband.centerFreqPoints = 0; % 
 p.channel.narrowband.bandwidthFreqPoints = 1; % 1频点带宽，约等于 12.5 kHz
 % 可选：扫频干扰（线性chirp）
 p.channel.sweep = struct();
