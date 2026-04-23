@@ -351,7 +351,7 @@ fprintf('[SIM] 启用干扰类型: %s\n', activeTxt);
 fprintf('[SIM] 允许方法: %s\n', strjoin(cellstr(allowedMethods), ', '));
 fprintf('[SIM] 抑制方法(%d): %s\n', numel(methods), strjoin(cellstr(methods), ', '));
 if numel(methods) > 1 && ~jsrScanIsGrid
-    fprintf('[SIM] NOTE: impulse/tone/narrowband/sweep all disabled. Most mitigation methods will behave like \"none\".\n');
+    fprintf('[SIM] NOTE: impulse/tone/narrowband/sweep all disabled. Most mitigation methods will behave like ""none"".\n');
 end
 syncEnabledBob = local_sync_enabled_local(bobRxSync);
 syncEnabledEve = false;
@@ -2407,7 +2407,7 @@ compareEq = local_multipath_eq_compare_enabled_local(channelCfg, rxSyncCfg);
 if compareEq
     eqMethods = local_validate_equalizer_compare_methods_local(rxSyncCfg.multipathEq.compareMethods);
 else
-    eqMethods = "configured";
+    eqMethods = "none";
 end
 
 labels = strings(1, 0);
@@ -2416,7 +2416,7 @@ equalizers = strings(1, 0);
 nBase = numel(baseMethods);
 
 for ib = 1:nBase
-    eqForBase = local_equalizer_methods_for_action_compare_local(baseMethods(ib), eqMethods, channelCfg, rxSyncCfg, compareEq);
+    eqForBase = local_equalizer_methods_for_action_compare_local(baseMethods(ib), eqMethods, compareEq);
     for ieq = 1:numel(eqForBase)
         actions(end + 1) = baseMethods(ib); %#ok<AGROW>
         equalizers(end + 1) = eqForBase(ieq); %#ok<AGROW>
@@ -2437,47 +2437,12 @@ plan = struct( ...
     "equalizerCompareMethods", eqMethods);
 end
 
-function eqMethods = local_equalizer_methods_for_action_compare_local(actionName, compareEqMethods, channelCfg, rxSyncCfg, compareEq)
+function eqMethods = local_equalizer_methods_for_action_compare_local(~, compareEqMethods, compareEq)
+if ~logical(compareEq)
+    eqMethods = "none";
+    return;
+end
 eqMethods = compareEqMethods;
-if ~logical(compareEq) || lower(string(actionName)) == "none"
-    return;
-end
-if ~local_channel_is_multipath_only_local(channelCfg)
-    return;
-end
-if ~(isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq))
-    error("rxSync.multipathEq is required for multipath mitigation compare branches.");
-end
-if ~isfield(rxSyncCfg.multipathEq, "mitigationCompareEqualizers") || isempty(rxSyncCfg.multipathEq.mitigationCompareEqualizers)
-    error("rxSync.multipathEq.mitigationCompareEqualizers is required for pure multipath non-baseline actions.");
-end
-eqMethods = local_validate_mitigation_compare_equalizers_local( ...
-    rxSyncCfg.multipathEq.mitigationCompareEqualizers, compareEqMethods);
-end
-
-function tf = local_channel_is_multipath_only_local(channelCfg)
-tf = false;
-if ~(isstruct(channelCfg) && isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
-        && isfield(channelCfg.multipath, "enable") && logical(channelCfg.multipath.enable))
-    return;
-end
-tf = ~local_channel_has_enabled_jammer_local(channelCfg);
-end
-
-function methods = local_validate_mitigation_compare_equalizers_local(rawMethods, compareEqMethods)
-methods = lower(string(rawMethods(:).'));
-if isempty(methods) || any(strlength(methods) == 0)
-    error("rxSync.multipathEq.mitigationCompareEqualizers must be a non-empty string vector.");
-end
-compareEqMethods = lower(string(compareEqMethods(:).'));
-invalid = setdiff(methods, compareEqMethods);
-if ~isempty(invalid)
-    error("mitigationCompareEqualizers contains methods not present in compareMethods: %s.", ...
-        strjoin(cellstr(invalid), ", "));
-end
-if numel(unique(methods, "stable")) ~= numel(methods)
-    error("rxSync.multipathEq.mitigationCompareEqualizers must not contain duplicates.");
-end
 end
 
 function tf = local_multipath_eq_compare_enabled_local(channelCfg, rxSyncCfg)
@@ -2489,13 +2454,11 @@ end
 if ~isstruct(rxSyncCfg) || ~isfield(rxSyncCfg, "multipathEq") || ~isstruct(rxSyncCfg.multipathEq)
     error("rxSync.multipathEq is required when channel.multipath.enable=true.");
 end
-if ~isfield(rxSyncCfg.multipathEq, "compareEnable") || isempty(rxSyncCfg.multipathEq.compareEnable)
-    error("rxSync.multipathEq.compareEnable is required when channel.multipath.enable=true.");
+if ~isfield(rxSyncCfg.multipathEq, "compareMethods") || isempty(rxSyncCfg.multipathEq.compareMethods)
+    error("rxSync.multipathEq.compareMethods is required when channel.multipath.enable=true.");
 end
-tf = logical(rxSyncCfg.multipathEq.compareEnable);
-if ~isscalar(tf)
-    error("rxSync.multipathEq.compareEnable must be a logical scalar.");
-end
+local_validate_equalizer_compare_methods_local(rxSyncCfg.multipathEq.compareMethods);
+tf = true;
 end
 
 function methods = local_validate_equalizer_compare_methods_local(rawMethods)
@@ -2516,18 +2479,16 @@ end
 function rxSyncOut = local_rxsync_for_equalizer_method_local(rxSyncIn, equalizerMethod)
 rxSyncOut = rxSyncIn;
 equalizerMethod = lower(string(equalizerMethod));
-if equalizerMethod == "configured"
-    return;
-end
 if ~isstruct(rxSyncOut) || ~isfield(rxSyncOut, "multipathEq") || ~isstruct(rxSyncOut.multipathEq)
     error("rxSync.multipathEq is required for equalizer method %s.", equalizerMethod);
 end
 switch equalizerMethod
     case "none"
         rxSyncOut.multipathEq.enable = false;
+        rxSyncOut.multipathEq.compareMethods = "none";
     case {"mmse", "zf", "ml_ridge", "ml_mlp", "sc_fde_mmse"}
         rxSyncOut.multipathEq.enable = true;
-        rxSyncOut.multipathEq.method = equalizerMethod;
+        rxSyncOut.multipathEq.compareMethods = equalizerMethod;
     otherwise
         error("Unsupported equalizer method: %s.", equalizerMethod);
 end
@@ -2565,9 +2526,11 @@ end
 
 function eq = local_design_multipath_equalizer_local(txPreamble, rxPreamble, eqCfg, N0, chLenSymbols, freqBySymbol)
 eqCfgUse = eqCfg;
-requestedMethod = lower(string(eqCfgUse.method));
+requestedMethod = local_configured_equalizer_method_from_compare_methods_local(eqCfgUse);
 if requestedMethod == "sc_fde_mmse"
     eqCfgUse.method = "mmse";
+else
+    eqCfgUse.method = requestedMethod;
 end
 eqCfgUse.frequencyOffsets = local_equalizer_frequency_set_local(freqBySymbol);
 [eq, ok] = multipath_equalizer_from_preamble(txPreamble, rxPreamble, eqCfgUse, N0, chLenSymbols);
@@ -2587,32 +2550,29 @@ if numel(rFullRaw) ~= numel(rFullConfigured)
 end
 
 requestedMethods = local_header_decode_equalizer_methods_local(rxSyncCfg);
-configuredMethod = local_configured_multipath_equalizer_method_local(rxSyncCfg);
 candidates = repmat(struct("method", "", "rFull", complex(zeros(0, 1))), 0, 1);
 actualMethods = strings(1, 0);
 
 for requestedMethod = requestedMethods
-    if requestedMethod == "configured"
-        actualMethod = configuredMethod;
-    else
-        actualMethod = requestedMethod;
-    end
+    actualMethod = requestedMethod;
     if any(actualMethods == actualMethod)
         continue;
     end
 
     if actualMethod == "none"
         rFullNow = rFullRaw;
-    elseif actualMethod == configuredMethod
-        rFullNow = rFullConfigured;
     else
-        eqCfgNow = rxSyncCfg.multipathEq;
-        eqCfgNow.method = actualMethod;
-        preambleForEqNow = local_preamble_for_equalizer_estimation_local( ...
-            rFullRaw(1:numel(txPreamble)), symbolAction, mitigation);
-        eqNow = local_design_multipath_equalizer_local( ...
-            txPreamble, preambleForEqNow, eqCfgNow, N0, chLenSymbols, freqBySymbol);
-        rFullNow = local_apply_frequency_aware_equalizer_block_local(rFullRaw, eqNow, freqBySymbol);
+        if actualMethod == local_configured_equalizer_method_from_compare_methods_local(rxSyncCfg.multipathEq)
+            rFullNow = rFullConfigured;
+        else
+            eqCfgNow = rxSyncCfg.multipathEq;
+            eqCfgNow.compareMethods = actualMethod;
+            preambleForEqNow = local_preamble_for_equalizer_estimation_local( ...
+                rFullRaw(1:numel(txPreamble)), symbolAction, mitigation);
+            eqNow = local_design_multipath_equalizer_local( ...
+                txPreamble, preambleForEqNow, eqCfgNow, N0, chLenSymbols, freqBySymbol);
+            rFullNow = local_apply_frequency_aware_equalizer_block_local(rFullRaw, eqNow, freqBySymbol);
+        end
     end
 
     candidates(end + 1) = struct("method", actualMethod, "rFull", rFullNow); %#ok<AGROW>
@@ -2632,36 +2592,30 @@ function methods = local_header_decode_equalizer_methods_local(rxSyncCfg)
 if ~(isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq))
     error("rxSync.multipathEq is required for PHY-header equalizer diversity.");
 end
-if ~(isfield(rxSyncCfg.multipathEq, "headerDecodeMethods") && ~isempty(rxSyncCfg.multipathEq.headerDecodeMethods))
-    error("rxSync.multipathEq.headerDecodeMethods is required when multipath equalization is enabled.");
+if ~(isfield(rxSyncCfg.multipathEq, "compareMethods") && ~isempty(rxSyncCfg.multipathEq.compareMethods))
+    error("rxSync.multipathEq.compareMethods is required when multipath equalization is enabled.");
 end
-
-methods = lower(string(rxSyncCfg.multipathEq.headerDecodeMethods(:).'));
-if isempty(methods) || any(strlength(methods) == 0)
-    error("rxSync.multipathEq.headerDecodeMethods must be a non-empty string vector.");
-end
-validMethods = ["configured" "none" "mmse" "zf"];
+methods = lower(string(rxSyncCfg.multipathEq.compareMethods(:).'));
+validMethods = ["none" "mmse" "zf" "ml_ridge" "ml_mlp" "sc_fde_mmse"];
 invalid = setdiff(methods, validMethods);
 if ~isempty(invalid)
-    error("Unsupported rxSync.multipathEq.headerDecodeMethods entries: %s.", strjoin(cellstr(invalid), ", "));
+    error("Unsupported rxSync.multipathEq.compareMethods entries for PHY-header decode: %s.", strjoin(cellstr(invalid), ", "));
 end
 if numel(unique(methods, "stable")) ~= numel(methods)
-    error("rxSync.multipathEq.headerDecodeMethods must not contain duplicates.");
+    error("rxSync.multipathEq.compareMethods must not contain duplicates.");
 end
 end
 
-function method = local_configured_multipath_equalizer_method_local(rxSyncCfg)
-if ~(isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq))
-    error("rxSync.multipathEq is required.");
+function method = local_configured_equalizer_method_from_compare_methods_local(eqCfg)
+if ~(isstruct(eqCfg) && isfield(eqCfg, "compareMethods") && ~isempty(eqCfg.compareMethods))
+    error("rxSync.multipathEq.compareMethods is required.");
 end
-if ~(isfield(rxSyncCfg.multipathEq, "method") && strlength(string(rxSyncCfg.multipathEq.method)) > 0)
-    error("rxSync.multipathEq.method is required.");
+methods = local_validate_equalizer_compare_methods_local(eqCfg.compareMethods);
+configuredIdx = find(methods ~= "none", 1, "first");
+if isempty(configuredIdx)
+    error("rxSync.multipathEq.compareMethods must contain at least one non-""none"" equalizer method.");
 end
-method = lower(string(rxSyncCfg.multipathEq.method));
-validMethods = ["mmse" "zf" "ml_ridge" "ml_mlp" "sc_fde_mmse"];
-if ~any(method == validMethods)
-    error("Unsupported configured multipath equalizer method for PHY-header decode: %s.", char(method));
-end
+method = methods(configuredIdx);
 end
 
 function freqSet = local_equalizer_frequency_set_local(freqBySymbol)
@@ -3200,7 +3154,7 @@ end
 
 function [dataOut, relOut] = local_apply_sc_fde_mmse_payload_diversity_local(branchSymbols, branchReliability, fallbackSymbols, fallbackReliability, rxState, rxSyncCfg)
 if ~local_sc_fde_equalizer_method_local(rxSyncCfg)
-    error("SC-FDE diversity MMSE combining requires rxSync.multipathEq.method=""sc_fde_mmse"".");
+    error("SC-FDE diversity MMSE combining requires rxSync.multipathEq.compareMethods to include ""sc_fde_mmse"".");
 end
 divState = local_require_sc_fde_diversity_state_local(rxState);
 plan = rxState.scFdePlan;
@@ -3732,10 +3686,18 @@ end
 end
 
 function tf = local_sc_fde_equalizer_method_local(rxSyncCfg)
-tf = isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq) ...
-    && isfield(rxSyncCfg.multipathEq, "enable") && logical(rxSyncCfg.multipathEq.enable) ...
-    && isfield(rxSyncCfg.multipathEq, "method") ...
-    && lower(string(rxSyncCfg.multipathEq.method)) == "sc_fde_mmse";
+tf = false;
+if ~(isstruct(rxSyncCfg) && isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq))
+    return;
+end
+if ~(isfield(rxSyncCfg.multipathEq, "enable") && logical(rxSyncCfg.multipathEq.enable))
+    return;
+end
+if ~(isfield(rxSyncCfg.multipathEq, "compareMethods") && ~isempty(rxSyncCfg.multipathEq.compareMethods))
+    return;
+end
+methods = local_validate_equalizer_compare_methods_local(rxSyncCfg.multipathEq.compareMethods);
+tf = any(methods == "sc_fde_mmse");
 end
 
 function [rOut, reliability] = local_apply_data_action_local(rIn, actionName, mitigation, hopInfoUsed, fhEnabled, modCfg, pBlend)

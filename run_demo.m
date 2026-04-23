@@ -223,10 +223,6 @@ if ~(isfield(p, "rxSync") && isstruct(p.rxSync) ...
     return;
 end
 eqCfg = p.rxSync.multipathEq;
-if isfield(eqCfg, "method") && lower(string(eqCfg.method)) == "ml_mlp"
-    tf = true;
-    return;
-end
 if isfield(eqCfg, "compareMethods") && ~isempty(eqCfg.compareMethods)
     tf = any(lower(string(eqCfg.compareMethods(:).')) == "ml_mlp");
 end

@@ -178,12 +178,7 @@ if isfield(pEval, "covert") && isstruct(pEval.covert)
 end
 if isfield(pEval, "rxSync") && isstruct(pEval.rxSync) ...
         && isfield(pEval.rxSync, "multipathEq") && isstruct(pEval.rxSync.multipathEq)
-    if isfield(pEval.rxSync.multipathEq, "compareEnable")
-        pEval.rxSync.multipathEq.compareEnable = false;
-    end
-    if isfield(pEval.rxSync.multipathEq, "compareMethods")
-        pEval.rxSync.multipathEq.compareMethods = strings(1, 0);
-    end
+    pEval.rxSync.multipathEq.compareMethods = "none";
 end
 pEval = local_force_pure_impulse_eval_channel(pEval);
 pEval = local_apply_method_model(pEval, methodName, model);
