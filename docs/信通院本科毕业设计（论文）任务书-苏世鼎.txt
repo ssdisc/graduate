@@ -1,0 +1,170 @@
+
+
+===== PAGE 1 =====
+北 京 邮 电 大 学
+本科毕业设计（论文）任务书
+学院 信息与 通信工程学院 专业 通信工 程
+学生姓名 苏世鼎 学号 202 2210474 班级 202 2211112 
+指导教师姓名 杨鸿文 所 在单位 信息与 通信工程学院 职称 教授
+设计(论文)题目 
+（中文）基于跳频与抗干扰调制的隐蔽图像通信系统设计与实现
+（英文）Design and Implementation of a Covert Image Communication System Based on 
+Frequency Hopping and Anti-Jamming Modulation 
+题目类型 工程实 践类☑ 研究设计类□   理论分析类□   文献综述类□   其他□ 
+题目来源
+题目是
+否来源于科研项目 是
+□ 否☑
+科研项目名称：
+科研项目负责人：
+主要任务及目标：（任务为3-4 项，标明任务及目标对应的毕业要求指标点） 
+任务 1：调研无线隐蔽通信、跳频通信（FHSS）及抗干扰调制技术的国内外研究现状，学习掌握
+图像信号处理与加密传输的基本原理；
+支撑指
+标点：☑3.1；□3.3；□4.1；□4.3；☑5.1；□6.2；□10.1；☑10.2；□10.3；☑12.1
+任务 2：设计基于跳频与抗干扰调制的图像通信系统整体方案，包括信源编码、隐蔽嵌入策略、
+跳频序列生成及调制解调模块的设计；
+支撑指
+标点：☑3.1；☑3.3；☑4.1；□4.3；□5.1；☑6.2；□10.1；□10.2；□10.3；□12.1
+任务 3：搭建图像通信系统仿真平台，实现跳频同步、信道抗干扰传输及图像的隐蔽收发功能，
+并进行系统调试；
+支撑指
+标点：□3.1；☑3.3；☑4.1；□4.3；☑5.1；□6.2；□10.1；□10.2；□10.3；□12.1
+任务 4：对所提方案在不同信噪比和干扰环境下的性能进行仿真验证，分析误码率（BER）、峰
+值信噪比（PSNR）及抗干扰性能，撰写毕业设计论文； 
+支撑指标点：□3.1；□3.3；□4.1；☑4.3；□5.1；□6.2；☑10.1；□10.2；☑10.3；□12.1
+主要内容：（说明主要内容对对应的毕业要求指标点如何进行支撑）
+内容一：调研无线隐蔽通信、跳频通信及抗干扰调制技术的国内外研究现状，学习掌握图像信号
+处理与加密传输的基本原理
+支撑毕
+业要求指标点：
+3.1 通
+过查阅文献了解跳频通信与隐蔽通信技术的发展现状与趋势，在方案设计中体现对抗干扰
+与隐蔽性需求的创新意识。
+5.1
+ 熟练使用文献检索工具，获取关于跳频抗干扰与图像隐蔽传输领域的最新研究成果，作为系
+统设计的理论基础。
+10.2
+ 在文献阅读环节，充分借助外语能力学习外文资料，了解国际前沿技术，增强跨文化交流能
+力。
+12.1 认识到通信对抗技术不断发展的必要性，具备自主学习跳频算法与图像处理新知识的意识。 
+
+===== PAGE 2 =====
+内容二：设计基于跳频与抗干扰调制的图像通信系统整体方案，包括信源编码、隐蔽嵌入策略、
+跳频序列生成及调制解调模块的设计
+支撑毕业要求指标点：
+3.1 在系统设计环节中，考虑无线环境下的安全性与隐私保护需求，综合考虑法律与安全因素，
+设计合规的隐蔽通信方案。
+3.3 综合考虑工程因素（如带宽限制、复杂度），设计合理的跳频图案生成算法与抗干扰调制
+（如BPSK/QPSK 或扩频）方案，给出系统整体架构。 
+4.1 明确图像在噪声与干扰信道下传输的研究目标，根据抗干扰与隐蔽性指标，确定系统设计的
+关键参数。
+6.2 理解并评价本系统所涉及的隐蔽通信技术可能对信息安全、社会伦理及法律法规带来的影
+响。
+内容三：搭建图像通信系统仿真平台，实现跳频同步、信道抗干扰传输及图像的隐蔽收发功能，
+并进行系统调试
+支撑毕业要求指标点：
+3.3 利用 Matlab/Simulink 或Python 等开发工具，将设计的模块（跳频器、调制器、图像编解码
+器）进行集成，实现系统功能的整体开发。
+4.1 根据设计方案，构建包含加性高斯白噪声（AWGN）及人为干扰的信道模型，完成实验方案
+的执行。
+5.1 能够合理选择并熟练使用仿真开发工具，对复杂通信环境下的图像传输过程进行模拟与预
+测。
+内容四：对所提方案在不同信噪比和干扰环境下的性能进行仿真验证，分析误码率（BER）、峰
+值信噪比（PSNR）及抗干扰性能，撰写毕业设计论文 
+支撑毕业要求指标点：
+4.3 在实验过程中准确记录不同干扰强度下的误码率与图像恢复质量数据，并对仿真结果进行正
+确分析与解释，得出有效结论。
+10.1 
+具有良好的书面表达能力，能够逻辑清晰地撰写毕业设计论文，与导师及同行进行有效的技
+术沟通。
+10.3 
+就毕设中的工程问题撰写结题报告，并在答辩环节进行清晰的陈述与交流。 
+主要参考文献：（对选题背景意义的支撑和已有研究成果方案的支撑等主要参考文献，不少于10
+篇，应含有近五年相关文献）
+[1
+] ALHARBI F, 2019. Steganography Performance over AWGN Channel[J/OL]. International Journal
+of Advanced Computer Science and Applications, 10(8)[2025-12-05].
+ht
+tp://thesai.org/Publications/ViewPaper?V olume=10&Issue=8&Code=IJACSA&SerialNo=37.
+D
+OI:10.14569/IJACSA.2019.0100837.
+[2] BESSER K L, JORSWIECK E A, COON J P, 2024. An Efficient Frequency Diversity Scheme for
+Ultra-Reliable Communications in Two-Path Fading Channels[J/OL]. Journal of Communications
+and Networks, 26(4): 409-423. DOI:10.23919/JCN.2024.000031.
+
+===== PAGE 3 =====
+[3] CAHY ADI N, 2023. BER Performance Analysis Over AWGN Channeling For GFSK Modulation To
+Transmitting Unstructured Data[J/OL]. Journal of Informatics and Communication Technology
+(JICT), 4(2): 30-37. DOI:10.52661/j_ict.v4i2.139.
+[4] HASSAN KAITTAN K, MOHAMMED S J, 2021. Implementing and designing a secure information
+s
+ystem based on the DSSS gold sequence using MATLAB[J/OL]. Bulletin of Electrical Engineering
+and Informatics, 10(3)[2025-12-05]. https://beei.org/index.php/EEI/article/view/2446.
+D
+OI:10.11591/eei.v10i3.2446.
+[5] HUANG T, LIU Y , LIU X, et al., 2025. A New Improved Multi-Sequence Frequency-Hopping
+C
+ommunication Anti-Jamming System[J/OL]. Electronics, 14(3): 523.
+DOI:10.3390/electronics14030523.
+[6] MOHAMMED S A, 2020. Securing Physical Layer for FHSS Communication System Using Code
+andPhase Hopping Techniques in CDMA, System Design and Implementation[J/OL]. Journal of
+Engineering, 26(7): 190-205. DOI:10.31026/j.eng.2020.07.13.
+[7] SHI Y , LU X, AN K, et al., 2024. Efficient Index-Modulation-Based FHSS: A Unified Anti-Jamming
+Perspective[J/OL]. IEEE Internet of Things Journal, 11(2): 3458-347
+2.
+D
+OI:10.1109/JIOT.2023.3296605.
+[8] WALUYO C B, 2018. BER Performance Analysis on AWGN Channel and Fading Channel by Using
+Diversity Method[J/OL]. Conference SENA TIK STT Adisutjipto Yogyakarta, 4[2025-12-05].
+ht
+tp://senatik.stta.ac.id/index.php/senatik/article/view/213. DOI:10.28989/senatik.v4i0.213.
+[9] XU Z J, LU W D, GONG Y , et al., 2020. A Covert Communication System Using Non-zero Mean
+Normal Distributions[J/OL]. Radioengineering, 29(3): 580-588. DOI:10.13164/re.2020.0580.
+[10] ZHOU L, WU H, 2024. New Families of Frequency-Hopping Sequence Sets with a Low-Hit-
+Zone[J/OL]. Entropy, 26(11): 948. DOI:10.3390/e26110948.
+[11] ZHOU W ANG, BOVIK A C, SHEIKH H R, et al., 2004. Image quality assessment: from error
+visibility to structural similarity[J/OL]. IEEE Transactions on Image Processing, 13(4): 600-612.
+D
+OI:10.1109/TIP.2003.819861.
+[12] ZHOU Y , BAO L, CHEN C L P, 2013. Image encryption using a new parametric switching chaotic
+system[J/OL]. Signal Processing, 93(11): 3039-3052. DOI:10.1016/j.sigpro.2013.04.021.
+进度安排：（参照毕设工作安排，起始时间为秋季学期第13 周，每2 周为一个节点） 
+第一阶段（2025.12.1-2025.12.14） 
+明确课题目标，查阅跳频通信与图像隐蔽传输相关资料，确定系统技术路线，撰写开题报告。
+第二阶
+段（2025.12.15-2025.12.28） 
+搭建通信系统基础仿真框架，完成跳频序列生成与基础调制解调模块的编写。
+第三阶
+段（2025.12.29-2026.1.11） 
+假期自主学习，细化图像信号的预处理与隐蔽嵌入算法设计。
+第四阶
+段（2026.1.12-2026.1.25） 
+假期自主学习，完善系统信道模型，加入噪声与干扰模块，实现收发端同步。
+第五阶
+段（2026.3.2-2026.3.15） 
+联调系统各模块，实现图像信号在抗干扰信道下的完整传输链路。
+第六阶
+段（2026.3.16-2026.3.29）
+
+===== PAGE 4 =====
+ 
+                                 
+进行中期检查，整理阶段性仿真数据，根据反馈优化系统算法。 
+第七阶段（2026.3.30-2026.4.12） 
+对不同干扰场景进行大量仿真测试，记录误码率与图像质量数据。 
+第八阶段（2026.4.13-2026.4.26） 
+深入分析仿真结果，对比不同调制方式的性能差异，开始撰写论文初稿。 
+第九阶段（2026.4.27-2026.5.10） 
+完善论文内容，进行查重与格式修改。 
+第十阶段（2026.5.11-2026.5.24） 
+提交论文终稿，准备答辩PPT 与演示材料。 
+第十一阶段（2026.5.25-2026.5.31） 
+毕设答辩，并根据意见进行最终修改。 
+第十二阶段（2026.6.1-2026.6.7） 
+提交所有归档材料。 
+指导教师签字 
+ 
+日期 2025 年 11 月 26 日 
+ 
+ 

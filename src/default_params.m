@@ -1,5 +1,5 @@
 function p = default_params(opts)
-%DEFAULT_PARAMS  赛道一基准链路的默认参数集（仿真控制置前，其余按链路顺序）。
+%DEFAULT_PARAMS  基准链路的默认参数集（仿真控制置前，其余按链路顺序）。
 
 arguments
     opts.strictModelLoad (1,1) logical = true
@@ -143,7 +143,7 @@ p.scramble.enable = true;
 p.scramble.pnPolynomial = [1 0 0 0 0 0 0 0 0 1 0 1]; % x^11 + x^2 + 1
 p.scramble.pnInit = [0 0 0 0 0 0 0 0 0 0 1];         % 非零初始值
 
-% 6) 信道编码（payload默认卷积码，可切换LDPC；PHY头/会话帧仍使用卷积码）
+% 6) 信道编码（payload默认LDPC；PHY头/会话帧仍使用卷积码）
 p.fec = struct();
 p.fec.kind = "ldpc";            % "conv" | "ldpc"
 p.fec.trellis = poly2trellis(7, [171 133]);
