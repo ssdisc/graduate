@@ -24,6 +24,10 @@ arguments
     opts.maxPositiveRate (1,1) double {mustBePositive} = 0.35
     opts.thresholdPolicy (1,1) string = "min_pe_under_pfa"
     opts.thresholdPfaSlack (1,1) double {mustBeNonnegative} = 0
+    opts.thresholdMaxCandidates (1,1) double {mustBeInteger, mustBePositive} = 257
+    opts.thresholdEvalFramesPerPoint (1,1) double {mustBeInteger, mustBePositive} = 2
+    opts.thresholdEvalEbN0dBList double = [6 8 10]
+    opts.thresholdEvalJsrDbList double = 0
     opts.impulseEnableProbability (1,1) double = 1.0
     opts.impulseProbRange (1,2) double = [NaN NaN]
     opts.impulseToBgRatioRange (1,2) double = [NaN NaN]
@@ -214,20 +218,26 @@ trainLosses = trainLosses(1:epochsCompleted);
 valLosses = valLosses(1:epochsCompleted);
 
 pVal = local_lr_predict(XnVal, w, b);
-[threshold, thresholdMetrics, thresholdSelection] = ml_select_threshold_for_pfa(pVal, yVal, opts.pfaTarget, ...
-    "policy", opts.thresholdPolicy, "pfaSlack", opts.thresholdPfaSlack);
-pTest = local_lr_predict(XnTest, w, b);
-
-valMetrics = ml_binary_metrics(pVal, yVal, threshold);
-testMetrics = ml_binary_metrics(pTest, yTest, threshold);
-
 model = ml_impulse_lr_model();
 model.trained = true;
 model.mu = mu(:);
 model.sigma = sigma(:);
 model.w = w(:);
 model.b = b;
+model.threshold = 0.5;
+[threshold, thresholdMetrics, thresholdSelection] = ml_select_impulse_threshold(p, model, "ml_blanking", pVal, yVal, opts.pfaTarget, ...
+    "policy", opts.thresholdPolicy, ...
+    "pfaSlack", opts.thresholdPfaSlack, ...
+    "maxCandidates", opts.thresholdMaxCandidates, ...
+    "evalFramesPerPoint", opts.thresholdEvalFramesPerPoint, ...
+    "evalEbN0dBList", opts.thresholdEvalEbN0dBList, ...
+    "evalJsrDbList", opts.thresholdEvalJsrDbList, ...
+    "verbose", opts.verbose);
 model.threshold = threshold;
+pTest = local_lr_predict(XnTest, w, b);
+
+valMetrics = ml_binary_metrics(pVal, yVal, threshold);
+testMetrics = ml_binary_metrics(pTest, yTest, threshold);
 
 report = struct();
 report.domain = dataset.domain;

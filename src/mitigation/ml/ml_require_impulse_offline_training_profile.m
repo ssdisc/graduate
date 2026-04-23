@@ -1,5 +1,5 @@
 function profile = ml_require_impulse_offline_training_profile(p)
-%ML_REQUIRE_IMPULSE_OFFLINE_TRAINING_PROFILE  Validate the offline impulse-training profile.
+%ML_REQUIRE_IMPULSE_OFFLINE_TRAINING_PROFILE  Resolve and validate the offline impulse-training profile.
 
 arguments
     p (1,1) struct
@@ -12,18 +12,68 @@ if ~(isfield(p, "mitigation") && isstruct(p.mitigation) ...
         "Impulse offline training requires p.mitigation.offlineTraining.impulse.");
 end
 
-profileIn = p.mitigation.offlineTraining.impulse;
+profileSet = p.mitigation.offlineTraining.impulse;
+activeProfileName = local_required_string(profileSet, "activeProfileName");
+if ~(isfield(profileSet, "profiles") && isstruct(profileSet.profiles))
+    error("ml_require_impulse_offline_training_profile:MissingProfiles", ...
+        "p.mitigation.offlineTraining.impulse.profiles is required.");
+end
+
+availableProfileKeys = string(fieldnames(profileSet.profiles)).';
+if isempty(availableProfileKeys)
+    error("ml_require_impulse_offline_training_profile:EmptyProfiles", ...
+        "p.mitigation.offlineTraining.impulse.profiles must not be empty.");
+end
+
+resolvedProfileKey = local_resolve_profile_key(p, activeProfileName, availableProfileKeys);
+if ~isfield(profileSet.profiles, resolvedProfileKey)
+    error("ml_require_impulse_offline_training_profile:UnknownResolvedProfile", ...
+        "Resolved profile key %s is not defined in p.mitigation.offlineTraining.impulse.profiles.", ...
+        char(resolvedProfileKey));
+end
+
+profileIn = profileSet.profiles.(resolvedProfileKey);
 profile = struct();
+profile.activeProfileName = activeProfileName;
+profile.profileKey = local_required_string(profileIn, "profileKey");
+if profile.profileKey ~= resolvedProfileKey
+    error("ml_require_impulse_offline_training_profile:ProfileKeyMismatch", ...
+        "Resolved profile key %s does not match profile.profileKey %s.", ...
+        char(resolvedProfileKey), char(profile.profileKey));
+end
 profile.profileName = local_required_string(profileIn, "profileName");
 profile.scenario = local_required_scenario(profileIn);
 profile.logisticRegression = local_required_trainer(profileIn, "logisticRegression", true);
 profile.deepLearning = local_required_trainer(profileIn, "deepLearning", false);
 end
 
+function resolvedProfileKey = local_resolve_profile_key(p, activeProfileName, availableProfileKeys)
+activeProfileName = strip(string(activeProfileName));
+availableProfileKeys = string(availableProfileKeys(:).');
+if activeProfileName == "auto"
+    [~, activeTypes] = resolve_mitigation_methods(p.mitigation, p.channel);
+    activeTypes = lower(string(activeTypes(:).'));
+    nonImpulseTypes = setdiff(activeTypes, "impulse", "stable");
+    if isempty(nonImpulseTypes)
+        resolvedProfileKey = "pure_impulse";
+    else
+        resolvedProfileKey = "mixed";
+    end
+else
+    resolvedProfileKey = activeProfileName;
+end
+
+if ~any(availableProfileKeys == resolvedProfileKey)
+    error("ml_require_impulse_offline_training_profile:UnknownProfileKey", ...
+        "Impulse offline profile %s is not one of the configured profiles: %s.", ...
+        char(resolvedProfileKey), strjoin(cellstr(availableProfileKeys), ", "));
+end
+end
+
 function scenario = local_required_scenario(profileIn)
 if ~(isfield(profileIn, "scenario") && isstruct(profileIn.scenario))
     error("ml_require_impulse_offline_training_profile:MissingScenario", ...
-        "p.mitigation.offlineTraining.impulse.scenario is required.");
+        "Impulse offline profile scenario is required.");
 end
 
 cfg = profileIn.scenario;
@@ -31,6 +81,10 @@ scenario = struct( ...
     "ebN0dBRange", local_required_range(cfg, "ebN0dBRange", -inf, inf, false), ...
     "labelScoreThreshold", local_required_positive(cfg, "labelScoreThreshold"), ...
     "thresholdPolicy", local_required_string(cfg, "thresholdPolicy"), ...
+    "thresholdMaxCandidates", local_required_positive_integer(cfg, "thresholdMaxCandidates"), ...
+    "thresholdEvalFramesPerPoint", local_required_positive_integer(cfg, "thresholdEvalFramesPerPoint"), ...
+    "thresholdEvalEbN0dBList", local_required_numeric_vector(cfg, "thresholdEvalEbN0dBList"), ...
+    "thresholdEvalJsrDbList", local_required_numeric_vector(cfg, "thresholdEvalJsrDbList"), ...
     "minPositiveRate", local_required_range(cfg, "minPositiveRate", 0, 1, true), ...
     "maxPositiveRate", local_required_range(cfg, "maxPositiveRate", 0, 1, true), ...
     "impulseEnableProbability", local_required_range(cfg, "impulseEnableProbability", 0, 1, true), ...
@@ -68,15 +122,15 @@ end
 function trainer = local_required_trainer(profileIn, fieldName, requireL2)
 if ~(isfield(profileIn, fieldName) && isstruct(profileIn.(fieldName)))
     error("ml_require_impulse_offline_training_profile:MissingTrainer", ...
-        "p.mitigation.offlineTraining.impulse.%s is required.", fieldName);
+        "Impulse offline profile %s config is required.", fieldName);
 end
 
 cfg = profileIn.(fieldName);
 trainer = struct( ...
-    "nBlocks", local_required_integer(cfg, "nBlocks"), ...
-    "blockLen", local_required_integer(cfg, "blockLen"), ...
-    "epochs", local_required_integer(cfg, "epochs"), ...
-    "batchSize", local_required_integer(cfg, "batchSize"), ...
+    "nBlocks", local_required_positive_integer(cfg, "nBlocks"), ...
+    "blockLen", local_required_positive_integer(cfg, "blockLen"), ...
+    "epochs", local_required_positive_integer(cfg, "epochs"), ...
+    "batchSize", local_required_positive_integer(cfg, "batchSize"), ...
     "lr", local_required_positive(cfg, "lr"));
 if requireL2
     trainer.l2 = local_required_nonnegative(cfg, "l2");
@@ -124,6 +178,18 @@ if nonnegativeOnly && value(1) < 0
 end
 end
 
+function value = local_required_numeric_vector(s, fieldName)
+if ~(isfield(s, fieldName) && ~isempty(s.(fieldName)))
+    error("ml_require_impulse_offline_training_profile:MissingVectorField", ...
+        "%s is required.", fieldName);
+end
+value = double(s.(fieldName)(:)).';
+if isempty(value) || any(~isfinite(value))
+    error("ml_require_impulse_offline_training_profile:InvalidVectorField", ...
+        "%s must be a non-empty finite numeric vector.", fieldName);
+end
+end
+
 function value = local_required_integer(s, fieldName)
 if ~(isfield(s, fieldName) && ~isempty(s.(fieldName)))
     error("ml_require_impulse_offline_training_profile:MissingIntegerField", ...
@@ -133,6 +199,14 @@ value = double(s.(fieldName));
 if ~(isscalar(value) && isfinite(value) && value >= 0 && round(value) == value)
     error("ml_require_impulse_offline_training_profile:InvalidIntegerField", ...
         "%s must be a non-negative integer scalar.", fieldName);
+end
+end
+
+function value = local_required_positive_integer(s, fieldName)
+value = local_required_integer(s, fieldName);
+if value < 1
+    error("ml_require_impulse_offline_training_profile:InvalidPositiveIntegerField", ...
+        "%s must be a positive integer scalar.", fieldName);
 end
 end
 

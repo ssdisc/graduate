@@ -23,6 +23,10 @@ arguments
     opts.maxPositiveRate (1,1) double {mustBePositive} = 0.35
     opts.thresholdPolicy (1,1) string = "min_pe_under_pfa"
     opts.thresholdPfaSlack (1,1) double {mustBeNonnegative} = 0
+    opts.thresholdMaxCandidates (1,1) double {mustBeInteger, mustBePositive} = 257
+    opts.thresholdEvalFramesPerPoint (1,1) double {mustBeInteger, mustBePositive} = 2
+    opts.thresholdEvalEbN0dBList double = [6 8 10]
+    opts.thresholdEvalJsrDbList double = 0
     opts.impulseEnableProbability (1,1) double = 1.0
     opts.impulseProbRange (1,2) double = [NaN NaN]
     opts.impulseToBgRatioRange (1,2) double = [NaN NaN]
@@ -249,8 +253,14 @@ valLosses = valLosses(1:epochsCompleted);
 model.net = bestNet;
 
 [valScores, valTruth] = ml_collect_detector_scores(valRx, valY, @(r) ml_gru_impulse_detect(r, model));
-[model.threshold, thresholdMetrics, thresholdSelection] = ml_select_threshold_for_pfa(valScores, valTruth, opts.pfaTarget, ...
-    "policy", opts.thresholdPolicy, "pfaSlack", opts.thresholdPfaSlack);
+[model.threshold, thresholdMetrics, thresholdSelection] = ml_select_impulse_threshold(p, model, "ml_gru", valScores, valTruth, opts.pfaTarget, ...
+    "policy", opts.thresholdPolicy, ...
+    "pfaSlack", opts.thresholdPfaSlack, ...
+    "maxCandidates", opts.thresholdMaxCandidates, ...
+    "evalFramesPerPoint", opts.thresholdEvalFramesPerPoint, ...
+    "evalEbN0dBList", opts.thresholdEvalEbN0dBList, ...
+    "evalJsrDbList", opts.thresholdEvalJsrDbList, ...
+    "verbose", opts.verbose);
 
 [testScores, testTruth] = ml_collect_detector_scores(testRx, testY, @(r) ml_gru_impulse_detect(r, model));
 valMetrics = ml_binary_metrics(valScores, valTruth, model.threshold);
