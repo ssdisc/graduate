@@ -1,0 +1,482 @@
+
+[SCAN] (6/23) centerFreqPoints=-3
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 152.28s
+[SIM]     Bob BER: none=9.929e-01, fh_erasure=9.290e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 160.23s
+[SIM]     Bob BER: none=9.645e-01, fh_erasure=7.290e-01
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 315.21s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (7/23) centerFreqPoints=-2.5
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 147.73s
+[SIM]     Bob BER: none=3.278e-01, fh_erasure=1.716e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 136.79s
+[SIM]     Bob BER: none=1.798e-01, fh_erasure=9.347e-02
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 286.06s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (8/23) centerFreqPoints=-2
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 132.27s
+[SIM]     Bob BER: none=6.142e-01, fh_erasure=2.639e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 126.99s
+[SIM]     Bob BER: none=3.065e-01, fh_erasure=1.503e-01
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 260.89s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (9/23) centerFreqPoints=-1.5
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 134.87s
+[SIM]     Bob BER: none=2.710e-01, fh_erasure=3.551e-02
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 120.29s
+[SIM]     Bob BER: none=7.926e-02, fh_erasure=7.102e-03
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 256.59s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (10/23) centerFreqPoints=-1
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 120.67s
+[SIM]     Bob BER: none=3.918e-01, fh_erasure=8.523e-02
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 125.39s
+[SIM]     Bob BER: none=1.787e-01, fh_erasure=1.420e-02
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 247.49s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (11/23) centerFreqPoints=-0.5
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 122.22s
+[SIM]     Bob BER: none=1.432e-01, fh_erasure=3.551e-02
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 117.63s
+[SIM]     Bob BER: none=7.812e-02, fh_erasure=7.102e-03
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 241.25s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (12/23) centerFreqPoints=0
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 109.88s
+[SIM]     Bob BER: none=6.224e-01, fh_erasure=4.426e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 126.48s
+[SIM]     Bob BER: none=6.153e-01, fh_erasure=5.574e-01
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 237.96s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (13/23) centerFreqPoints=0.5
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 123.89s
+[SIM]     Bob BER: none=7.443e-01, fh_erasure=7.088e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 128.51s
+[SIM]     Bob BER: none=4.389e-01, fh_erasure=3.892e-01
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 254.12s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (14/23) centerFreqPoints=1
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 128.46s
+[SIM]     Bob BER: none=7.432e-01, fh_erasure=6.284e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 129.49s
+[SIM]     Bob BER: none=5.989e-01, fh_erasure=5.563e-01
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 259.59s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (15/23) centerFreqPoints=1.5
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 126.95s
+[SIM]     Bob BER: none=2.366e-01, fh_erasure=1.420e-02
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 157.23s
+[SIM]     Bob BER: none=7.216e-02, fh_erasure=0.000e+00
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 285.91s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (16/23) centerFreqPoints=2
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 153.55s
+[SIM]     Bob BER: none=7.716e-01, fh_erasure=4.509e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 113.02s
+[SIM]     Bob BER: none=7.088e-01, fh_erasure=3.278e-01
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 268.08s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (17/23) centerFreqPoints=2.5
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 115.14s
+[SIM]     Bob BER: none=2.639e-01, fh_erasure=1.349e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 118.49s
+[SIM]     Bob BER: none=1.301e-01, fh_erasure=4.375e-02
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 235.11s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。
+[SCAN] (18/23) centerFreqPoints=3
+[SIM] Tx记录: burst 35.176s, Eb/N0点=[8 10] dB, JSR点=0 dB, base avg 0.9958 (1 sps等效)
+
+========================================
+[SIM] 链路仿真开始
+[SIM] 仿真点数=2 (Eb/N0=2 × JSR=1), 每点帧数=5, 总帧数=10
+[SIM] Eb/N0点=[8 10] dB
+[SIM] JSR点=0 dB
+[SIM] 启用干扰类型: narrowband
+[SIM] 允许方法: none, fh_erasure
+[SIM] 抑制方法(2): none, fh_erasure
+[SIM] Eve=OFF, Warden=OFF, FH=ON, DSSS=OFF, SC-FDE=ON(cp=8,pilot=8,data/hop=48), Chaos=ON, Pulse=ON(sps=10), RxSync(B/E)=ON/OFF, MP=OFF
+[SIM] Parallel requested: OFF
+[SIM] Parallel pool: OFF
+========================================
+
+[SIM] >>> 仿真点 1/2: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB
+[SIM]     帧 1/5 (总进度 1/10, 10.0%)
+[SIM]     帧 2/5 (总进度 2/10, 20.0%)
+[SIM]     帧 3/5 (总进度 3/10, 30.0%)
+[SIM]     帧 4/5 (总进度 4/10, 40.0%)
+[SIM]     帧 5/5 (总进度 5/10, 50.0%)
+[SIM] <<< 仿真点完成: Eb/N0 8.00 dB, JSR 0.00 dB, txPower 6.24 dB, 用时 114.23s
+[SIM]     Bob BER: none=1.000e+00, fh_erasure=9.432e-01
+
+[SIM] >>> 仿真点 2/2: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB
+[SIM]     帧 1/5 (总进度 6/10, 60.0%)
+[SIM]     帧 2/5 (总进度 7/10, 70.0%)
+[SIM]     帧 3/5 (总进度 8/10, 80.0%)
+[SIM]     帧 4/5 (总进度 9/10, 90.0%)
+[SIM]     帧 5/5 (总进度 10/10, 100.0%)
+[SIM] <<< 仿真点完成: Eb/N0 10.00 dB, JSR 0.00 dB, txPower 8.24 dB, 用时 116.75s
+[SIM]     Bob BER: none=9.503e-01, fh_erasure=6.662e-01
+
+[SIM] 开始频谱估计与结果汇总...
+[SIM] 链路仿真结束，总耗时 232.49s
+[SCAN]       failed: 不支持将第 1 个元素从 <missing> 转换为字符向量。

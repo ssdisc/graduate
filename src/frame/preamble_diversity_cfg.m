@@ -52,6 +52,7 @@ fhCfg.mode = 'slow';
 fhCfg.sequenceType = 'linear';
 fhCfg.freqSet = freqSet;
 fhCfg.nFreqs = numel(freqSet);
+% One whole long-preamble copy per FH tone to maximize correlation SNR.
 fhCfg.symbolsPerHop = preambleSymbolLen;
 end
 

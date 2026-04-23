@@ -3855,13 +3855,25 @@ refPower = median(hopPower(validHop));
 if ~(isfinite(refPower) && refPower > 0)
     return;
 end
+validMseHop = isfinite(hopConstellationMse) & hopConstellationMse > 0;
+refConstellationMse = NaN;
+if any(validMseHop)
+    refConstellationMse = median(hopConstellationMse(validMseHop));
+end
 
 relHop = ones(nHops, 1);
 freqPower = nan(nFreqs, 1);
+freqConstellationMse = nan(nFreqs, 1);
 for freqNow = 1:nFreqs
     use = validHop & freqIdx == freqNow;
     if any(use)
         freqPower(freqNow) = median(hopPower(use));
+    end
+    if cfg.constellationMseEnable
+        useMse = validMseHop & freqIdx == freqNow;
+        if any(useMse)
+            freqConstellationMse(freqNow) = median(hopConstellationMse(useMse));
+        end
     end
 end
 
@@ -3888,6 +3900,25 @@ if cfg.lowPowerFadeEnable
             freqNow = candidateFreqLow(k);
             freqRel = local_erasure_reliability_from_low_ratio_local( ...
                 freqRatio(freqNow), cfg.lowFreqPowerRatioThreshold, cfg.minReliability, cfg.lowPowerSoftSlope);
+            relHop(freqIdx == freqNow) = min(relHop(freqIdx == freqNow), freqRel);
+        end
+    end
+end
+if cfg.constellationMseEnable && cfg.freqConstellationMseEnable ...
+        && isfinite(refConstellationMse) && refConstellationMse > 0
+    freqMseRatio = freqConstellationMse ./ refConstellationMse;
+    candidateFreqMse = find( ...
+        isfinite(freqMseRatio) ...
+        & freqMseRatio >= cfg.freqConstellationMseRatioThreshold ...
+        & freqConstellationMse >= cfg.freqConstellationMseFloor);
+    if ~isempty(candidateFreqMse)
+        [~, ord] = sort(freqMseRatio(candidateFreqMse), "descend");
+        maxErasedFreqs = max(1, ceil(cfg.maxErasedFreqFraction * double(nFreqs)));
+        candidateFreqMse = candidateFreqMse(ord(1:min(numel(ord), maxErasedFreqs)));
+        for k = 1:numel(candidateFreqMse)
+            freqNow = candidateFreqMse(k);
+            freqRel = local_erasure_reliability_from_ratio_local( ...
+                freqMseRatio(freqNow), cfg.freqConstellationMseRatioThreshold, cfg.minReliability, cfg.constellationMseSoftSlope);
             relHop(freqIdx == freqNow) = min(relHop(freqIdx == freqNow), freqRel);
         end
     end
@@ -4094,6 +4125,9 @@ cfg.lowPowerSoftSlope = local_required_positive_scalar_local(raw, "lowPowerSoftS
 cfg.constellationMseEnable = local_required_logical_scalar_local(raw, "constellationMseEnable", "mitigation.fhErasure");
 cfg.constellationMseThreshold = local_required_positive_scalar_local(raw, "constellationMseThreshold", "mitigation.fhErasure");
 cfg.constellationMseSoftSlope = local_required_positive_scalar_local(raw, "constellationMseSoftSlope", "mitigation.fhErasure");
+cfg.freqConstellationMseEnable = local_required_logical_scalar_local(raw, "freqConstellationMseEnable", "mitigation.fhErasure");
+cfg.freqConstellationMseRatioThreshold = local_required_positive_scalar_local(raw, "freqConstellationMseRatioThreshold", "mitigation.fhErasure");
+cfg.freqConstellationMseFloor = local_required_nonnegative_scalar_local(raw, "freqConstellationMseFloor", "mitigation.fhErasure");
 cfg.mlFreqProbabilityThreshold = local_required_probability_scalar_local(raw, "mlFreqProbabilityThreshold", "mitigation.fhErasure");
 if cfg.mlFreqProbabilityThreshold >= 1
     error("mitigation.fhErasure.mlFreqProbabilityThreshold must be < 1.");

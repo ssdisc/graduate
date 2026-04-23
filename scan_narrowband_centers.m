@@ -103,7 +103,8 @@ for idx = 1:numel(centerPoints)
     try
         results = simulate(p);
         row.runOk = true;
-        row.runDir = local_run_dir_from_results(results);
+        runDirValue = local_run_dir_from_results(results);
+        row.runDir = runDirValue;
 
         [ber8, front8, header8, payload8] = local_metric_at(results, "none", 8);
         [ber10, front10, header10, payload10] = local_metric_at(results, "none", 10);
@@ -128,7 +129,7 @@ for idx = 1:numel(centerPoints)
         row.payloadFhErasureEbN0_10 = payloadFh10;
 
         fprintf("[SCAN]       ok, runDir=%s, none(BER@8=%.4f, BER@10=%.4f), fh_erasure(BER@8=%.4f, BER@10=%.4f)\n", ...
-            char(string(row.runDir)), ...
+            char(runDirValue), ...
             row.berNoneEbN0_8, row.berNoneEbN0_10, ...
             row.berFhErasureEbN0_8, row.berFhErasureEbN0_10);
     catch ME

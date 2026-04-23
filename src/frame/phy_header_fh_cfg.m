@@ -59,6 +59,8 @@ if copies > 1
     fhCfg.sequenceType = 'linear';
     fhCfg.freqSet = local_spread_copy_freq_set(fhCfg.freqSet, copies);
     fhCfg.nFreqs = numel(fhCfg.freqSet);
+    % Keep one full header copy on one FH tone so each copy has maximum
+    % per-tone energy and is not forced to sweep across all tones.
     fhCfg.symbolsPerHop = phy_header_single_symbol_length(frameCfg, fec);
 elseif fhCfg.enable && ~fh_is_fast(fhCfg)
     if ~isfield(fec, "trellis") || isempty(fec.trellis)

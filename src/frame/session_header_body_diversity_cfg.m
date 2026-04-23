@@ -44,6 +44,7 @@ fhCfg = fhBase;
 fhCfg.enable = true;
 fhCfg.mode = 'slow';
 fhCfg.sequenceType = 'linear';
+% One whole session-header body copy per FH tone.
 fhCfg.symbolsPerHop = copyLen;
 fhCfg.freqSet = freqSet;
 fhCfg.nFreqs = numel(freqSet);
