@@ -211,7 +211,7 @@ required.lr = any(methods == "ml_blanking");
 required.cnn = any(methods == "ml_cnn" | methods == "ml_cnn_hard");
 required.gru = any(methods == "ml_gru" | methods == "ml_gru_hard" | methods == "adaptive_ml_frontend");
 required.selector = any(methods == "adaptive_ml_frontend");
-required.narrowband = any(methods == "ml_narrowband");
+required.narrowband = any(methods == "ml_narrowband" | methods == "adaptive_ml_frontend");
 required.fhErasure = any(methods == "ml_fh_erasure");
 required.multipathEq = local_multipath_eq_offline_requested(p);
 end

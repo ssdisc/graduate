@@ -10,6 +10,7 @@ end
 
 fhCfg = fhBase;
 fhCfg.enable = false;
+fhCfg = local_disable_payload_diversity_local(fhCfg);
 if ~(isstruct(frameCfg) && isfield(frameCfg, "phyHeaderFhEnable") && logical(frameCfg.phyHeaderFhEnable))
     return;
 end
@@ -82,4 +83,10 @@ if numel(unique(idx, "stable")) ~= copies
     error("Could not choose %d distinct PHY-header diversity frequencies.", copies);
 end
 freqSet = freqSetIn(idx);
+end
+
+function fhCfg = local_disable_payload_diversity_local(fhCfg)
+if isfield(fhCfg, "payloadDiversity") && isstruct(fhCfg.payloadDiversity)
+    fhCfg.payloadDiversity.enable = false;
+end
 end

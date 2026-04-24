@@ -33,11 +33,23 @@ if nFreqs < 1 || abs(nFreqs - round(nFreqs)) > 1e-12
     error("fh.nFreqs必须为正整数，当前为%g。", nFreqs);
 end
 nFreqs = round(nFreqs);
+payloadDiv = local_payload_diversity_cfg_local(fh, nFreqs);
 
 if nFreqs == 1
+    if payloadDiv.enable
+        error("fh.payloadDiversity requires fh.nFreqs >= 2.");
+    end
     freqIdx = ones(nHops, 1);
     state = [];
     return;
+end
+
+nLogicalHops = nHops;
+if payloadDiv.enable
+    if local_fh_is_fast_local(fh)
+        error("fh.payloadDiversity only supports slow FH.");
+    end
+    nLogicalHops = ceil(double(nHops) / double(payloadDiv.copies));
 end
 
 switch seqType
@@ -51,14 +63,14 @@ switch seqType
         bitsPerHop = ceil(log2(nFreqs));
 
         % 生成PN序列
-        [pnBits, nextState] = pn_generate_bits(poly, initState, nHops * bitsPerHop);
+        [pnBits, nextState] = pn_generate_bits(poly, initState, nLogicalHops * bitsPerHop);
         state = struct();
         state.type = "pn";
         state.currentState = uint8(nextState(:)).';
 
         % 将比特转换为频率索引（模nFreqs）
-        freqIdx = zeros(nHops, 1);
-        for k = 1:nHops
+        freqIdxBase = zeros(nLogicalHops, 1);
+        for k = 1:nLogicalHops
             startBit = (k-1) * bitsPerHop + 1;
             endBit = k * bitsPerHop;
             bits = pnBits(startBit:endBit);
@@ -70,7 +82,7 @@ switch seqType
             end
 
             % 映射到有效频率索引 (1 到 nFreqs)
-            freqIdx(k) = mod(idx, nFreqs) + 1;
+            freqIdxBase(k) = mod(idx, nFreqs) + 1;
         end
 
     case {"chaos", "chaotic"}
@@ -90,11 +102,11 @@ switch seqType
             offsetHops = max(0, round(double(fh.sequenceOffsetHops)));
         end
 
-        chaosSeqFull = double(chaos_generate(nHops + offsetHops, chaosMethod, chaosParams));
+        chaosSeqFull = double(chaos_generate(nLogicalHops + offsetHops, chaosMethod, chaosParams));
         chaosSeq = chaosSeqFull(offsetHops + 1:end);
         chaosSeq = max(min(chaosSeq(:), 1 - eps), 0);
-        freqIdx = floor(chaosSeq * nFreqs) + 1;
-        freqIdx = min(max(freqIdx, 1), nFreqs);
+        freqIdxBase = floor(chaosSeq * nFreqs) + 1;
+        freqIdxBase = min(max(freqIdxBase, 1), nFreqs);
 
         state = struct();
         state.type = "chaos";
@@ -109,16 +121,102 @@ switch seqType
 
     case "linear"
         % 线性递增（用于调试）
-        freqIdx = mod((0:nHops-1)', nFreqs) + 1;
+        freqIdxBase = mod((0:nLogicalHops-1)', nFreqs) + 1;
         state = [];
 
     case "random"
         % 完全随机（不可复现）
-        freqIdx = randi([1, nFreqs], nHops, 1);
+        freqIdxBase = randi([1, nFreqs], nLogicalHops, 1);
         state = [];
 
     otherwise
         error("未知的跳频序列类型: %s", seqType);
 end
 
+if payloadDiv.enable
+    freqIdx = local_expand_payload_diversity_freq_idx_local(freqIdxBase, nHops, nFreqs, payloadDiv);
+    if ~isstruct(state)
+        state = struct();
+    end
+    state.payloadDiversity = payloadDiv;
+    state.logicalHops = nLogicalHops;
+    state.physicalHops = nHops;
+else
+    freqIdx = freqIdxBase;
+end
+
+end
+
+function cfg = local_payload_diversity_cfg_local(fh, nFreqs)
+cfg = struct("enable", false, "copies", 1, "indexOffset", 0, "indexShifts", 0);
+if ~(isfield(fh, "payloadDiversity") && isstruct(fh.payloadDiversity))
+    return;
+end
+
+raw = fh.payloadDiversity;
+if ~(isfield(raw, "enable") && logical(raw.enable))
+    return;
+end
+
+copies = local_required_positive_integer_local(raw, "copies", "fh.payloadDiversity");
+indexOffset = local_required_positive_integer_local(raw, "indexOffset", "fh.payloadDiversity");
+if copies < 2
+    error("fh.payloadDiversity.copies must be >= 2 when enabled.");
+end
+
+indexShifts = mod((0:copies-1) .* indexOffset, nFreqs);
+if numel(unique(indexShifts)) ~= copies
+    error("fh.payloadDiversity indexOffset=%d revisits the same frequency within %d copies (nFreqs=%d).", ...
+        indexOffset, copies, nFreqs);
+end
+
+cfg = struct( ...
+    "enable", true, ...
+    "copies", copies, ...
+    "indexOffset", indexOffset, ...
+    "indexShifts", indexShifts(:).');
+end
+
+function freqIdx = local_expand_payload_diversity_freq_idx_local(baseFreqIdx, nPhysicalHops, nFreqs, cfg)
+baseFreqIdx = round(double(baseFreqIdx(:)));
+nPhysicalHops = round(double(nPhysicalHops));
+if isempty(baseFreqIdx)
+    freqIdx = zeros(0, 1);
+    return;
+end
+
+freqIdx = zeros(nPhysicalHops, 1);
+dstHop = 1;
+for logicalHop = 1:numel(baseFreqIdx)
+    baseIdx = baseFreqIdx(logicalHop);
+    for copyIdx = 1:cfg.copies
+        if dstHop > nPhysicalHops
+            break;
+        end
+        freqIdx(dstHop) = mod(baseIdx - 1 + cfg.indexShifts(copyIdx), nFreqs) + 1;
+        dstHop = dstHop + 1;
+    end
+end
+
+if dstHop <= nPhysicalHops
+    error("payload diversity FH expansion produced %d hops, expected %d.", dstHop - 1, nPhysicalHops);
+end
+end
+
+function value = local_required_positive_integer_local(s, fieldName, ownerName)
+if ~(isfield(s, fieldName) && ~isempty(s.(fieldName)))
+    error("%s.%s is required.", ownerName, fieldName);
+end
+value = double(s.(fieldName));
+if ~(isscalar(value) && isfinite(value) && abs(value - round(value)) < 1e-12 && value >= 1)
+    error("%s.%s must be a positive integer scalar, got %g.", ownerName, fieldName, value);
+end
+value = round(value);
+end
+
+function tf = local_fh_is_fast_local(fh)
+tf = false;
+if isfield(fh, "mode") && strlength(string(fh.mode)) > 0
+    tf = lower(string(fh.mode)) == "fast";
+end
 end

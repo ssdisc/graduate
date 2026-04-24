@@ -170,6 +170,13 @@ for pktIdx = 1:nPackets
         modInfo.scFdeEnable = false;
         modInfo.scFdeOverheadFactor = 1.0;
     end
+    [dataSymForFh, payloadDiversityInfo] = local_apply_payload_fh_diversity_tx_local(dataSymForFh, p.fh, scFdeInfo);
+    modInfo.payloadDiversityEnable = logical(payloadDiversityInfo.enable);
+    modInfo.payloadDiversityCopies = double(payloadDiversityInfo.copies);
+    if payloadDiversityInfo.enable
+        modInfo.spreadFactor = double(modInfo.spreadFactor) * double(payloadDiversityInfo.overheadFactor);
+        modInfo.bitLoad = modInfo.bitsPerSymbol * modInfo.codeRate / modInfo.spreadFactor;
+    end
     modInfoRef = modInfo;
 
     dataFast = false;
@@ -240,6 +247,7 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).dataSymTx = dataSymTx;
     txPackets(pktIdx).dataSymScFdeTx = dataSymForFh;
     txPackets(pktIdx).scFdeInfo = scFdeInfo;
+    txPackets(pktIdx).payloadDiversityInfo = payloadDiversityInfo;
     txPackets(pktIdx).dataSymHop = dataSymHop;
     txPackets(pktIdx).nDemodSym = numel(dataSymTxBase);
     txPackets(pktIdx).nDataSymBase = numel(dataSymTx);
@@ -394,4 +402,102 @@ tf = true;
 if isfield(frameCfg, "phyHeaderMode") && strlength(string(frameCfg.phyHeaderMode)) > 0
     tf = lower(string(frameCfg.phyHeaderMode)) == "compact_fec";
 end
+end
+
+function [txOut, info] = local_apply_payload_fh_diversity_tx_local(txIn, fhCfg, scFdeInfo)
+txOut = txIn(:);
+inputSymbols = numel(txOut);
+info = struct( ...
+    "enable", false, ...
+    "copies", 1, ...
+    "logicalHops", 0, ...
+    "physicalHops", 0, ...
+    "hopLen", 0, ...
+    "inputSymbols", inputSymbols, ...
+    "logicalSymbolsPadded", inputSymbols, ...
+    "overheadFactor", 1.0);
+
+if ~(isfield(fhCfg, "payloadDiversity") && isstruct(fhCfg.payloadDiversity) ...
+        && isfield(fhCfg.payloadDiversity, "enable") && logical(fhCfg.payloadDiversity.enable))
+    return;
+end
+if ~(isfield(fhCfg, "enable") && logical(fhCfg.enable))
+    error("fh.payloadDiversity requires fh.enable=true.");
+end
+if fh_is_fast(fhCfg)
+    error("fh.payloadDiversity only supports slow FH.");
+end
+
+copies = local_required_positive_integer_local(fhCfg.payloadDiversity, "copies", "fh.payloadDiversity");
+if copies < 2
+    error("fh.payloadDiversity.copies must be >= 2 when enabled.");
+end
+
+if isstruct(scFdeInfo) && isfield(scFdeInfo, "enable") && logical(scFdeInfo.enable)
+    hopLen = local_required_positive_integer_local(scFdeInfo, "hopLen", "scFdeInfo");
+    nLogicalHops = local_required_nonnegative_integer_local(scFdeInfo, "nHops", "scFdeInfo");
+    logicalSymbolsPadded = nLogicalHops * hopLen;
+    if numel(txOut) ~= logicalSymbolsPadded
+        error("payload diversity TX expects %d SC-FDE symbols, got %d.", logicalSymbolsPadded, numel(txOut));
+    end
+else
+    hopLen = local_required_positive_integer_local(fhCfg, "symbolsPerHop", "fh");
+    nLogicalHops = ceil(double(numel(txOut)) / double(hopLen));
+    logicalSymbolsPadded = nLogicalHops * hopLen;
+    if logicalSymbolsPadded > numel(txOut)
+        txOut = [txOut; complex(zeros(logicalSymbolsPadded - numel(txOut), 1))];
+    end
+end
+
+if logicalSymbolsPadded == 0
+    info = struct( ...
+        "enable", true, ...
+        "copies", copies, ...
+        "logicalHops", 0, ...
+        "physicalHops", 0, ...
+        "hopLen", hopLen, ...
+        "inputSymbols", inputSymbols, ...
+        "logicalSymbolsPadded", 0, ...
+        "overheadFactor", 1.0);
+    return;
+end
+
+txMat = reshape(txOut, hopLen, nLogicalHops);
+txOut = kron(txMat, ones(1, copies));
+txOut = txOut(:);
+overheadFactor = 1.0;
+if inputSymbols > 0
+    overheadFactor = double(numel(txOut)) / double(inputSymbols);
+end
+info = struct( ...
+    "enable", true, ...
+    "copies", copies, ...
+    "logicalHops", nLogicalHops, ...
+    "physicalHops", nLogicalHops * copies, ...
+    "hopLen", hopLen, ...
+    "inputSymbols", inputSymbols, ...
+    "logicalSymbolsPadded", logicalSymbolsPadded, ...
+    "overheadFactor", overheadFactor);
+end
+
+function value = local_required_positive_integer_local(s, fieldName, ownerName)
+if ~(isfield(s, fieldName) && ~isempty(s.(fieldName)))
+    error("%s.%s is required.", ownerName, fieldName);
+end
+value = double(s.(fieldName));
+if ~(isscalar(value) && isfinite(value) && abs(value - round(value)) < 1e-12 && value >= 1)
+    error("%s.%s must be a positive integer scalar, got %g.", ownerName, fieldName, value);
+end
+value = round(value);
+end
+
+function value = local_required_nonnegative_integer_local(s, fieldName, ownerName)
+if ~(isfield(s, fieldName) && ~isempty(s.(fieldName)))
+    error("%s.%s is required.", ownerName, fieldName);
+end
+value = double(s.(fieldName));
+if ~(isscalar(value) && isfinite(value) && abs(value - round(value)) < 1e-12 && value >= 0)
+    error("%s.%s must be a nonnegative integer scalar, got %g.", ownerName, fieldName, value);
+end
+value = round(value);
 end

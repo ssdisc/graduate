@@ -36,6 +36,7 @@ if isfield(p, "sim") && isstruct(p.sim) && isfield(p.sim, "commonRandomFramesAcr
 end
 bobRxSync = p.rxSync;
 bobMitigation = p.mitigation;
+validate_link_profile(p);
 waveform = resolve_waveform_cfg(p);
 local_require_presync_mitigation_cfg_local(bobMitigation, "p.mitigation");
 [mitigationMethods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(bobMitigation, p.channel);
@@ -726,8 +727,14 @@ for ie = 1:numel(EbN0dBList)
             EbN0dB, linkBudget.bob.txPowerDb(ie), toc(pointTic));
     end
     fprintf('[SIM]     Bob BER: %s\n', format_metric_pairs(methods, ber(:, ie)));
+    fprintf('[SIM]     Bob PER(raw/effective): raw=%s, eff=%s\n', ...
+        format_metric_pairs(methods, max(min(1 - rawPacketSuccessBobVals(:, ie), 1), 0)), ...
+        format_metric_pairs(methods, max(min(1 - packetSuccessBobVals(:, ie), 1), 0)));
     if eveEnabled
         fprintf('[SIM]     Eve BER: %s\n', format_metric_pairs(methods, berEve(:, ie)));
+        fprintf('[SIM]     Eve PER(raw/effective): raw=%s, eff=%s\n', ...
+            format_metric_pairs(methods, max(min(1 - rawPacketSuccessEveVals(:, ie), 1), 0)), ...
+            format_metric_pairs(methods, max(min(1 - packetSuccessEveVals(:, ie), 1), 0)));
     end
     fprintf('\n');
 end
@@ -2939,11 +2946,17 @@ relPrep = local_fit_reliability_length_local(relPrep, numel(r));
 if any(actionName == ["fh_erasure" "ml_fh_erasure"])
     [r, relPrep] = local_apply_multipath_fade_erasure_local(r, relPrep, rxState, mitigation);
 end
-if all(relPrep >= 0.999999)
-    relPrep = rawReliability;
-else
-    relPrep = min(relPrep, rawReliability);
+if local_rx_payload_diversity_enabled_local(rxState)
+    [r, relPrep] = local_combine_payload_fh_diversity_symbols_local(r, relPrep, rxState);
+    rawReliability = local_payload_fh_diversity_combine_reliability_local(rawReliability, rxState);
 end
+relPrep = local_fit_reliability_length_local(relPrep, numel(r));
+if all(relPrep >= 0.999999)
+    relPhysical = rawReliability;
+else
+    relPhysical = min(relPrep, rawReliability);
+end
+relPrep = relPhysical;
 end
 
 function [rOut, relOut] = local_prepare_sc_fde_diversity_data_symbols_local(rxState, hopInfoUsed, modCfg, rxSyncCfg, fhEnabled, actionName, mitigation)
@@ -2964,6 +2977,14 @@ for branchIdx = 1:nBranches
             divState.fallbackBranches{branchIdx}, divState.fallbackReliabilityBranches{branchIdx}, ...
             rxState, hopInfoUsed, modCfg, fhEnabled, actionName, mitigation);
     end
+end
+
+if local_rx_payload_diversity_enabled_local(rxState)
+    if local_sc_fde_equalizer_method_local(rxSyncCfg)
+        error("SC-FDE MMSE diversity combining does not support fh.payloadDiversity.");
+    end
+    [rOut, relOut] = local_apply_sc_fde_payload_hop_rx_diversity_local(branchSymbols, branchReliability, rxState);
+    return;
 end
 
 if local_sc_fde_equalizer_method_local(rxSyncCfg)
@@ -3033,6 +3054,111 @@ x = reshape(x(1:needLen), groupLen, nGroups);
 y = mean(x, 1).';
 end
 
+function tf = local_rx_payload_diversity_enabled_local(rxState)
+tf = false;
+if isfield(rxState, "payloadDiversity") && isstruct(rxState.payloadDiversity) ...
+        && isfield(rxState.payloadDiversity, "enable")
+    tf = logical(rxState.payloadDiversity.enable);
+    return;
+end
+if isfield(rxState, "fhCfg") && isstruct(rxState.fhCfg) ...
+        && isfield(rxState.fhCfg, "payloadDiversity") && isstruct(rxState.fhCfg.payloadDiversity) ...
+        && isfield(rxState.fhCfg.payloadDiversity, "enable")
+    tf = logical(rxState.fhCfg.payloadDiversity.enable);
+end
+end
+
+function [rOut, relOut] = local_combine_payload_fh_diversity_symbols_local(rIn, relIn, rxState)
+rIn = rIn(:);
+[nLogicalHops, copies, hopLen, expectedPhysicalLen, logicalSymbolsOut] = local_payload_fh_diversity_dims_local(rxState);
+if numel(rIn) ~= expectedPhysicalLen
+    error("payload FH diversity combine expects %d symbols, got %d.", expectedPhysicalLen, numel(rIn));
+end
+relIn = local_fit_reliability_length_local(relIn, expectedPhysicalLen);
+if expectedPhysicalLen == 0
+    rOut = complex(zeros(0, 1));
+    relOut = zeros(0, 1);
+    return;
+end
+
+rMat = reshape(rIn, hopLen, copies, nLogicalHops);
+relMat = reshape(relIn, hopLen, copies, nLogicalHops);
+rOutMat = complex(zeros(hopLen, nLogicalHops));
+relOutMat = zeros(hopLen, nLogicalHops);
+for hopIdx = 1:nLogicalHops
+    rHop = reshape(rMat(:, :, hopIdx), hopLen, copies);
+    relHop = reshape(relMat(:, :, hopIdx), hopLen, copies);
+    relHop = max(0, min(1, relHop));
+    relHop(~isfinite(relHop)) = 0;
+    copyScores = mean(relHop, 1);
+    [~, bestCopyIdx] = max(copyScores);
+    rOutMat(:, hopIdx) = rHop(:, bestCopyIdx);
+    relOutMat(:, hopIdx) = relHop(:, bestCopyIdx);
+end
+
+rOut = rOutMat(:);
+relOut = max(0, min(1, relOutMat(:)));
+rOut = fit_complex_length_local(rOut, logicalSymbolsOut);
+relOut = local_fit_reliability_length_local(relOut, logicalSymbolsOut);
+end
+
+function relOut = local_payload_fh_diversity_combine_reliability_local(relIn, rxState)
+[nLogicalHops, copies, hopLen, expectedPhysicalLen, logicalSymbolsOut] = local_payload_fh_diversity_dims_local(rxState);
+relIn = local_fit_reliability_length_local(relIn, expectedPhysicalLen);
+if expectedPhysicalLen == 0
+    relOut = zeros(0, 1);
+    return;
+end
+
+relMat = reshape(relIn, hopLen, copies, nLogicalHops);
+relOutMat = zeros(hopLen, nLogicalHops);
+for hopIdx = 1:nLogicalHops
+    relHop = reshape(relMat(:, :, hopIdx), hopLen, copies);
+    relHop = max(0, min(1, relHop));
+    relHop(~isfinite(relHop)) = 0;
+    relOutMat(:, hopIdx) = 1 - prod(1 - relHop, 2);
+end
+relOut = max(0, min(1, relOutMat(:)));
+relOut = local_fit_reliability_length_local(relOut, logicalSymbolsOut);
+end
+
+function [nLogicalHops, copies, hopLen, expectedPhysicalLen, logicalSymbolsOut, logicalSymbolsPadded] = local_payload_fh_diversity_dims_local(rxState)
+if ~local_rx_payload_diversity_enabled_local(rxState)
+    error("payload FH diversity dimensions requested while diversity is disabled.");
+end
+if ~(isfield(rxState, "fhCfg") && isstruct(rxState.fhCfg) && isfield(rxState.fhCfg, "enable") && logical(rxState.fhCfg.enable))
+    error("payload FH diversity RX requires rxState.fhCfg.enable=true.");
+end
+if fh_is_fast(rxState.fhCfg)
+    error("payload FH diversity only supports slow FH.");
+end
+
+copies = local_required_positive_integer_local(rxState.payloadDiversity, "copies", "rxState.payloadDiversity");
+if isfield(rxState, "scFdePlan") && isstruct(rxState.scFdePlan) ...
+        && isfield(rxState.scFdePlan, "enable") && logical(rxState.scFdePlan.enable)
+    hopLen = local_required_positive_integer_local(rxState.scFdePlan, "hopLen", "rxState.scFdePlan");
+    nLogicalHops = local_required_nonnegative_integer_local(rxState.scFdePlan, "nHops", "rxState.scFdePlan");
+    logicalSymbolsOut = local_required_nonnegative_integer_local(rxState.scFdePlan, "nTxSymbols", "rxState.scFdePlan");
+    logicalSymbolsPadded = logicalSymbolsOut;
+else
+    hopLen = local_required_positive_integer_local(rxState.fhCfg, "symbolsPerHop", "rxState.fhCfg");
+    logicalSymbolsOut = local_required_nonnegative_integer_local(rxState, "nFhInputSym", "rxState");
+    nLogicalHops = ceil(double(logicalSymbolsOut) / double(hopLen));
+    logicalSymbolsPadded = nLogicalHops * hopLen;
+    if isfield(rxState, "nFhInputSymPadded") && ~isempty(rxState.nFhInputSymPadded)
+        logicalSymbolsPaddedNow = local_required_nonnegative_integer_local(rxState, "nFhInputSymPadded", "rxState");
+        if logicalSymbolsPaddedNow ~= logicalSymbolsPadded
+            error("payload FH diversity expects rxState.nFhInputSymPadded=%d, got %d.", ...
+                logicalSymbolsPadded, logicalSymbolsPaddedNow);
+        end
+    end
+end
+expectedPhysicalLen = logicalSymbolsPadded * copies;
+if ~(isfield(rxState, "nDataSym") && round(double(rxState.nDataSym)) == expectedPhysicalLen)
+    error("payload FH diversity expects rxState.nDataSym=%d, got %d.", expectedPhysicalLen, round(double(rxState.nDataSym)));
+end
+end
+
 function [rOut, relOut] = local_prepare_sc_fde_payload_local(rIn, relIn, rxState, rxSyncCfg)
 if ~(isstruct(rxState) && isfield(rxState, "scFdePlan") && isstruct(rxState.scFdePlan) ...
         && isfield(rxState.scFdePlan, "enable") && logical(rxState.scFdePlan.enable))
@@ -3040,6 +3166,15 @@ if ~(isstruct(rxState) && isfield(rxState, "scFdePlan") && isstruct(rxState.scFd
 end
 plan = rxState.scFdePlan;
 cfg = rxState.scFdeCfg;
+
+if local_rx_payload_diversity_enabled_local(rxState)
+    if local_sc_fde_equalizer_method_local(rxSyncCfg)
+        error("SC-FDE MMSE payload equalization does not support fh.payloadDiversity.");
+    end
+    [rOut, relOut] = local_apply_sc_fde_payload_hop_diversity_local(rIn, relIn, rxState, cfg, plan);
+    return;
+end
+
 r = fit_complex_length_local(rIn, plan.nTxSymbols);
 rel = local_fit_reliability_length_local(relIn, plan.nTxSymbols);
 
@@ -3066,7 +3201,93 @@ dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
 relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
 end
 
+function [dataOut, relOut] = local_apply_sc_fde_payload_hop_rx_diversity_local(branchSymbols, branchReliability, rxState)
+divState = local_require_sc_fde_diversity_state_local(rxState);
+plan = rxState.scFdePlan;
+cfg = rxState.scFdeCfg;
+nBranches = double(divState.nBranches);
+if ~(iscell(branchSymbols) && iscell(branchReliability) ...
+        && numel(branchSymbols) == nBranches && numel(branchReliability) == nBranches)
+    error("SC-FDE payload hop diversity requires one symbol/reliability vector per RX branch.");
+end
+
+[~, copies, ~, expectedPhysicalLen] = local_payload_fh_diversity_dims_local(rxState);
+for branchIdx = 1:nBranches
+    branchSymbols{branchIdx} = fit_complex_length_local(branchSymbols{branchIdx}, expectedPhysicalLen);
+    branchReliability{branchIdx} = local_fit_reliability_length_local(branchReliability{branchIdx}, expectedPhysicalLen);
+end
+
+dataOutFull = complex(zeros(plan.nHops * plan.dataSymbolsPerHop, 1));
+relOutFull = ones(plan.nHops * plan.dataSymbolsPerHop, 1);
+for hopIdx = 1:plan.nHops
+    pilot = sc_fde_payload_pilot_symbols(cfg, rxState.packetIndex, hopIdx);
+    nCandidates = nBranches * copies;
+    coreList = cell(nCandidates, 1);
+    relList = cell(nCandidates, 1);
+    scoreList = zeros(nCandidates, 1);
+    candidateIdx = 1;
+    for branchIdx = 1:nBranches
+        for copyIdx = 1:copies
+            physicalHopIdx = (hopIdx - 1) * copies + copyIdx;
+            [core, relCore] = local_sc_fde_core_from_physical_hop_local( ...
+                branchSymbols{branchIdx}, branchReliability{branchIdx}, physicalHopIdx, plan);
+            [~, coreNorm, hopRel] = local_sc_fde_align_core_to_pilot_local(core, pilot, cfg, plan.cpLen);
+            coreList{candidateIdx} = coreNorm;
+            relList{candidateIdx} = min(relCore, hopRel);
+            scoreList(candidateIdx) = mean(relList{candidateIdx});
+            candidateIdx = candidateIdx + 1;
+        end
+    end
+    scoreList = local_sc_fde_gate_branch_scores_local( ...
+        scoreList, sprintf("payload FH + RX diversity hop %d", hopIdx));
+    [xCoreComb, relCoreComb] = local_sc_fde_mrc_combine_branch_cores_local( ...
+        coreList, relList, ones(nCandidates, 1), scoreList, sprintf("payload FH + RX diversity hop %d", hopIdx));
+    dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
+    dataOutFull(dataIdx) = xCoreComb(plan.pilotLength + 1:end);
+    relOutFull(dataIdx) = relCoreComb(plan.pilotLength + 1:end);
+end
+
+dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
+relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
+end
+
+function [dataOut, relOut] = local_apply_sc_fde_payload_hop_diversity_local(rIn, relIn, rxState, cfg, plan)
+[~, copies, ~, expectedPhysicalLen] = local_payload_fh_diversity_dims_local(rxState);
+r = fit_complex_length_local(rIn, expectedPhysicalLen);
+rel = local_fit_reliability_length_local(relIn, expectedPhysicalLen);
+
+dataOutFull = complex(zeros(plan.nHops * plan.dataSymbolsPerHop, 1));
+relOutFull = ones(plan.nHops * plan.dataSymbolsPerHop, 1);
+for hopIdx = 1:plan.nHops
+    pilot = sc_fde_payload_pilot_symbols(cfg, rxState.packetIndex, hopIdx);
+    coreList = cell(copies, 1);
+    relList = cell(copies, 1);
+    scoreList = zeros(copies, 1);
+    for copyIdx = 1:copies
+        physicalHopIdx = (hopIdx - 1) * copies + copyIdx;
+        [core, relCore] = local_sc_fde_core_from_physical_hop_local(r, rel, physicalHopIdx, plan);
+        [~, coreNorm, hopRel] = local_sc_fde_align_core_to_pilot_local(core, pilot, cfg, plan.cpLen);
+        coreList{copyIdx} = coreNorm;
+        relList{copyIdx} = min(relCore, hopRel);
+        scoreList(copyIdx) = mean(relList{copyIdx});
+    end
+    scoreList = local_sc_fde_gate_branch_scores_local( ...
+        scoreList, sprintf("payload FH diversity hop %d", hopIdx));
+    [xCoreComb, relCoreComb] = local_sc_fde_mrc_combine_branch_cores_local( ...
+        coreList, relList, ones(copies, 1), scoreList, sprintf("payload FH diversity hop %d", hopIdx));
+    dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
+    dataOutFull(dataIdx) = xCoreComb(plan.pilotLength + 1:end);
+    relOutFull(dataIdx) = relCoreComb(plan.pilotLength + 1:end);
+end
+
+dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
+relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
+end
+
 function [dataOut, relOut] = local_apply_sc_fde_mmse_payload_local(r, rel, rxState, cfg, plan)
+if local_rx_payload_diversity_enabled_local(rxState)
+    error("SC-FDE MMSE payload equalization does not support fh.payloadDiversity.");
+end
 if ~(isfield(rxState, "scFdeEq") && isstruct(rxState.scFdeEq))
     error("SC-FDE MMSE requires rxState.scFdeEq.");
 end
@@ -3155,6 +3376,9 @@ end
 function [dataOut, relOut] = local_apply_sc_fde_mmse_payload_diversity_local(branchSymbols, branchReliability, fallbackSymbols, fallbackReliability, rxState, rxSyncCfg)
 if ~local_sc_fde_equalizer_method_local(rxSyncCfg)
     error("SC-FDE diversity MMSE combining requires rxSync.multipathEq.compareMethods to include ""sc_fde_mmse"".");
+end
+if local_rx_payload_diversity_enabled_local(rxState)
+    error("SC-FDE MMSE diversity combining does not support fh.payloadDiversity.");
 end
 divState = local_require_sc_fde_diversity_state_local(rxState);
 plan = rxState.scFdePlan;
@@ -3833,98 +4057,80 @@ if ~(isscalar(nFreqs) && isfinite(nFreqs) && nFreqs >= 1)
     error("fh_erasure requires a positive finite hopInfo.nFreqs.");
 end
 
-hopPower = nan(nHops, 1);
-hopConstellationMse = nan(nHops, 1);
-for hopIdx = 1:nHops
-    idx = local_hop_symbol_indices_local(hopIdx, hopLen, N, cfg.edgeGuardSymbols);
-    if isempty(idx)
-        idx = local_hop_symbol_indices_local(hopIdx, hopLen, N, 0);
-    end
-    seg = rOut(idx);
-    hopPower(hopIdx) = mean(abs(seg).^2);
-    if cfg.constellationMseEnable
-        hopConstellationMse(hopIdx) = local_constellation_mse_for_erasure_local(seg, modCfg);
-    end
-end
-
-validHop = isfinite(hopPower) & hopPower > 0;
-if ~any(validHop)
+stats = local_measure_fh_erasure_stats_local(rOut, hopLen, N, cfg, modCfg, freqIdx, nHops, nFreqs);
+if ~stats.hasUsablePower
     return;
 end
-refPower = median(hopPower(validHop));
-if ~(isfinite(refPower) && refPower > 0)
-    return;
+candidateFreq = zeros(0, 1);
+candidateFreqLow = zeros(0, 1);
+candidateFreqMse = zeros(0, 1);
+[candidateFreq, candidateFreqLow, candidateFreqMse] = local_fh_erasure_candidate_freqs_local(stats, cfg, nFreqs);
+seedFreq = unique([candidateFreq(:); candidateFreqMse(:)]);
+if cfg.freqBandstopEnable
+    if isempty(seedFreq)
+        seedFreq = (1:nFreqs).';
+    else
+        seedFreq = unique([seedFreq(:); (1:nFreqs).']);
+    end
+    rOut = local_apply_fh_erasure_freq_bandstop_local(rOut, freqIdx, hopLen, N, seedFreq, cfg, mitigation);
+    stats = local_measure_fh_erasure_stats_local(rOut, hopLen, N, cfg, modCfg, freqIdx, nHops, nFreqs);
+    if ~stats.hasUsablePower
+        return;
+    end
+    [candidateFreq, candidateFreqLow, candidateFreqMse] = local_fh_erasure_candidate_freqs_local(stats, cfg, nFreqs);
 end
-validMseHop = isfinite(hopConstellationMse) & hopConstellationMse > 0;
-refConstellationMse = NaN;
-if any(validMseHop)
-    refConstellationMse = median(hopConstellationMse(validMseHop));
-end
+adjacentPairs = local_fh_erasure_adjacent_pair_scores_local(stats, cfg, nFreqs);
 
 relHop = ones(nHops, 1);
-freqPower = nan(nFreqs, 1);
-freqConstellationMse = nan(nFreqs, 1);
-for freqNow = 1:nFreqs
-    use = validHop & freqIdx == freqNow;
-    if any(use)
-        freqPower(freqNow) = median(hopPower(use));
-    end
-    if cfg.constellationMseEnable
-        useMse = validMseHop & freqIdx == freqNow;
-        if any(useMse)
-            freqConstellationMse(freqNow) = median(hopConstellationMse(useMse));
-        end
-    end
-end
-
-freqRatio = freqPower ./ refPower;
-candidateFreq = find(isfinite(freqRatio) & freqRatio >= cfg.freqPowerRatioThreshold);
 if ~isempty(candidateFreq)
-    [~, ord] = sort(freqRatio(candidateFreq), "descend");
-    maxErasedFreqs = max(1, ceil(cfg.maxErasedFreqFraction * double(nFreqs)));
-    candidateFreq = candidateFreq(ord(1:min(numel(ord), maxErasedFreqs)));
     for k = 1:numel(candidateFreq)
         freqNow = candidateFreq(k);
         freqRel = local_erasure_reliability_from_ratio_local( ...
-            freqRatio(freqNow), cfg.freqPowerRatioThreshold, cfg.minReliability, cfg.softSlope);
+            stats.freqRatio(freqNow), cfg.freqPowerRatioThreshold, cfg.minReliability, cfg.softSlope);
         relHop(freqIdx == freqNow) = min(relHop(freqIdx == freqNow), freqRel);
     end
 end
 if cfg.lowPowerFadeEnable
-    candidateFreqLow = find(isfinite(freqRatio) & freqRatio <= cfg.lowFreqPowerRatioThreshold);
     if ~isempty(candidateFreqLow)
-        [~, ord] = sort(freqRatio(candidateFreqLow), "ascend");
-        maxErasedFreqs = max(1, ceil(cfg.maxErasedFreqFraction * double(nFreqs)));
-        candidateFreqLow = candidateFreqLow(ord(1:min(numel(ord), maxErasedFreqs)));
         for k = 1:numel(candidateFreqLow)
             freqNow = candidateFreqLow(k);
             freqRel = local_erasure_reliability_from_low_ratio_local( ...
-                freqRatio(freqNow), cfg.lowFreqPowerRatioThreshold, cfg.minReliability, cfg.lowPowerSoftSlope);
+                stats.freqRatio(freqNow), cfg.lowFreqPowerRatioThreshold, cfg.minReliability, cfg.lowPowerSoftSlope);
             relHop(freqIdx == freqNow) = min(relHop(freqIdx == freqNow), freqRel);
         end
+    end
+end
+if ~isempty(adjacentPairs.powerIdx)
+    for k = 1:numel(adjacentPairs.powerIdx)
+        pairStart = adjacentPairs.powerIdx(k);
+        pairRel = local_erasure_reliability_from_ratio_local( ...
+            adjacentPairs.powerRatio(k), adjacentPairs.powerThreshold, cfg.minReliability, cfg.softSlope);
+        relHop(freqIdx == pairStart | freqIdx == pairStart + 1) = ...
+            min(relHop(freqIdx == pairStart | freqIdx == pairStart + 1), pairRel);
     end
 end
 if cfg.constellationMseEnable && cfg.freqConstellationMseEnable ...
-        && isfinite(refConstellationMse) && refConstellationMse > 0
-    freqMseRatio = freqConstellationMse ./ refConstellationMse;
-    candidateFreqMse = find( ...
-        isfinite(freqMseRatio) ...
-        & freqMseRatio >= cfg.freqConstellationMseRatioThreshold ...
-        & freqConstellationMse >= cfg.freqConstellationMseFloor);
+        && isfinite(stats.refConstellationMse) && stats.refConstellationMse > 0
     if ~isempty(candidateFreqMse)
-        [~, ord] = sort(freqMseRatio(candidateFreqMse), "descend");
-        maxErasedFreqs = max(1, ceil(cfg.maxErasedFreqFraction * double(nFreqs)));
-        candidateFreqMse = candidateFreqMse(ord(1:min(numel(ord), maxErasedFreqs)));
         for k = 1:numel(candidateFreqMse)
             freqNow = candidateFreqMse(k);
             freqRel = local_erasure_reliability_from_ratio_local( ...
-                freqMseRatio(freqNow), cfg.freqConstellationMseRatioThreshold, cfg.minReliability, cfg.constellationMseSoftSlope);
+                stats.freqMseRatio(freqNow), cfg.freqConstellationMseRatioThreshold, cfg.minReliability, cfg.constellationMseSoftSlope);
             relHop(freqIdx == freqNow) = min(relHop(freqIdx == freqNow), freqRel);
         end
     end
 end
+if ~isempty(adjacentPairs.mseIdx)
+    for k = 1:numel(adjacentPairs.mseIdx)
+        pairStart = adjacentPairs.mseIdx(k);
+        pairRel = local_erasure_reliability_from_ratio_local( ...
+            adjacentPairs.mseRatio(k), adjacentPairs.mseThreshold, cfg.minReliability, cfg.constellationMseSoftSlope);
+        relHop(freqIdx == pairStart | freqIdx == pairStart + 1) = ...
+            min(relHop(freqIdx == pairStart | freqIdx == pairStart + 1), pairRel);
+    end
+end
 
-hopRatio = hopPower ./ refPower;
+hopRatio = stats.hopPower ./ stats.refPower;
 candidateHop = find(isfinite(hopRatio) & hopRatio >= cfg.hopPowerRatioThreshold);
 for k = 1:numel(candidateHop)
     hopNow = candidateHop(k);
@@ -3942,11 +4148,11 @@ if cfg.lowPowerFadeEnable
     end
 end
 if cfg.constellationMseEnable
-    candidateHopMse = find(isfinite(hopConstellationMse) & hopConstellationMse >= cfg.constellationMseThreshold);
+    candidateHopMse = find(isfinite(stats.hopConstellationMse) & stats.hopConstellationMse >= cfg.constellationMseThreshold);
     for k = 1:numel(candidateHopMse)
         hopNow = candidateHopMse(k);
         hopRel = local_erasure_reliability_from_ratio_local( ...
-            hopConstellationMse(hopNow), cfg.constellationMseThreshold, cfg.minReliability, cfg.constellationMseSoftSlope);
+            stats.hopConstellationMse(hopNow), cfg.constellationMseThreshold, cfg.minReliability, cfg.constellationMseSoftSlope);
         relHop(hopNow) = min(relHop(hopNow), hopRel);
     end
 end
@@ -3960,6 +4166,209 @@ end
 if cfg.attenuateSymbols
     rOut = reliability .* rOut;
 end
+end
+
+function stats = local_measure_fh_erasure_stats_local(rIn, hopLen, totalLen, cfg, modCfg, freqIdx, nHops, nFreqs)
+stats = struct( ...
+    "hopPower", nan(nHops, 1), ...
+    "hopConstellationMse", nan(nHops, 1), ...
+    "validHop", false(nHops, 1), ...
+    "validMseHop", false(nHops, 1), ...
+    "hasUsablePower", false, ...
+    "refPower", NaN, ...
+    "refConstellationMse", NaN, ...
+    "freqPower", nan(nFreqs, 1), ...
+    "freqConstellationMse", nan(nFreqs, 1), ...
+    "freqRatio", nan(nFreqs, 1), ...
+    "freqMseRatio", nan(nFreqs, 1));
+
+for hopIdx = 1:nHops
+    idx = local_hop_symbol_indices_local(hopIdx, hopLen, totalLen, cfg.edgeGuardSymbols);
+    if isempty(idx)
+        idx = local_hop_symbol_indices_local(hopIdx, hopLen, totalLen, 0);
+    end
+    seg = rIn(idx);
+    stats.hopPower(hopIdx) = mean(abs(seg).^2);
+    if cfg.constellationMseEnable
+        stats.hopConstellationMse(hopIdx) = local_constellation_mse_for_erasure_local(seg, modCfg);
+    end
+end
+
+stats.validHop = isfinite(stats.hopPower) & stats.hopPower > 0;
+if ~any(stats.validHop)
+    return;
+end
+stats.hasUsablePower = true;
+stats.refPower = median(stats.hopPower(stats.validHop));
+if ~(isfinite(stats.refPower) && stats.refPower > 0)
+    stats.hasUsablePower = false;
+    return;
+end
+
+stats.validMseHop = isfinite(stats.hopConstellationMse) & stats.hopConstellationMse > 0;
+if any(stats.validMseHop)
+    stats.refConstellationMse = median(stats.hopConstellationMse(stats.validMseHop));
+end
+
+for freqNow = 1:nFreqs
+    use = stats.validHop & freqIdx == freqNow;
+    if any(use)
+        stats.freqPower(freqNow) = median(stats.hopPower(use));
+    end
+    if cfg.constellationMseEnable
+        useMse = stats.validMseHop & freqIdx == freqNow;
+        if any(useMse)
+            stats.freqConstellationMse(freqNow) = median(stats.hopConstellationMse(useMse));
+        end
+    end
+end
+
+stats.freqRatio = stats.freqPower ./ stats.refPower;
+if cfg.constellationMseEnable && isfinite(stats.refConstellationMse) && stats.refConstellationMse > 0
+    stats.freqMseRatio = stats.freqConstellationMse ./ stats.refConstellationMse;
+end
+end
+
+function [candidateFreq, candidateFreqLow, candidateFreqMse] = local_fh_erasure_candidate_freqs_local(stats, cfg, nFreqs)
+maxErasedFreqs = max(1, ceil(cfg.maxErasedFreqFraction * double(nFreqs)));
+
+candidateFreq = find(isfinite(stats.freqRatio) & stats.freqRatio >= cfg.freqPowerRatioThreshold);
+if ~isempty(candidateFreq)
+    [~, ord] = sort(stats.freqRatio(candidateFreq), "descend");
+    candidateFreq = candidateFreq(ord(1:min(numel(ord), maxErasedFreqs)));
+end
+candidateFreq = candidateFreq(:);
+
+candidateFreqLow = zeros(0, 1);
+if cfg.lowPowerFadeEnable
+    candidateFreqLow = find(isfinite(stats.freqRatio) & stats.freqRatio <= cfg.lowFreqPowerRatioThreshold);
+    if ~isempty(candidateFreqLow)
+        [~, ord] = sort(stats.freqRatio(candidateFreqLow), "ascend");
+        candidateFreqLow = candidateFreqLow(ord(1:min(numel(ord), maxErasedFreqs)));
+    end
+    candidateFreqLow = candidateFreqLow(:);
+end
+
+candidateFreqMse = zeros(0, 1);
+if cfg.constellationMseEnable && cfg.freqConstellationMseEnable ...
+        && isfinite(stats.refConstellationMse) && stats.refConstellationMse > 0
+    candidateFreqMse = find( ...
+        isfinite(stats.freqMseRatio) ...
+        & stats.freqMseRatio >= cfg.freqConstellationMseRatioThreshold ...
+        & stats.freqConstellationMse >= cfg.freqConstellationMseFloor);
+    if ~isempty(candidateFreqMse)
+        [~, ord] = sort(stats.freqMseRatio(candidateFreqMse), "descend");
+        candidateFreqMse = candidateFreqMse(ord(1:min(numel(ord), maxErasedFreqs)));
+    end
+    candidateFreqMse = candidateFreqMse(:);
+end
+end
+
+function pairScores = local_fh_erasure_adjacent_pair_scores_local(stats, cfg, nFreqs)
+pairScores = struct( ...
+    "powerIdx", zeros(0, 1), ...
+    "powerRatio", zeros(0, 1), ...
+    "powerThreshold", 1, ...
+    "mseIdx", zeros(0, 1), ...
+    "mseRatio", zeros(0, 1), ...
+    "mseThreshold", 1);
+if nFreqs < 2
+    return;
+end
+
+maxErasedFreqs = max(1, ceil(cfg.maxErasedFreqFraction * double(nFreqs)));
+maxPairCount = max(1, ceil(double(maxErasedFreqs) / 2));
+
+pairPowerRatio = 0.5 * (stats.freqRatio(1:end-1) + stats.freqRatio(2:end));
+powerThreshold = 1 + 0.5 * max(double(cfg.freqPowerRatioThreshold) - 1, 0);
+pairScores.powerThreshold = powerThreshold;
+powerIdx = find(isfinite(pairPowerRatio) & pairPowerRatio >= powerThreshold);
+if ~isempty(powerIdx)
+    [~, ord] = sort(pairPowerRatio(powerIdx), "descend");
+    powerIdx = powerIdx(ord(1:min(numel(ord), maxPairCount)));
+    pairScores.powerIdx = powerIdx(:);
+    pairScores.powerRatio = pairPowerRatio(powerIdx);
+end
+
+if cfg.constellationMseEnable && cfg.freqConstellationMseEnable ...
+        && isfinite(stats.refConstellationMse) && stats.refConstellationMse > 0
+    pairMseRatio = 0.5 * (stats.freqMseRatio(1:end-1) + stats.freqMseRatio(2:end));
+    pairMse = 0.5 * (stats.freqConstellationMse(1:end-1) + stats.freqConstellationMse(2:end));
+    mseThreshold = 1 + 0.5 * max(double(cfg.freqConstellationMseRatioThreshold) - 1, 0);
+    pairScores.mseThreshold = mseThreshold;
+    mseIdx = find( ...
+        isfinite(pairMseRatio) ...
+        & pairMseRatio >= mseThreshold ...
+        & pairMse >= double(cfg.freqConstellationMseFloor));
+    if ~isempty(mseIdx)
+        [~, ord] = sort(pairMseRatio(mseIdx), "descend");
+        mseIdx = mseIdx(ord(1:min(numel(ord), maxPairCount)));
+        pairScores.mseIdx = mseIdx(:);
+        pairScores.mseRatio = pairMseRatio(mseIdx);
+    end
+end
+end
+
+function rOut = local_apply_fh_erasure_freq_bandstop_local(rIn, freqIdx, hopLen, totalLen, targetFreqIdx, cfg, mitigation)
+rOut = rIn(:);
+targetFreqIdx = unique(round(double(targetFreqIdx(:))));
+if isempty(targetFreqIdx)
+    return;
+end
+
+detectCfg = local_fh_erasure_bandstop_cfg_local(mitigation, cfg);
+for k = 1:numel(targetFreqIdx)
+    freqNow = targetFreqIdx(k);
+    if ~(isfinite(freqNow) && freqNow >= 1)
+        continue;
+    end
+    hopList = find(freqIdx == freqNow);
+    if isempty(hopList)
+        continue;
+    end
+
+    obs = complex(zeros(0, 1));
+    for hopPos = 1:numel(hopList)
+        idxObs = local_hop_symbol_indices_local(hopList(hopPos), hopLen, totalLen, cfg.edgeGuardSymbols);
+        if isempty(idxObs)
+            idxObs = local_hop_symbol_indices_local(hopList(hopPos), hopLen, totalLen, 0);
+        end
+        obs = [obs; rOut(idxObs)]; %#ok<AGROW>
+    end
+    if numel(obs) < cfg.freqBandstopObservationSymbols
+        continue;
+    end
+
+    [~, info] = fft_bandstop_filter(obs, detectCfg);
+    if ~(isstruct(info) && isfield(info, "applied") && logical(info.applied) ...
+            && isfield(info, "selectedFreqBounds") && ~isempty(info.selectedFreqBounds))
+        continue;
+    end
+
+    applyCfg = detectCfg;
+    applyCfg.forcedFreqBounds = double(info.selectedFreqBounds);
+    for hopPos = 1:numel(hopList)
+        idxFull = local_hop_symbol_indices_local(hopList(hopPos), hopLen, totalLen, 0);
+        if isempty(idxFull)
+            continue;
+        end
+        [segOut, ~] = fft_bandstop_filter(rOut(idxFull), applyCfg);
+        rOut(idxFull) = segOut;
+    end
+end
+end
+
+function bandstopCfg = local_fh_erasure_bandstop_cfg_local(mitigation, cfg)
+if ~(isstruct(mitigation) && isfield(mitigation, "fftBandstop") && isstruct(mitigation.fftBandstop))
+    error("mitigation.fftBandstop is required for fh_erasure frequency bandstop.");
+end
+bandstopCfg = mitigation.fftBandstop;
+bandstopCfg.peakRatio = double(cfg.freqBandstopPeakRatio);
+bandstopCfg.edgeRatio = double(cfg.freqBandstopEdgeRatio);
+bandstopCfg.minFreqAbs = double(cfg.freqBandstopMinFreqAbs);
+bandstopCfg.maxBandwidthFrac = double(cfg.freqBandstopMaxBandwidthFrac);
+bandstopCfg.suppressToFloor = true;
+bandstopCfg.forcedFreqBounds = zeros(0, 2);
 end
 
 function [rOut, reliability] = local_apply_ml_fh_erasure_action_local(rIn, hopInfoUsed, mitigation, modCfg)
@@ -4128,6 +4537,12 @@ cfg.constellationMseSoftSlope = local_required_positive_scalar_local(raw, "const
 cfg.freqConstellationMseEnable = local_required_logical_scalar_local(raw, "freqConstellationMseEnable", "mitigation.fhErasure");
 cfg.freqConstellationMseRatioThreshold = local_required_positive_scalar_local(raw, "freqConstellationMseRatioThreshold", "mitigation.fhErasure");
 cfg.freqConstellationMseFloor = local_required_nonnegative_scalar_local(raw, "freqConstellationMseFloor", "mitigation.fhErasure");
+cfg.freqBandstopEnable = local_required_logical_scalar_local(raw, "freqBandstopEnable", "mitigation.fhErasure");
+cfg.freqBandstopObservationSymbols = local_required_positive_scalar_local(raw, "freqBandstopObservationSymbols", "mitigation.fhErasure");
+cfg.freqBandstopPeakRatio = local_required_positive_scalar_local(raw, "freqBandstopPeakRatio", "mitigation.fhErasure");
+cfg.freqBandstopEdgeRatio = local_required_positive_scalar_local(raw, "freqBandstopEdgeRatio", "mitigation.fhErasure");
+cfg.freqBandstopMinFreqAbs = local_required_nonnegative_scalar_local(raw, "freqBandstopMinFreqAbs", "mitigation.fhErasure");
+cfg.freqBandstopMaxBandwidthFrac = local_required_probability_scalar_local(raw, "freqBandstopMaxBandwidthFrac", "mitigation.fhErasure");
 cfg.mlFreqProbabilityThreshold = local_required_probability_scalar_local(raw, "mlFreqProbabilityThreshold", "mitigation.fhErasure");
 if cfg.mlFreqProbabilityThreshold >= 1
     error("mitigation.fhErasure.mlFreqProbabilityThreshold must be < 1.");
@@ -4150,6 +4565,16 @@ if cfg.lowPowerFadeEnable && (cfg.lowFreqPowerRatioThreshold <= 0 || cfg.lowHopP
 end
 if cfg.multipathNoiseGainRatioThreshold < 1
     error("mitigation.fhErasure.multipathNoiseGainRatioThreshold must be >= 1.");
+end
+if abs(cfg.freqBandstopObservationSymbols - round(cfg.freqBandstopObservationSymbols)) > 1e-12
+    error("mitigation.fhErasure.freqBandstopObservationSymbols must be an integer scalar.");
+end
+cfg.freqBandstopObservationSymbols = round(cfg.freqBandstopObservationSymbols);
+if cfg.freqBandstopEdgeRatio >= cfg.freqBandstopPeakRatio
+    error("mitigation.fhErasure.freqBandstopEdgeRatio must be smaller than freqBandstopPeakRatio.");
+end
+if cfg.freqBandstopMaxBandwidthFrac <= 0 || cfg.freqBandstopMaxBandwidthFrac >= 1
+    error("mitigation.fhErasure.freqBandstopMaxBandwidthFrac must be in (0, 1).");
 end
 end
 
@@ -6366,13 +6791,31 @@ nDataSymBase = dsss_symbol_count(nDemodSym, dsssCfg);
 scFdeCfg = sc_fde_payload_config(p);
 scFdePlan = sc_fde_payload_plan(nDataSymBase, scFdeCfg);
 nFhInputSym = nDataSymBase;
+ nFhInputSymPadded = nFhInputSym;
 if scFdePlan.enable
     nFhInputSym = scFdePlan.nTxSymbols;
+    nFhInputSymPadded = nFhInputSym;
 end
 fhCfg = derive_packet_fh_cfg(p.fh, pktIdx, offsets.fhOffsetHops, nFhInputSym);
+nPayloadSymForHopInfo = nFhInputSym;
+payloadDiversity = local_payload_fh_diversity_cfg_local(fhCfg);
 nDataSym = nFhInputSym;
-if isfield(fhCfg, "enable") && fhCfg.enable && fh_is_fast(fhCfg)
-    nDataSym = nFhInputSym * fh_hops_per_symbol(fhCfg);
+if isfield(fhCfg, "enable") && fhCfg.enable
+    if fh_is_fast(fhCfg)
+        if payloadDiversity.enable
+            error("fh.payloadDiversity only supports slow FH.");
+        end
+        nDataSym = nFhInputSym * fh_hops_per_symbol(fhCfg);
+    elseif payloadDiversity.enable
+        if scFdePlan.enable
+            nFhInputSymPadded = nFhInputSym;
+        else
+            logicalHopLen = local_required_positive_integer_local(fhCfg, "symbolsPerHop", "fhCfg");
+            nFhInputSymPadded = ceil(double(nFhInputSym) / double(logicalHopLen)) * logicalHopLen;
+        end
+        nDataSym = nFhInputSymPadded * payloadDiversity.copies;
+        nPayloadSymForHopInfo = nDataSym;
+    end
 end
 
 state = struct();
@@ -6384,13 +6827,15 @@ state.codedBitsLen = numel(codedBitsInt);
 state.nDemodSym = nDemodSym;
 state.nDataSymBase = nDataSymBase;
 state.nFhInputSym = nFhInputSym;
+state.nFhInputSymPadded = nFhInputSymPadded;
 state.nDataSym = nDataSym;
 state.intState = intState;
 state.stateOffsets = offsets;
 state.scrambleCfg = derive_packet_scramble_cfg(p.scramble, pktIdx, offsets.scrambleOffsetBits);
 state.dsssCfg = dsssCfg;
 state.fhCfg = fhCfg;
-state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nFhInputSym);
+state.payloadDiversity = payloadDiversity;
+state.hopInfo = hop_info_from_fh_cfg_local(state.fhCfg, nPayloadSymForHopInfo);
 state.scFdeCfg = scFdeCfg;
 state.scFdePlan = scFdePlan;
 state.scFdeDiversity = local_disabled_sc_fde_diversity_state_local();
@@ -6683,6 +7128,61 @@ switch fhAssumption
     otherwise
         error("Unknown nominal fh assumption: %s", string(fhAssumption));
 end
+end
+
+function cfg = local_payload_fh_diversity_cfg_local(fhCfg)
+cfg = struct("enable", false, "copies", 1, "indexOffset", 0, "indexShifts", 0);
+if ~(isstruct(fhCfg) && isfield(fhCfg, "payloadDiversity") && isstruct(fhCfg.payloadDiversity))
+    return;
+end
+raw = fhCfg.payloadDiversity;
+if ~(isfield(raw, "enable") && logical(raw.enable))
+    return;
+end
+if ~(isfield(fhCfg, "enable") && logical(fhCfg.enable))
+    error("fh.payloadDiversity requires fh.enable=true.");
+end
+if ~(isfield(fhCfg, "nFreqs") && ~isempty(fhCfg.nFreqs))
+    error("fh.payloadDiversity requires fh.nFreqs.");
+end
+nFreqs = local_required_positive_integer_local(fhCfg, "nFreqs", "fhCfg");
+copies = local_required_positive_integer_local(raw, "copies", "fh.payloadDiversity");
+indexOffset = local_required_positive_integer_local(raw, "indexOffset", "fh.payloadDiversity");
+if copies < 2
+    error("fh.payloadDiversity.copies must be >= 2 when enabled.");
+end
+indexShifts = mod((0:copies-1) .* indexOffset, nFreqs);
+if numel(unique(indexShifts)) ~= copies
+    error("fh.payloadDiversity indexOffset=%d revisits the same frequency within %d copies (nFreqs=%d).", ...
+        indexOffset, copies, nFreqs);
+end
+cfg = struct( ...
+    "enable", true, ...
+    "copies", copies, ...
+    "indexOffset", indexOffset, ...
+    "indexShifts", indexShifts(:).');
+end
+
+function value = local_required_positive_integer_local(s, fieldName, ownerName)
+if ~(isfield(s, fieldName) && ~isempty(s.(fieldName)))
+    error("%s.%s is required.", ownerName, fieldName);
+end
+value = double(s.(fieldName));
+if ~(isscalar(value) && isfinite(value) && abs(value - round(value)) < 1e-12 && value >= 1)
+    error("%s.%s must be a positive integer scalar, got %g.", ownerName, fieldName, value);
+end
+value = round(value);
+end
+
+function value = local_required_nonnegative_integer_local(s, fieldName, ownerName)
+if ~(isfield(s, fieldName) && ~isempty(s.(fieldName)))
+    error("%s.%s is required.", ownerName, fieldName);
+end
+value = double(s.(fieldName));
+if ~(isscalar(value) && isfinite(value) && abs(value - round(value)) < 1e-12 && value >= 0)
+    error("%s.%s must be a nonnegative integer scalar, got %g.", ownerName, fieldName, value);
+end
+value = round(value);
 end
 
 function y = fit_complex_length_local(x, targetLen)

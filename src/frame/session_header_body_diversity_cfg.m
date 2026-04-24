@@ -40,7 +40,7 @@ else
     freqSet = select_spread_header_freq_set(double(fhBase.freqSet(:).'), copies, waveform, channelCfg);
 end
 
-fhCfg = fhBase;
+fhCfg = local_disable_payload_diversity_local(fhBase);
 fhCfg.enable = true;
 fhCfg.mode = 'slow';
 fhCfg.sequenceType = 'linear';
@@ -48,4 +48,10 @@ fhCfg.sequenceType = 'linear';
 fhCfg.symbolsPerHop = copyLen;
 fhCfg.freqSet = freqSet;
 fhCfg.nFreqs = numel(freqSet);
+end
+
+function fhCfg = local_disable_payload_diversity_local(fhCfg)
+if isfield(fhCfg, "payloadDiversity") && isstruct(fhCfg.payloadDiversity)
+    fhCfg.payloadDiversity.enable = false;
+end
 end

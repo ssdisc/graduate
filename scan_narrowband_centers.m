@@ -29,6 +29,7 @@ opts = local_parse_inputs(varargin{:});
 addpath(genpath(fullfile(fileparts(mfilename("fullpath")), "src")));
 
 pBase = default_params( ...
+    "linkProfileName", "narrowband", ...
     "strictModelLoad", false, ...
     "requireTrainedMlModels", false, ...
     "loadMlModels", strings(1, 0));
@@ -85,6 +86,10 @@ for idx = 1:numel(centerPoints)
     row.errorMessage = "";
     row.berNoneEbN0_8 = NaN;
     row.berNoneEbN0_10 = NaN;
+    row.rawPerNoneEbN0_8 = NaN;
+    row.rawPerNoneEbN0_10 = NaN;
+    row.perNoneEbN0_8 = NaN;
+    row.perNoneEbN0_10 = NaN;
     row.frontNoneEbN0_8 = NaN;
     row.frontNoneEbN0_10 = NaN;
     row.headerNoneEbN0_8 = NaN;
@@ -93,6 +98,10 @@ for idx = 1:numel(centerPoints)
     row.payloadNoneEbN0_10 = NaN;
     row.berFhErasureEbN0_8 = NaN;
     row.berFhErasureEbN0_10 = NaN;
+    row.rawPerFhErasureEbN0_8 = NaN;
+    row.rawPerFhErasureEbN0_10 = NaN;
+    row.perFhErasureEbN0_8 = NaN;
+    row.perFhErasureEbN0_10 = NaN;
     row.frontFhErasureEbN0_8 = NaN;
     row.frontFhErasureEbN0_10 = NaN;
     row.headerFhErasureEbN0_8 = NaN;
@@ -106,10 +115,14 @@ for idx = 1:numel(centerPoints)
         runDirValue = local_run_dir_from_results(results);
         row.runDir = runDirValue;
 
-        [ber8, front8, header8, payload8] = local_metric_at(results, "none", 8);
-        [ber10, front10, header10, payload10] = local_metric_at(results, "none", 10);
+        [ber8, rawPer8, per8, front8, header8, payload8] = local_metric_at(results, "none", 8);
+        [ber10, rawPer10, per10, front10, header10, payload10] = local_metric_at(results, "none", 10);
         row.berNoneEbN0_8 = ber8;
         row.berNoneEbN0_10 = ber10;
+        row.rawPerNoneEbN0_8 = rawPer8;
+        row.rawPerNoneEbN0_10 = rawPer10;
+        row.perNoneEbN0_8 = per8;
+        row.perNoneEbN0_10 = per10;
         row.frontNoneEbN0_8 = front8;
         row.frontNoneEbN0_10 = front10;
         row.headerNoneEbN0_8 = header8;
@@ -117,10 +130,14 @@ for idx = 1:numel(centerPoints)
         row.payloadNoneEbN0_8 = payload8;
         row.payloadNoneEbN0_10 = payload10;
 
-        [berFh8, frontFh8, headerFh8, payloadFh8] = local_metric_at(results, "fh_erasure", 8);
-        [berFh10, frontFh10, headerFh10, payloadFh10] = local_metric_at(results, "fh_erasure", 10);
+        [berFh8, rawPerFh8, perFh8, frontFh8, headerFh8, payloadFh8] = local_metric_at(results, "fh_erasure", 8);
+        [berFh10, rawPerFh10, perFh10, frontFh10, headerFh10, payloadFh10] = local_metric_at(results, "fh_erasure", 10);
         row.berFhErasureEbN0_8 = berFh8;
         row.berFhErasureEbN0_10 = berFh10;
+        row.rawPerFhErasureEbN0_8 = rawPerFh8;
+        row.rawPerFhErasureEbN0_10 = rawPerFh10;
+        row.perFhErasureEbN0_8 = perFh8;
+        row.perFhErasureEbN0_10 = perFh10;
         row.frontFhErasureEbN0_8 = frontFh8;
         row.frontFhErasureEbN0_10 = frontFh10;
         row.headerFhErasureEbN0_8 = headerFh8;
@@ -128,10 +145,10 @@ for idx = 1:numel(centerPoints)
         row.payloadFhErasureEbN0_8 = payloadFh8;
         row.payloadFhErasureEbN0_10 = payloadFh10;
 
-        fprintf("[SCAN]       ok, runDir=%s, none(BER@8=%.4f, BER@10=%.4f), fh_erasure(BER@8=%.4f, BER@10=%.4f)\n", ...
+        fprintf("[SCAN]       ok, runDir=%s, none(BER@8=%.4f, PER@8=%.4f), fh_erasure(BER@8=%.4f, rawPER@8=%.4f, PER@8=%.4f)\n", ...
             char(runDirValue), ...
-            row.berNoneEbN0_8, row.berNoneEbN0_10, ...
-            row.berFhErasureEbN0_8, row.berFhErasureEbN0_10);
+            row.berNoneEbN0_8, row.perNoneEbN0_8, ...
+            row.berFhErasureEbN0_8, row.rawPerFhErasureEbN0_8, row.perFhErasureEbN0_8);
     catch ME
         row.errorMessage = string(ME.message);
         fprintf("[SCAN]       failed: %s\n", ME.message);
@@ -186,6 +203,10 @@ row = struct( ...
     "errorMessage", "", ...
     "berNoneEbN0_8", NaN, ...
     "berNoneEbN0_10", NaN, ...
+    "rawPerNoneEbN0_8", NaN, ...
+    "rawPerNoneEbN0_10", NaN, ...
+    "perNoneEbN0_8", NaN, ...
+    "perNoneEbN0_10", NaN, ...
     "frontNoneEbN0_8", NaN, ...
     "frontNoneEbN0_10", NaN, ...
     "headerNoneEbN0_8", NaN, ...
@@ -194,6 +215,10 @@ row = struct( ...
     "payloadNoneEbN0_10", NaN, ...
     "berFhErasureEbN0_8", NaN, ...
     "berFhErasureEbN0_10", NaN, ...
+    "rawPerFhErasureEbN0_8", NaN, ...
+    "rawPerFhErasureEbN0_10", NaN, ...
+    "perFhErasureEbN0_8", NaN, ...
+    "perFhErasureEbN0_10", NaN, ...
     "frontFhErasureEbN0_8", NaN, ...
     "frontFhErasureEbN0_10", NaN, ...
     "headerFhErasureEbN0_8", NaN, ...
@@ -216,8 +241,10 @@ end
 runDir = rootDir;
 end
 
-function [berVal, frontVal, headerVal, payloadVal] = local_metric_at(results, methodName, ebN0dB)
+function [berVal, rawPerVal, perVal, frontVal, headerVal, payloadVal] = local_metric_at(results, methodName, ebN0dB)
 berVal = NaN;
+rawPerVal = NaN;
+perVal = NaN;
 frontVal = NaN;
 headerVal = NaN;
 payloadVal = NaN;
@@ -239,6 +266,12 @@ if isempty(eIdx)
 end
 
 berVal = double(results.ber(mIdx, eIdx));
+if isfield(results, "rawPer") && size(results.rawPer, 1) >= mIdx && size(results.rawPer, 2) >= eIdx
+    rawPerVal = double(results.rawPer(mIdx, eIdx));
+end
+if isfield(results, "per") && size(results.per, 1) >= mIdx && size(results.per, 2) >= eIdx
+    perVal = double(results.per(mIdx, eIdx));
+end
 
 if isfield(results, "packetDiagnostics") && isfield(results.packetDiagnostics, "bob")
     bob = results.packetDiagnostics.bob;
@@ -252,8 +285,15 @@ if isfield(results, "packetDiagnostics") && isfield(results.packetDiagnostics, "
     elseif isfield(bob, "headerSuccessRate")
         headerVal = double(bob.headerSuccessRate(eIdx));
     end
+    if isfield(bob, "rawPayloadSuccessRate") && size(bob.rawPayloadSuccessRate, 1) >= mIdx ...
+            && size(bob.rawPayloadSuccessRate, 2) >= eIdx && ~isfinite(rawPerVal)
+        rawPerVal = max(min(1 - double(bob.rawPayloadSuccessRate(mIdx, eIdx)), 1), 0);
+    end
     if isfield(bob, "payloadSuccessRate") && size(bob.payloadSuccessRate, 1) >= mIdx
         payloadVal = double(bob.payloadSuccessRate(mIdx, eIdx));
+        if ~isfinite(perVal)
+            perVal = max(min(1 - payloadVal, 1), 0);
+        end
     end
 end
 end

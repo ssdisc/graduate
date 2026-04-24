@@ -21,6 +21,7 @@ end
 
 fhCfg = fhBase;
 fhCfg.enable = false;
+fhCfg = local_disable_payload_diversity_local(fhCfg);
 
 copies = preamble_diversity_copies(frameCfg);
 if copies <= 1
@@ -60,5 +61,11 @@ function syncLen = local_preamble_length(frameCfg)
 syncLen = 127;
 if isstruct(frameCfg) && isfield(frameCfg, "preambleLength") && ~isempty(frameCfg.preambleLength)
     syncLen = max(1, round(double(frameCfg.preambleLength)));
+end
+end
+
+function fhCfg = local_disable_payload_diversity_local(fhCfg)
+if isfield(fhCfg, "payloadDiversity") && isstruct(fhCfg.payloadDiversity)
+    fhCfg.payloadDiversity.enable = false;
 end
 end

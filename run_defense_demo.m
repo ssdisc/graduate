@@ -26,6 +26,7 @@ addpath(genpath(fullfile(fileparts(mfilename("fullpath")), "src")));
 
 requiredMlModels = local_required_ml_models(opts.MitigationMethod);
 p = default_params( ...
+    "linkProfileName", opts.InterferenceType, ...
     "strictModelLoad", true, ...
     "requireTrainedMlModels", true, ...
     "allowBatchModelFallback", false, ...
@@ -160,15 +161,7 @@ end
 end
 
 function [p, expectedActiveType, info] = local_apply_single_interference(p, interferenceType, rawParams, jsrDb)
-p.channel.impulseProb = 0;
-p.channel.impulseWeight = 0;
-p.channel.singleTone.enable = false;
-p.channel.singleTone.weight = 0;
-p.channel.narrowband.enable = false;
-p.channel.narrowband.weight = 0;
-p.channel.sweep.enable = false;
-p.channel.sweep.weight = 0;
-p.channel.multipath.enable = false;
+p = apply_link_profile(p, interferenceType);
 
 switch interferenceType
     case "impulse"
