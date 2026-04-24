@@ -102,6 +102,8 @@ while nextDataIndex <= nDataPackets
     nextDataIndex = nextDataIndex + kBlock;
 end
 
+packetSpecs = local_interleave_packets_across_blocks_local(packetSpecs);
+
 plan = struct();
 plan.enable = rsCfg.enable;
 plan.packetBitsPerPacket = pktBitsPerPacket;
@@ -113,6 +115,58 @@ plan.totalTxPacketCount = numel(packetSpecs);
 plan.dataPacketsPerBlock = rsCfg.dataPacketsPerBlock;
 plan.parityPacketsPerBlock = rsCfg.parityPacketsPerBlock;
 plan.packetSpecs = packetSpecs;
+end
+
+function packetSpecsOut = local_interleave_packets_across_blocks_local(packetSpecsIn)
+packetSpecsIn = packetSpecsIn(:);
+nPackets = numel(packetSpecsIn);
+if nPackets <= 1
+    packetSpecsOut = packetSpecsIn;
+    return;
+end
+
+blockIds = double([packetSpecsIn.blockIndex]);
+if any(~isfinite(blockIds)) || any(blockIds < 1)
+    error("RS packet interleaver requires positive finite blockIndex values.");
+end
+blockOrder = unique(blockIds(:).', "stable");
+nBlocks = numel(blockOrder);
+if nBlocks <= 1
+    packetSpecsOut = packetSpecsIn;
+    return;
+end
+
+idxByBlock = cell(nBlocks, 1);
+for blockPos = 1:nBlocks
+    idxNow = find(blockIds == blockOrder(blockPos));
+    if isempty(idxNow)
+        error("RS packet interleaver failed to collect packet indices for blockIndex=%g.", blockOrder(blockPos));
+    end
+    idxByBlock{blockPos} = idxNow(:).';
+end
+
+blockCounts = cellfun(@numel, idxByBlock);
+maxBlockLen = max(blockCounts);
+perm = zeros(nPackets, 1);
+dst = 1;
+for pos = 1:maxBlockLen
+    for blockPos = 1:nBlocks
+        idxNow = idxByBlock{blockPos};
+        if pos > numel(idxNow)
+            continue;
+        end
+        perm(dst) = idxNow(pos);
+        dst = dst + 1;
+    end
+end
+
+if dst ~= nPackets + 1
+    error("RS packet interleaver produced %d mapped packets, expected %d.", dst - 1, nPackets);
+end
+if numel(unique(perm)) ~= nPackets || any(perm < 1 | perm > nPackets)
+    error("RS packet interleaver generated an invalid permutation.");
+end
+packetSpecsOut = packetSpecsIn(perm);
 end
 
 function parityBytes = local_rs_encode_parity_bytes_local(dataBytes, parityPackets)

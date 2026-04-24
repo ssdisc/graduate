@@ -19,6 +19,7 @@ local_require_struct_field_local(pOut.fh, "payloadDiversity", "p.fh");
 local_require_struct_field_local(pOut, "frame", "p");
 local_require_struct_field_local(pOut.frame, "sessionHeaderBodyDiversity", "p.frame");
 local_require_struct_field_local(pOut.frame, "preambleDiversity", "p.frame");
+local_require_struct_field_local(pOut, "waveform", "p");
 local_require_struct_field_local(pOut, "packet", "p");
 local_require_struct_field_local(pOut, "outerRs", "p");
 local_require_struct_field_local(pOut, "fec", "p");
@@ -41,6 +42,8 @@ switch profileName
         local_require_struct_field_local(pOut.channel, "narrowband", "p.channel");
         pOut.channel.narrowband.enable = true;
         pOut.channel.narrowband.weight = local_positive_default_local(pOut.channel.narrowband.weight, 1, "p.channel.narrowband.weight");
+        pOut.waveform.sampleRateHz = 450e3;
+        pOut.waveform.symbolRateHz = pOut.waveform.sampleRateHz / double(pOut.waveform.sps);
         pOut.scFde.enable = false;
         pOut.rxSync.multipathEq.enable = false;
         safeControlFreqSet = local_narrowband_control_freq_set_local(pOut.fh.freqSet);
@@ -51,8 +54,8 @@ switch profileName
         pOut.frame.sessionHeaderBodyDiversity.freqSet = safeControlFreqSet;
         pOut.fec.ldpc.rate = "1/3";
         pOut.packet.payloadBitsPerPacket = 5400;
-        pOut.outerRs.dataPacketsPerBlock = 3;
-        pOut.outerRs.parityPacketsPerBlock = 9;
+        pOut.outerRs.dataPacketsPerBlock = 2;
+        pOut.outerRs.parityPacketsPerBlock = 11;
         pOut.mitigation.methods = ["none" "fh_erasure"];
 
     case "rayleigh_multipath"
