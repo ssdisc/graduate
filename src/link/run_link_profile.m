@@ -52,6 +52,7 @@ for pointIdx = 1:nPoints
         rawPacketOkByMethod = cell(nMethods, 1);
         frontPacketOkByMethod = cell(nMethods, 1);
         headerPacketOkByMethod = cell(nMethods, 1);
+        rxCursorByMethod = repmat(local_initial_packet_cursor_local(txArtifacts), nMethods, 1);
         for methodIdx = 1:nMethods
             rxPayloadByMethod{methodIdx} = repmat({uint8([])}, numel(txPackets), 1);
             rawPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
@@ -59,12 +60,21 @@ for pointIdx = 1:nPoints
             headerPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
         end
 
+        txBurst = txScale * txArtifacts.burstForChannel(:);
+        [rxBurst, ~, chState] = channel_bg_impulsive(txBurst, noisePsdLin, pointChannel);
+        captureGuardSamples = local_capture_guard_samples_local(runtimeCfg, waveform);
+
         for pktIdx = 1:numel(txPackets)
             txPacket = txPackets(pktIdx);
-            txSamples = txScale * txPacket.txSymForChannel(:);
-            [rxSamples, ~, chState] = channel_bg_impulsive(txSamples, noisePsdLin, pointChannel);
-
+            pktLenSamples = numel(txPacket.txSymForChannel);
             for methodIdx = 1:nMethods
+                rxCursor = max(1, round(double(rxCursorByMethod(methodIdx))));
+                rxStop = min(numel(rxBurst), rxCursor + pktLenSamples + captureGuardSamples - 1);
+                if rxCursor > numel(rxBurst)
+                    rxWindow = complex(zeros(0, 1));
+                else
+                    rxWindow = rxBurst(rxCursor:rxStop);
+                end
                 rxCfg = struct( ...
                     "packetIndex", pktIdx, ...
                     "runtimeCfg", runtimeCfg, ...
@@ -72,17 +82,20 @@ for pointIdx = 1:nPoints
                     "ebN0dB", double(budget.bob.ebN0dB(pointIdx)), ...
                     "jsrDb", double(budget.bob.jsrDb(pointIdx)), ...
                     "noisePsdLin", noisePsdLin, ...
-                    "channelState", chState);
-                rxPacket = local_run_profile_packet_rx_local(profileName, rxSamples, txArtifacts, rxCfg);
+                    "channelState", chState, ...
+                    "windowStartSample", double(rxCursor));
+                rxPacket = local_run_profile_packet_rx_local(profileName, rxWindow, txArtifacts, rxCfg);
                 rxPayloadByMethod{methodIdx}{pktIdx} = rxPacket.payloadBits;
                 rawPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.rawPacketOk);
                 frontPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.frontEndOk);
                 headerPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.headerOk);
+                rxCursorByMethod(methodIdx) = local_advance_packet_cursor_local( ...
+                    rxCursor, pktLenSamples, rxPacket, numel(rxBurst));
             end
         end
 
         for methodIdx = 1:nMethods
-            [payloadBitsOut, dataPacketOkOut, rsInfo] = outer_rs_recover_payload( ...
+            [payloadBitsOut, ~, rsInfo] = outer_rs_recover_payload( ...
                 rxPayloadByMethod{methodIdx}, ...
                 rawPacketOkByMethod{methodIdx}, ...
                 txPackets, ...
@@ -122,7 +135,7 @@ results.per = per;
 results.params = runtimeCfg;
 results.linkSpec = linkSpec;
 results.runtime = struct( ...
-    "backend", "packet_sim_v1", ...
+    "backend", "continuous_burst_v2", ...
     "profileName", profileName, ...
     "txSkeleton", string(linkSpec.runtime.txSkeleton));
 results.txArtifacts = txArtifacts;
@@ -152,13 +165,13 @@ results.rxResults = struct();
 results.rxResults.bob = local_build_standardized_rx_results_local(results, payloadLast);
 results.commonDiagnostics = struct( ...
     "orchestrator", "run_link_profile", ...
-    "backend", "packet_sim_v1", ...
+    "backend", "continuous_burst_v2", ...
     "burstDurationSec", double(burstReport.burstDurationSec));
 results.profileDiagnostics = struct( ...
     "profileName", profileName, ...
     "txMapper", string(linkSpec.linkProfile.txMapper), ...
     "rxChain", string(linkSpec.linkProfile.rxChain), ...
-    "runtimeBackend", "packet_sim_v1");
+    "runtimeBackend", "continuous_burst_v2");
 results.summary = make_summary(results);
 
 if isfield(runtimeCfg.sim, "saveFigures") && logical(runtimeCfg.sim.saveFigures) ...
@@ -208,6 +221,54 @@ end
 pointChannel = adapt_channel_for_sps(pointChannel, waveform, runtimeCfg.fh);
 end
 
+function cursor = local_initial_packet_cursor_local(txArtifacts)
+cursor = 1;
+if isfield(txArtifacts, "profileMeta") && isstruct(txArtifacts.profileMeta) ...
+        && isfield(txArtifacts.profileMeta, "sessionFramePlan") && isstruct(txArtifacts.profileMeta.sessionFramePlan) ...
+        && isfield(txArtifacts.profileMeta.sessionFramePlan, "txBurstForChannel") ...
+        && ~isempty(txArtifacts.profileMeta.sessionFramePlan.txBurstForChannel)
+    cursor = numel(txArtifacts.profileMeta.sessionFramePlan.txBurstForChannel) + 1;
+end
+end
+
+function guardSamples = local_capture_guard_samples_local(runtimeCfg, waveform)
+guardSymbols = 8;
+if isfield(runtimeCfg, "channel") && isstruct(runtimeCfg.channel)
+    channelCfg = runtimeCfg.channel;
+    if isfield(channelCfg, "maxDelaySymbols") && isfinite(double(channelCfg.maxDelaySymbols))
+        guardSymbols = max(guardSymbols, ceil(double(channelCfg.maxDelaySymbols)) + 8);
+    elseif isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
+            && isfield(channelCfg.multipath, "enable") && logical(channelCfg.multipath.enable)
+        if isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols)
+            guardSymbols = max(guardSymbols, ceil(max(double(channelCfg.multipath.pathDelaysSymbols(:)))) + 8);
+        elseif isfield(channelCfg.multipath, "pathDelays") && ~isempty(channelCfg.multipath.pathDelays)
+            guardSymbols = max(guardSymbols, ceil(max(double(channelCfg.multipath.pathDelays(:)))) + 8);
+        end
+    end
+end
+
+sps = 1;
+if isstruct(waveform) && isfield(waveform, "enable") && logical(waveform.enable) ...
+        && isfield(waveform, "sps") && isfinite(double(waveform.sps))
+    sps = max(1, round(double(waveform.sps)));
+end
+guardSamples = max(8, guardSymbols * sps);
+end
+
+function nextCursor = local_advance_packet_cursor_local(cursor, nominalPacketLen, rxPacket, totalSamples)
+nextCursor = double(cursor) + double(nominalPacketLen);
+if isfield(rxPacket, "commonDiagnostics") && isstruct(rxPacket.commonDiagnostics) ...
+        && isfield(rxPacket.commonDiagnostics, "capture") && isstruct(rxPacket.commonDiagnostics.capture) ...
+        && isfield(rxPacket.commonDiagnostics.capture, "packetStopSample") ...
+        && isfinite(double(rxPacket.commonDiagnostics.capture.packetStopSample))
+    nextCursor = double(cursor) + ceil(double(rxPacket.commonDiagnostics.capture.packetStopSample));
+end
+if ~(isfinite(nextCursor) && nextCursor > double(cursor))
+    nextCursor = double(cursor) + double(nominalPacketLen);
+end
+nextCursor = min(double(totalSamples) + 1, nextCursor);
+end
+
 function scan = local_build_scan_struct_local(budget)
 scan = struct( ...
     "nSnr", double(budget.nSnr), ...
@@ -236,7 +297,7 @@ tx.powerErrorLin = tx.averagePowerLin - tx.configuredPowerLin;
 tx.powerErrorDb = tx.averagePowerDb - tx.configuredPowerDb;
 end
 
-function spectrum = local_build_spectrum_report_local(runtimeCfg, txArtifacts)
+function spectrum = local_build_spectrum_report_local(~, txArtifacts)
 waveform = txArtifacts.commonMeta.waveform;
 rolloff = 0;
 if isfield(waveform, "rolloff")
@@ -378,7 +439,7 @@ for idx = 1:nMethods
     rxResults(idx).profileDiagnostics = struct( ...
         "profileName", string(results.linkSpec.linkProfile.name), ...
         "receiver", string(results.linkSpec.linkProfile.rxChain), ...
-        "backend", "packet_sim_v1", ...
+        "backend", "continuous_burst_v2", ...
         "role", "bob");
 end
 end

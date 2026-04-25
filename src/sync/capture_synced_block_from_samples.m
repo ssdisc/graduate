@@ -20,6 +20,9 @@ front = struct( ...
     "bootstrapPath", "", ...
     "bootstrapCapture", struct(), ...
     "startIdx", NaN, ...
+    "packetStartSample", NaN, ...
+    "packetStopSample", NaN, ...
+    "packetSampleLen", NaN, ...
     "syncInfo", struct(), ...
     "rxSync", complex(zeros(0, 1)), ...
     "rFull", complex(zeros(0, 1)), ...
@@ -51,6 +54,9 @@ if isfield(syncCfgStage, "fineSearchRadius") && ~isempty(syncCfgStage.fineSearch
     fineSearchRadius = round(double(syncCfgStage.fineSearchRadius));
 end
 searchRadius = max([8 * syncStageSps, round(numel(syncRefStage) / 4), fineSearchRadius + 4 * syncStageSps]);
+if isfield(syncCfgStage, "maxSearchIndex") && isfinite(double(syncCfgStage.maxSearchIndex))
+    searchRadius = min(searchRadius, max(4 * syncStageSps, round(double(syncCfgStage.maxSearchIndex))));
+end
 [startIdxStage, syncInfoStage] = local_refine_stage_capture_local( ...
     capture.rxSync, syncRefStage, capture.startIdx, syncCfgStage, searchRadius);
 if isempty(startIdxStage) || ~isfinite(startIdxStage)
@@ -73,6 +79,9 @@ syncInfo = local_merge_stage_sync_info_local(syncInfoStage, timingInfo, syncComp
 
 front.ok = true;
 front.startIdx = startIdx;
+front.packetStartSample = local_packet_raw_start_sample_local(startIdx, waveform, syncStageSps);
+front.packetSampleLen = local_packet_sample_length_local(totalLen, waveform);
+front.packetStopSample = double(front.packetStartSample) + double(front.packetSampleLen) - 1;
 front.syncInfo = syncInfo;
 front.rxSync = capture.rxSync;
 front.rFull = rFull;
@@ -99,7 +108,7 @@ relStage = local_fit_reliability_length_local(relStage, numel(rxStage));
 end
 
 function [rFull, reliabilityFull, ok] = local_extract_symbol_block_local( ...
-    capture, rawReliabilityStage, rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, mitigation, modCfg, waveform, syncStageSps)
+    capture, rawReliabilityStage, rxPrep, relSamplePrep, startIdx, totalLen, fhCaptureCfg, syncCfgUse, ~, modCfg, waveform, syncStageSps)
 rFull = complex(zeros(0, 1));
 reliabilityFull = zeros(0, 1);
 ok = false;
@@ -309,6 +318,21 @@ if ~waveform.enable
     return;
 end
 nSample = (nSym - 1) * round(double(waveform.sps)) + numel(waveform.rrcTaps);
+end
+
+function startSample = local_packet_raw_start_sample_local(startIdx, waveform, stageSps)
+startIdx = double(startIdx);
+if ~(isfinite(startIdx) && startIdx >= 1)
+    startSample = NaN;
+    return;
+end
+if ~(isstruct(waveform) && isfield(waveform, "enable") && logical(waveform.enable))
+    startSample = startIdx;
+    return;
+end
+stageSps = max(1, round(double(stageSps)));
+decim = round(double(waveform.sps) / double(stageSps));
+startSample = 1 + (startIdx - 1) * double(decim);
 end
 
 function sampleIdx = local_symbol_boundary_sample_index_local(nLeadingSym, waveform)
@@ -797,6 +821,9 @@ for k = 1:K
     end
     searchRadiusWinner = max([8 * syncStageSps, round(numel(syncRefStageSingle) / 4), ...
         fineSearchRadiusStage + 4 * syncStageSps]);
+    if isfield(syncCfgStage, "maxSearchIndex") && isfinite(double(syncCfgStage.maxSearchIndex))
+        searchRadiusWinner = min(searchRadiusWinner, max(4 * syncStageSps, round(double(syncCfgStage.maxSearchIndex))));
+    end
 
     [winnerStartIdxStageK, winnerSyncInfoStageK] = local_refine_stage_capture_local( ...
         captureK.rxSync, syncRefStageSingle, captureK.startIdx, syncCfgStage, searchRadiusWinner);

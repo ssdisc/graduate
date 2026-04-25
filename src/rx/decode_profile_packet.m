@@ -14,33 +14,49 @@ runtimeCfg = rxCfg.runtimeCfg;
 waveform = resolve_waveform_cfg(runtimeCfg);
 method = string(rxCfg.method);
 profileName = string(profileName);
-
-rxDehopped = local_dehop_packet_samples_local(rxSamples(:), pkt, waveform);
-ySymRaw = pulse_rx_to_symbol_rate(rxDehopped, waveform);
 expectedLen = numel(pkt.txSymPkt);
-frontEndOk = numel(ySymRaw) >= expectedLen;
-ySymRaw = local_fit_complex_length_local(ySymRaw, expectedLen);
 
-[headerSym, dataSymRaw, symbolReliability, frontEndDiag] = local_profile_frontend_local( ...
-    profileName, method, ySymRaw, pkt, runtimeCfg, rxCfg);
+[sampleAction, symbolAction] = local_split_receiver_actions_local(profileName, method);
+syncCfg = local_prepare_capture_sync_cfg_local(runtimeCfg.rxSync, runtimeCfg.channel);
+fhCaptureCfg = local_packet_sample_fh_capture_cfg_local(pkt, waveform);
+bootstrapChain = local_capture_bootstrap_chain_local(method);
+front = capture_synced_block_from_samples( ...
+    rxSamples(:), pkt.syncSym(:), expectedLen, syncCfg, runtimeCfg.mitigation, ...
+    runtimeCfg.mod, waveform, sampleAction, bootstrapChain, fhCaptureCfg);
+
+frontEndOk = logical(front.ok);
+ySymRaw = complex(zeros(expectedLen, 1));
+symbolReliabilityFront = zeros(expectedLen, 1);
+if frontEndOk
+    ySymRaw = local_fit_complex_length_local(front.rFull, expectedLen);
+    symbolReliabilityFront = local_expand_reliability_local(front.reliabilityFull, expectedLen);
+end
+
+if frontEndOk
+    [headerSym, dataSymRaw, symbolReliability, frontEndDiag] = local_profile_frontend_local( ...
+        profileName, symbolAction, ySymRaw, symbolReliabilityFront, pkt, runtimeCfg, rxCfg);
+else
+    [headerSym, dataSymRaw, symbolReliability, frontEndDiag] = local_failed_frontend_placeholder_local(pkt);
+end
 frontEndOk = frontEndOk && logical(frontEndDiag.ok);
 
 hdrBits = decode_phy_header_symbols(headerSym, runtimeCfg.frame, runtimeCfg.fec, runtimeCfg.softMetric);
 [phy, headerOk] = parse_phy_header_bits(hdrBits, runtimeCfg.frame);
 headerOk = headerOk && isfield(phy, "packetIndex") && double(phy.packetIndex) == double(pkt.packetIndex);
 
-packetDataBitsRx = uint8([]);
 payloadBits = uint8([]);
 sessionHeaderOk = false;
 crcOk = false;
 profileDiag = struct();
 if headerOk
+    rxCfgPayload = rxCfg;
+    rxCfgPayload.frontEnd = frontEndDiag;
     [packetDataBitsRx, symbolReliabilityData, profileDiag] = local_decode_payload_local( ...
-        profileName, method, dataSymRaw, symbolReliability, pkt, runtimeCfg, rxCfg);
+        profileName, method, dataSymRaw, symbolReliability, pkt, runtimeCfg, rxCfgPayload);
     packetDataBitsRx = fit_bits_length(packetDataBitsRx, numel(pkt.packetDataBits));
     crcOk = crc16_ccitt_bits(packetDataBitsRx) == phy.packetDataCrc16;
     if logical(pkt.hasSessionHeader)
-        [metaRx, payloadBits, sessionHeaderOk] = parse_session_header_bits(packetDataBitsRx, runtimeCfg.frame); %#ok<ASGLU>
+        [~, payloadBits, sessionHeaderOk] = parse_session_header_bits(packetDataBitsRx, runtimeCfg.frame);
     else
         payloadBits = packetDataBitsRx;
         sessionHeaderOk = true;
@@ -65,21 +81,24 @@ rxResult.metrics = struct( ...
     "jsrDb", double(rxCfg.jsrDb), ...
     "packetIndex", double(pkt.packetIndex), ...
     "headerCrcOk", logical(crcOk), ...
-    "sessionHeaderOk", logical(sessionHeaderOk));
+    "sessionHeaderOk", logical(sessionHeaderOk), ...
+    "packetStartSample", double(front.packetStartSample), ...
+    "packetStopSample", double(front.packetStopSample));
 rxResult.commonDiagnostics = struct( ...
     "profileName", profileName, ...
     "expectedSymbols", expectedLen, ...
     "receivedSymbols", numel(ySymRaw), ...
+    "capture", local_capture_diag_local(front), ...
     "frontEnd", frontEndDiag);
 rxResult.profileDiagnostics = profileDiag;
 end
 
-function [headerSym, dataSymRaw, symbolReliability, diagOut] = local_profile_frontend_local(profileName, method, ySymRaw, pkt, runtimeCfg, rxCfg)
+function [headerSym, dataSymRaw, symbolReliability, diagOut] = local_profile_frontend_local(profileName, method, ySymRaw, symbolReliabilityIn, pkt, runtimeCfg, rxCfg)
 headerStart = numel(pkt.syncSym) + 1;
 headerStop = headerStart + double(pkt.nPhyHeaderSymTx) - 1;
 dataStart = headerStop + 1;
 
-symbolReliability = ones(numel(ySymRaw), 1);
+symbolReliability = local_expand_reliability_local(symbolReliabilityIn, numel(ySymRaw));
 diagOut = struct("ok", true);
 ySymUse = ySymRaw;
 
@@ -87,7 +106,7 @@ switch profileName
     case "impulse"
         if method ~= "none"
             [ySymUse, reliability] = mitigate_impulses(ySymRaw, method, runtimeCfg.mitigation);
-            symbolReliability = local_expand_reliability_local(reliability, numel(ySymRaw));
+            symbolReliability = min(symbolReliability, local_expand_reliability_local(reliability, numel(ySymRaw)));
         end
         diagOut.frontEndMethod = method;
 
@@ -104,6 +123,7 @@ switch profileName
                 numel(rxCfg.channelState.multipathTaps));
             ySymUse = local_apply_frequency_aware_equalizer_block_local(ySymRaw, eq, freqBySymbol);
             diagOut.headerEqualizer = eq.method;
+            diagOut.payloadEqualizer = eq;
         else
             diagOut.headerEqualizer = "none";
         end
@@ -113,17 +133,25 @@ switch profileName
 end
 
 headerSym = ySymUse(headerStart:headerStop);
-dataSymRaw = ySymRaw(dataStart:end);
+if profileName == "rayleigh_multipath"
+    dataSymRaw = ySymRaw(dataStart:end);
+else
+    dataSymRaw = ySymUse(dataStart:end);
+end
 if profileName == "impulse"
     symbolReliability = symbolReliability(dataStart:end);
 end
 end
 
+function [headerSym, dataSymRaw, symbolReliability, diagOut] = local_failed_frontend_placeholder_local(pkt)
+headerSym = complex(zeros(double(pkt.nPhyHeaderSymTx), 1));
+dataSymRaw = complex(zeros(double(pkt.nDataSymTx), 1));
+symbolReliability = zeros(double(pkt.nDataSymTx), 1);
+diagOut = struct("ok", false, "reason", "capture_failed");
+end
+
 function [packetDataBitsRx, symbolReliabilityData, profileDiag] = local_decode_payload_local(profileName, method, dataSymRaw, symbolReliabilityIn, pkt, runtimeCfg, rxCfg)
 profileDiag = struct();
-packetDataBitsRx = uint8([]);
-symbolReliabilityData = ones(numel(dataSymRaw), 1);
-
 dataSymUse = dataSymRaw(:);
 reliabilityUse = ones(numel(dataSymUse), 1);
 if ~isempty(symbolReliabilityIn)
@@ -136,14 +164,17 @@ switch profileName
 
     case "narrowband"
         if method == "fh_erasure"
-            [reliabilityUse, erasureInfo] = local_narrowband_hop_reliability_local(dataSymUse, pkt, runtimeCfg);
+            [reliabilityNow, erasureInfo] = local_narrowband_hop_reliability_local(dataSymUse, pkt, runtimeCfg);
+            reliabilityUse = min(reliabilityUse, local_expand_reliability_local(reliabilityNow, numel(dataSymUse)));
             profileDiag.hopReliability = erasureInfo.hopReliability;
             profileDiag.freqReliability = erasureInfo.freqReliability;
         end
 
     case "rayleigh_multipath"
-        [dataSymUse, reliabilityUse, scFdeDiag] = local_sc_fde_payload_decode_local( ...
+        [dataSymUse, reliabilityNow, scFdeDiag] = local_sc_fde_payload_decode_local( ...
             dataSymUse, pkt, runtimeCfg, rxCfg, method);
+        reliabilityUse = local_expand_reliability_local(reliabilityUse, numel(dataSymUse));
+        reliabilityUse = min(reliabilityUse, local_expand_reliability_local(reliabilityNow, numel(dataSymUse)));
         profileDiag.scFde = scFdeDiag;
 
     otherwise
@@ -193,12 +224,15 @@ if ~(isstruct(plan) && isfield(plan, "enable") && logical(plan.enable))
     return;
 end
 
-if ~isfield(rxCfg, "channelState") || ~isfield(rxCfg.channelState, "multipathTaps")
-    error("Rayleigh multipath receiver requires rxCfg.channelState.multipathTaps.");
-end
-h = rxCfg.channelState.multipathTaps(:);
-if isempty(h)
-    h = 1;
+if isfield(rxCfg, "frontEnd") && isstruct(rxCfg.frontEnd) ...
+        && isfield(rxCfg.frontEnd, "payloadEqualizer") && isstruct(rxCfg.frontEnd.payloadEqualizer) ...
+        && isfield(rxCfg.frontEnd.payloadEqualizer, "hEst") && ~isempty(rxCfg.frontEnd.payloadEqualizer.hEst)
+    h = rxCfg.frontEnd.payloadEqualizer.hEst(:);
+elseif isfield(rxCfg, "channelState") && isstruct(rxCfg.channelState) ...
+        && isfield(rxCfg.channelState, "multipathTaps") && ~isempty(rxCfg.channelState.multipathTaps)
+    h = rxCfg.channelState.multipathTaps(:);
+else
+    error("Rayleigh multipath receiver requires a preamble-estimated or channelState multipath channel.");
 end
 if numel(h) > double(plan.cpLen) + 1
     error("SC-FDE decode requires channel length <= cpLen+1. Channel length=%d, cpLen=%d.", ...
@@ -274,39 +308,129 @@ else
 end
 end
 
-function rxOut = local_dehop_packet_samples_local(rxIn, pkt, waveform)
-rxOut = rxIn(:);
-nSync = numel(pkt.syncSym);
-nHeader = double(pkt.nPhyHeaderSymTx);
-headerStart = local_symbol_boundary_sample_index_local(nSync, waveform);
-dataStart = local_symbol_boundary_sample_index_local(nSync + nHeader, waveform);
+function [sampleAction, symbolAction] = local_split_receiver_actions_local(profileName, method)
+profileName = string(profileName);
+method = lower(string(method));
+sampleAction = "none";
+symbolAction = "none";
+if method == "none"
+    return;
+end
 
-if ~(isfield(pkt, "preambleSampleHopInfo") && isstruct(pkt.preambleSampleHopInfo))
-    error("Packet is missing preambleSampleHopInfo required by the independent receiver.");
+sampleActions = ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard"];
+symbolActions = ["adaptive_notch" "fft_notch" "fft_bandstop" "stft_notch" "fh_erasure"];
+
+if any(method == sampleActions)
+    sampleAction = method;
+    return;
 end
-if isfield(pkt.preambleSampleHopInfo, "enable") && pkt.preambleSampleHopInfo.enable
-    preambleStop = min(numel(rxOut), headerStart - 1);
-    if preambleStop >= 1
-        rxOut(1:preambleStop) = fh_demodulate_samples(rxOut(1:preambleStop), pkt.preambleSampleHopInfo, waveform);
+if any(method == symbolActions) || profileName == "rayleigh_multipath"
+    symbolAction = method;
+    return;
+end
+error("Unsupported receiver method split for %s: %s.", char(profileName), char(method));
+end
+
+function syncCfg = local_prepare_capture_sync_cfg_local(syncCfgIn, channelCfg)
+syncCfg = syncCfgIn;
+if ~isfield(syncCfg, "minSearchIndex") || ~isfinite(double(syncCfg.minSearchIndex))
+    syncCfg.minSearchIndex = 1;
+end
+if ~isfield(syncCfg, "maxSearchIndex") || ~isfinite(double(syncCfg.maxSearchIndex))
+    syncCfg.maxSearchIndex = local_default_capture_search_symbols_local(channelCfg);
+end
+end
+
+function bootstrapChain = local_capture_bootstrap_chain_local(method)
+method = lower(string(method));
+if any(method == ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard"])
+    bootstrapChain = "raw";
+    return;
+end
+bootstrapChain = "raw";
+end
+
+function fhCaptureCfg = local_packet_sample_fh_capture_cfg_local(pkt, waveform)
+fhCaptureCfg = struct("enable", false);
+if ~(isstruct(waveform) && isfield(waveform, "enable") && logical(waveform.enable))
+    return;
+end
+preambleEnabled = local_effective_fh_capture_enabled_local(pkt, "preambleFhCfg");
+headerEnabled = local_effective_fh_capture_enabled_local(pkt, "phyHeaderFhCfg");
+dataEnabled = local_effective_fh_capture_enabled_local(pkt, "fhCfg");
+if ~(preambleEnabled || headerEnabled || dataEnabled)
+    return;
+end
+
+if ~preambleEnabled
+    pkt.preambleFhCfg = struct("enable", false);
+end
+if ~headerEnabled
+    pkt.phyHeaderFhCfg = struct("enable", false);
+end
+if ~dataEnabled
+    pkt.fhCfg = struct("enable", false);
+end
+
+fhCaptureCfg = struct( ...
+    "enable", true, ...
+    "syncSymbols", double(numel(pkt.syncSym)), ...
+    "headerSymbols", double(pkt.nPhyHeaderSymTx), ...
+    "preambleFhCfg", pkt.preambleFhCfg, ...
+    "headerFhCfg", pkt.phyHeaderFhCfg, ...
+    "dataFhCfg", pkt.fhCfg);
+end
+
+function searchMax = local_default_capture_search_symbols_local(channelCfg)
+searchMax = 6;
+mpExtra = 0;
+if isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
+        && isfield(channelCfg.multipath, "enable") && logical(channelCfg.multipath.enable)
+    if isfield(channelCfg.multipath, "pathDelaysSymbols") && ~isempty(channelCfg.multipath.pathDelaysSymbols)
+        mpExtra = max(double(channelCfg.multipath.pathDelaysSymbols(:)));
+    elseif isfield(channelCfg.multipath, "pathDelays") && ~isempty(channelCfg.multipath.pathDelays)
+        mpExtra = max(double(channelCfg.multipath.pathDelays(:)));
     end
 end
-if ~(isfield(pkt, "phyHeaderSampleHopInfo") && isstruct(pkt.phyHeaderSampleHopInfo))
-    error("Packet is missing phyHeaderSampleHopInfo required by the independent receiver.");
+if isfield(channelCfg, "maxDelaySymbols") && isfinite(double(channelCfg.maxDelaySymbols))
+    searchMax = max(searchMax, ceil(double(channelCfg.maxDelaySymbols) + mpExtra + 6));
+else
+    searchMax = max(searchMax, ceil(mpExtra + 6));
 end
-if isfield(pkt.phyHeaderSampleHopInfo, "enable") && pkt.phyHeaderSampleHopInfo.enable
-    headerStop = min(numel(rxOut), dataStart - 1);
-    if headerStart <= headerStop
-        rxOut(headerStart:headerStop) = fh_demodulate_samples(rxOut(headerStart:headerStop), pkt.phyHeaderSampleHopInfo, waveform);
+end
+
+function tf = local_effective_fh_capture_enabled_local(pkt, fieldName)
+tf = false;
+fieldName = char(string(fieldName));
+if ~(isstruct(pkt) && isfield(pkt, fieldName) && isstruct(pkt.(fieldName)))
+    return;
+end
+fhCfg = pkt.(fieldName);
+if ~(isfield(fhCfg, "enable") && logical(fhCfg.enable))
+    return;
+end
+tf = true;
+if isfield(fhCfg, "nFreqs") && isfinite(double(fhCfg.nFreqs)) && double(fhCfg.nFreqs) <= 1
+    tf = false;
+end
+if isfield(fhCfg, "freqSet") && ~isempty(fhCfg.freqSet)
+    freqSet = unique(double(fhCfg.freqSet(:)));
+    if numel(freqSet) <= 1
+        tf = false;
     end
 end
-if ~(isfield(pkt, "sampleHopInfo") && isstruct(pkt.sampleHopInfo))
-    error("Packet is missing sampleHopInfo required by the independent receiver.");
 end
-if isfield(pkt.sampleHopInfo, "enable") && pkt.sampleHopInfo.enable
-    if dataStart <= numel(rxOut)
-        rxOut(dataStart:end) = fh_demodulate_samples(rxOut(dataStart:end), pkt.sampleHopInfo, waveform);
-    end
-end
+
+function captureDiag = local_capture_diag_local(front)
+captureDiag = struct( ...
+    "ok", logical(front.ok), ...
+    "bootstrapPath", string(front.bootstrapPath), ...
+    "startIdx", double(front.startIdx), ...
+    "packetStartSample", double(front.packetStartSample), ...
+    "packetStopSample", double(front.packetStopSample), ...
+    "packetSampleLen", double(front.packetSampleLen), ...
+    "syncStageSps", double(front.syncStageSps), ...
+    "syncInfo", front.syncInfo);
 end
 
 function freqBySymbol = local_expand_hop_frequency_offsets_local(hopInfo, nSym)
@@ -452,11 +576,6 @@ if numel(yIn) >= targetLen
 else
     yOut = [yIn; complex(zeros(targetLen - numel(yIn), 1))];
 end
-end
-
-function sampleIdx = local_symbol_boundary_sample_index_local(nLeadingSym, waveform)
-nLeadingSym = max(0, round(double(nLeadingSym)));
-sampleIdx = nLeadingSym * round(double(waveform.sps)) + 1;
 end
 
 function local_require_packet_context_local(txArtifacts, rxCfg)
