@@ -3,12 +3,13 @@ function results = run_demo()
 
 addpath(genpath(fullfile(fileparts(mfilename('fullpath')), 'src')));
 
-p = default_params( ...
+linkSpec = default_params( ...
     "strictModelLoad", false, ...
     "requireTrainedMlModels", false, ...
     "loadMlModels", strings(1, 0));
-[activeMethods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(p.mitigation, p.channel);
-p.mitigation.methods = activeMethods;
+[activeMethods, activeInterferenceTypes, allowedMethods] = resolve_profile_methods(linkSpec);
+linkSpec.profileRx.cfg.methods = activeMethods;
+p = compile_runtime_config(linkSpec);
 
 modelDir = fullfile(pwd, 'models');
 if ~exist(modelDir, 'dir')
@@ -16,11 +17,26 @@ if ~exist(modelDir, 'dir')
 end
 
 requiredModels = local_required_ml_models(activeMethods, p);
-expectedReloadContext = ml_capture_reload_context(p);
-expectedSelectorReloadContext = ml_capture_selector_reload_context(p);
-expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
-expectedFhErasureContext = ml_capture_fh_erasure_reload_context(p);
-expectedMultipathEqContext = ml_capture_multipath_equalizer_reload_context(p);
+expectedReloadContext = struct();
+expectedSelectorReloadContext = struct();
+expectedNarrowbandContext = struct();
+expectedFhErasureContext = struct();
+expectedMultipathEqContext = struct();
+if requiredModels.lr || requiredModels.cnn || requiredModels.gru
+    expectedReloadContext = ml_capture_reload_context(p);
+end
+if requiredModels.selector
+    expectedSelectorReloadContext = ml_capture_selector_reload_context(p);
+end
+if requiredModels.narrowband
+    expectedNarrowbandContext = ml_capture_narrowband_reload_context(p);
+end
+if requiredModels.fhErasure
+    expectedFhErasureContext = ml_capture_fh_erasure_reload_context(p);
+end
+if requiredModels.multipathEq
+    expectedMultipathEqContext = ml_capture_multipath_equalizer_reload_context(p);
+end
 impulseProfileName = local_impulse_profile_name(requiredModels, p);
 
 fprintf('========================================\n');
@@ -49,93 +65,97 @@ fprintf('Loading required ML models...\n');
 fprintf('========================================\n\n');
 
 if requiredModels.lr
-    [p.mitigation.ml, ~, loadedLrPath] = load_pretrained_model( ...
+    [model, ~, loadedLrPath] = load_pretrained_model( ...
         fullfile(modelDir, 'impulse_lr_model.mat'), @ml_impulse_lr_model, ...
         "strict", true, ...
         "requireTrained", true, ...
         "expectedContext", expectedReloadContext);
+    linkSpec.extensions.ml.preloaded.impulseLr = model;
     fprintf('Loaded LR model: %s\n\n', char(loadedLrPath));
 else
     fprintf('Skipping LR model load: current methods do not use ml_blanking.\n\n');
 end
 
 if requiredModels.cnn
-    [p.mitigation.mlCnn, ~, loadedCnnPath] = load_pretrained_model( ...
+    [model, ~, loadedCnnPath] = load_pretrained_model( ...
         fullfile(modelDir, 'impulse_cnn_model.mat'), @ml_cnn_impulse_model, ...
         "strict", true, ...
         "requireTrained", true, ...
         "expectedContext", expectedReloadContext);
+    linkSpec.extensions.ml.preloaded.impulseCnn = model;
     fprintf('Loaded CNN model: %s\n\n', char(loadedCnnPath));
 else
     fprintf('Skipping CNN model load: current methods do not use ml_cnn/ml_cnn_hard.\n\n');
 end
 
 if requiredModels.gru
-    [p.mitigation.mlGru, ~, loadedGruPath] = load_pretrained_model( ...
+    [model, ~, loadedGruPath] = load_pretrained_model( ...
         fullfile(modelDir, 'impulse_gru_model.mat'), @ml_gru_impulse_model, ...
         "strict", true, ...
         "requireTrained", true, ...
         "expectedContext", expectedReloadContext);
+    linkSpec.extensions.ml.preloaded.impulseGru = model;
     fprintf('Loaded GRU model: %s\n\n', char(loadedGruPath));
 else
     fprintf('Skipping GRU model load: current methods do not use ml_gru/ml_gru_hard.\n\n');
 end
 
 if requiredModels.selector
-    [p.mitigation.selector, ~, loadedSelectorPath] = load_pretrained_model( ...
+    [model, ~, loadedSelectorPath] = load_pretrained_model( ...
         fullfile(modelDir, 'interference_selector_model.mat'), @ml_interference_selector_model, ...
         "strict", true, ...
         "requireTrained", true, ...
         "expectedContext", expectedSelectorReloadContext);
+    linkSpec.extensions.ml.preloaded.selector = model;
     fprintf('Loaded selector model: %s\n\n', char(loadedSelectorPath));
 else
     fprintf('Skipping selector model load: current methods do not use adaptive_ml_frontend.\n\n');
 end
 
 if requiredModels.narrowband
-    [p.mitigation.mlNarrowband, ~, loadedNarrowbandPath] = load_pretrained_model( ...
+    [model, ~, loadedNarrowbandPath] = load_pretrained_model( ...
         fullfile(modelDir, 'narrowband_action_model.mat'), @ml_narrowband_action_model, ...
         "strict", true, ...
         "requireTrained", true, ...
         "expectedContext", expectedNarrowbandContext);
+    linkSpec.extensions.ml.preloaded.narrowbandAction = model;
     fprintf('Loaded narrowband action model: %s\n\n', char(loadedNarrowbandPath));
 else
     fprintf('Skipping narrowband action model load: effective methods do not use ml_narrowband.\n\n');
 end
 
 if requiredModels.fhErasure
-    [p.mitigation.mlFhErasure, ~, loadedFhErasurePath] = load_pretrained_model( ...
+    [model, ~, loadedFhErasurePath] = load_pretrained_model( ...
         fullfile(modelDir, 'fh_erasure_model.mat'), @ml_fh_erasure_model, ...
         "strict", true, ...
         "requireTrained", true, ...
         "expectedContext", expectedFhErasureContext);
+    linkSpec.extensions.ml.preloaded.fhErasure = model;
     fprintf('Loaded FH erasure model: %s\n\n', char(loadedFhErasurePath));
 else
     fprintf('Skipping FH erasure model load: effective methods do not use ml_fh_erasure.\n\n');
 end
 
 if requiredModels.multipathEq
-    [p.rxSync.multipathEq.mlMlp, ~, loadedMultipathEqPath] = load_pretrained_model( ...
+    [model, ~, loadedMultipathEqPath] = load_pretrained_model( ...
         fullfile(modelDir, 'multipath_equalizer_model.mat'), @ml_multipath_equalizer_model, ...
         "strict", true, ...
         "requireTrained", true, ...
         "expectedContext", expectedMultipathEqContext);
+    linkSpec.extensions.ml.preloaded.multipathEq = model;
     fprintf('Loaded multipath equalizer model: %s\n\n', char(loadedMultipathEqPath));
 else
     fprintf('Skipping multipath equalizer model load: compareMethods does not use ml_mlp.\n\n');
 end
 
-p.mitigation.strictModelLoad = true;
-p.mitigation.requireTrainedModels = true;
-if isfield(p, 'eve') && isstruct(p.eve) && isfield(p.eve, 'mitigation')
-    p.eve.mitigation = p.mitigation;
-end
+linkSpec.extensions.ml.strictModelLoad = true;
+linkSpec.extensions.ml.requireTrainedModels = true;
 
 fprintf('========================================\n');
 fprintf('Running link simulation...\n');
 fprintf('========================================\n\n');
 
-results = simulate(p);
+results = simulate(linkSpec);
 disp(results.summary);
 local_print_adaptive_action_distribution(results);
 if nargout == 0

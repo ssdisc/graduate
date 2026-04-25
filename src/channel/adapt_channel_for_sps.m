@@ -49,61 +49,67 @@ if isfield(chOut, "multipath") && isstruct(chOut.multipath)
 end
 
 if isfield(chOut, "singleTone") && isstruct(chOut.singleTone)
-    if isfield(chOut.singleTone, "freqHz") && ~isempty(chOut.singleTone.freqHz)
-        require_sample_rate_local(sampleRateHz, "singleTone.freqHz");
-        chOut.singleTone.normFreq = double(chOut.singleTone.freqHz) / sampleRateHz;
-    elseif isfield(chOut.singleTone, "normFreq")
-        % 兼容旧字段：normFreq视为已按采样率归一化。
-        chOut.singleTone.normFreq = double(chOut.singleTone.normFreq);
+    if isfield(chOut.singleTone, "enable") && logical(chOut.singleTone.enable)
+        if isfield(chOut.singleTone, "freqHz") && ~isempty(chOut.singleTone.freqHz)
+            require_sample_rate_local(sampleRateHz, "singleTone.freqHz");
+            chOut.singleTone.normFreq = double(chOut.singleTone.freqHz) / sampleRateHz;
+        elseif isfield(chOut.singleTone, "normFreq")
+            % 兼容旧字段：normFreq视为已按采样率归一化。
+            chOut.singleTone.normFreq = double(chOut.singleTone.normFreq);
+        end
     end
 end
 
 if isfield(chOut, "narrowband") && isstruct(chOut.narrowband)
-    nbSpacingHz = NaN;
-    if isfield(chOut.narrowband, "centerFreqPoints") && ~isempty(chOut.narrowband.centerFreqPoints)
-        require_sample_rate_local(sampleRateHz, "narrowband.centerFreqPoints");
-        require_waveform_local(waveform, "narrowband.centerFreqPoints");
-        nbSpacingHz = fh_frequency_spacing_hz(fhRef, waveform);
-        chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreqPoints) * nbSpacingHz / sampleRateHz;
-    elseif isfield(chOut.narrowband, "centerFreq")
-        chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreq);
-    else
-        error("字段narrowband.centerFreqPoints需要显式给出。");
-    end
-    if isfield(chOut.narrowband, "bandwidthFreqPoints") && ~isempty(chOut.narrowband.bandwidthFreqPoints)
-        require_sample_rate_local(sampleRateHz, "narrowband.bandwidthFreqPoints");
-        require_waveform_local(waveform, "narrowband.bandwidthFreqPoints");
-        if ~(isfinite(nbSpacingHz) && nbSpacingHz > 0)
+    if isfield(chOut.narrowband, "enable") && logical(chOut.narrowband.enable)
+        nbSpacingHz = NaN;
+        if isfield(chOut.narrowband, "centerFreqPoints") && ~isempty(chOut.narrowband.centerFreqPoints)
+            require_sample_rate_local(sampleRateHz, "narrowband.centerFreqPoints");
+            require_waveform_local(waveform, "narrowband.centerFreqPoints");
             nbSpacingHz = fh_frequency_spacing_hz(fhRef, waveform);
+            chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreqPoints) * nbSpacingHz / sampleRateHz;
+        elseif isfield(chOut.narrowband, "centerFreq")
+            chOut.narrowband.centerFreq = double(chOut.narrowband.centerFreq);
+        else
+            error("字段narrowband.centerFreqPoints需要显式给出。");
         end
-        chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidthFreqPoints) * nbSpacingHz / sampleRateHz, 1e-3);
-    elseif isfield(chOut.narrowband, "bandwidth")
-        chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidth), 1e-3);
-    else
-        error("字段narrowband.bandwidthFreqPoints需要显式给出。");
-    end
-    if abs(double(chOut.narrowband.centerFreq)) + double(chOut.narrowband.bandwidth) / 2 >= 0.5
-        error("narrowband center/bandwidth exceeds Nyquist support: |fc| + bw/2 must be < 0.5.");
+        if isfield(chOut.narrowband, "bandwidthFreqPoints") && ~isempty(chOut.narrowband.bandwidthFreqPoints)
+            require_sample_rate_local(sampleRateHz, "narrowband.bandwidthFreqPoints");
+            require_waveform_local(waveform, "narrowband.bandwidthFreqPoints");
+            if ~(isfinite(nbSpacingHz) && nbSpacingHz > 0)
+                nbSpacingHz = fh_frequency_spacing_hz(fhRef, waveform);
+            end
+            chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidthFreqPoints) * nbSpacingHz / sampleRateHz, 1e-3);
+        elseif isfield(chOut.narrowband, "bandwidth")
+            chOut.narrowband.bandwidth = max(double(chOut.narrowband.bandwidth), 1e-3);
+        else
+            error("字段narrowband.bandwidthFreqPoints需要显式给出。");
+        end
+        if abs(double(chOut.narrowband.centerFreq)) + double(chOut.narrowband.bandwidth) / 2 >= 0.5
+            error("narrowband center/bandwidth exceeds Nyquist support: |fc| + bw/2 must be < 0.5.");
+        end
     end
 end
 
 if isfield(chOut, "sweep") && isstruct(chOut.sweep)
-    if isfield(chOut.sweep, "startHz") && ~isempty(chOut.sweep.startHz)
-        require_sample_rate_local(sampleRateHz, "sweep.startHz");
-        chOut.sweep.startFreq = double(chOut.sweep.startHz) / sampleRateHz;
-    elseif isfield(chOut.sweep, "startFreq")
-        chOut.sweep.startFreq = double(chOut.sweep.startFreq);
-    end
-    if isfield(chOut.sweep, "stopHz") && ~isempty(chOut.sweep.stopHz)
-        require_sample_rate_local(sampleRateHz, "sweep.stopHz");
-        chOut.sweep.stopFreq = double(chOut.sweep.stopHz) / sampleRateHz;
-    elseif isfield(chOut.sweep, "stopFreq")
-        chOut.sweep.stopFreq = double(chOut.sweep.stopFreq);
-    end
-    if isfield(chOut.sweep, "periodSymbols")
-        chOut.sweep.periodSamples = max(2, round(double(chOut.sweep.periodSymbols) * sps));
-    elseif isfield(chOut.sweep, "periodSamples")
-        chOut.sweep.periodSamples = max(2, round(double(chOut.sweep.periodSamples)));
+    if isfield(chOut.sweep, "enable") && logical(chOut.sweep.enable)
+        if isfield(chOut.sweep, "startHz") && ~isempty(chOut.sweep.startHz)
+            require_sample_rate_local(sampleRateHz, "sweep.startHz");
+            chOut.sweep.startFreq = double(chOut.sweep.startHz) / sampleRateHz;
+        elseif isfield(chOut.sweep, "startFreq")
+            chOut.sweep.startFreq = double(chOut.sweep.startFreq);
+        end
+        if isfield(chOut.sweep, "stopHz") && ~isempty(chOut.sweep.stopHz)
+            require_sample_rate_local(sampleRateHz, "sweep.stopHz");
+            chOut.sweep.stopFreq = double(chOut.sweep.stopHz) / sampleRateHz;
+        elseif isfield(chOut.sweep, "stopFreq")
+            chOut.sweep.stopFreq = double(chOut.sweep.stopFreq);
+        end
+        if isfield(chOut.sweep, "periodSymbols")
+            chOut.sweep.periodSamples = max(2, round(double(chOut.sweep.periodSymbols) * sps));
+        elseif isfield(chOut.sweep, "periodSamples")
+            chOut.sweep.periodSamples = max(2, round(double(chOut.sweep.periodSamples)));
+        end
     end
 end
 

@@ -17,87 +17,92 @@ pBase.sim.useParallel = false;
 pBase.linkBudget.ebN0dBList = double(opts.EbN0);
 pBase.linkBudget.jsrDbList = double(opts.JsrDb);
 if ~isempty(opts.MitigationMethods)
-    pBase.mitigation.methods = string(opts.MitigationMethods(:).');
-    if isfield(pBase.mitigation, "binding") && isstruct(pBase.mitigation.binding) ...
-            && isfield(pBase.mitigation.binding, "multipathMethods")
-        pBase.mitigation.binding.multipathMethods = unique([ ...
-            string(pBase.mitigation.binding.multipathMethods(:).') ...
+    pBase.profileRx.cfg.methods = string(opts.MitigationMethods(:).');
+    if isfield(pBase.profileRx.cfg.mitigation, "binding") && isstruct(pBase.profileRx.cfg.mitigation.binding) ...
+            && isfield(pBase.profileRx.cfg.mitigation.binding, "multipathMethods")
+        pBase.profileRx.cfg.mitigation.binding.multipathMethods = unique([ ...
+            string(pBase.profileRx.cfg.mitigation.binding.multipathMethods(:).') ...
             string(opts.MitigationMethods(:).')], "stable");
     end
 end
 
 if isfinite(opts.SampleRateHz)
-    pBase.waveform.sampleRateHz = double(opts.SampleRateHz);
-    pBase.waveform.symbolRateHz = pBase.waveform.sampleRateHz / double(pBase.waveform.sps);
+    pBase.commonTx.waveform.sampleRateHz = double(opts.SampleRateHz);
+    pBase.commonTx.waveform.symbolRateHz = pBase.commonTx.waveform.sampleRateHz / double(pBase.commonTx.waveform.sps);
 end
 if isfinite(opts.NFreqs)
-    pBase.fh.nFreqs = double(opts.NFreqs);
-    pBase.fh.freqSet = fh_nonoverlap_freq_set(resolve_waveform_cfg(pBase), round(double(opts.NFreqs)));
-    pBase.frame.phyHeaderFhFreqSet = pBase.fh.freqSet;
-    pBase.frame.phyHeaderFhSymbolsPerHop = phy_header_nondiverse_min_symbols_per_hop( ...
-        pBase.frame, pBase.fh, pBase.fec);
+    pBase.profileTx.cfg.fh.nFreqs = double(opts.NFreqs);
+    pBase.profileTx.cfg.fh.freqSet = [];
 end
 if ~isempty(opts.FreqSet)
-    pBase.fh.freqSet = double(opts.FreqSet(:).');
-    pBase.fh.nFreqs = numel(pBase.fh.freqSet);
-    pBase.frame.phyHeaderFhFreqSet = pBase.fh.freqSet;
-    pBase.frame.phyHeaderFhSymbolsPerHop = phy_header_nondiverse_min_symbols_per_hop( ...
-        pBase.frame, pBase.fh, pBase.fec);
+    pBase.profileTx.cfg.fh.freqSet = double(opts.FreqSet(:).');
+    pBase.profileTx.cfg.fh.nFreqs = numel(pBase.profileTx.cfg.fh.freqSet);
 end
 if strlength(opts.ModType) > 0
-    pBase.mod.type = opts.ModType;
+    pBase.commonTx.modulation.type = opts.ModType;
 end
 if strlength(opts.LdpcRate) > 0
-    pBase.fec.ldpc.rate = opts.LdpcRate;
+    pBase.commonTx.innerCode.ldpc.rate = opts.LdpcRate;
 end
 if ~isnan(opts.RxDiversityEnable)
-    pBase.rxDiversity.enable = logical(opts.RxDiversityEnable);
+    pBase.profileRx.cfg.rxDiversity.enable = logical(opts.RxDiversityEnable);
 end
 if isfinite(opts.RxDiversityNRx)
-    pBase.rxDiversity.nRx = double(opts.RxDiversityNRx);
+    pBase.profileRx.cfg.rxDiversity.nRx = double(opts.RxDiversityNRx);
 end
 if isfinite(opts.InterleaverRows)
-    pBase.interleaver.nRows = double(opts.InterleaverRows);
+    pBase.commonTx.interleaver.nRows = double(opts.InterleaverRows);
 end
 if isfinite(opts.PayloadBitsPerPacket)
-    pBase.packet.payloadBitsPerPacket = double(opts.PayloadBitsPerPacket);
+    pBase.commonTx.packet.payloadBitsPerPacket = double(opts.PayloadBitsPerPacket);
 end
 if isfinite(opts.RsK)
-    pBase.outerRs.dataPacketsPerBlock = double(opts.RsK);
+    pBase.commonTx.outerRs.dataPacketsPerBlock = double(opts.RsK);
 end
 if isfinite(opts.RsP)
-    pBase.outerRs.parityPacketsPerBlock = double(opts.RsP);
+    pBase.commonTx.outerRs.parityPacketsPerBlock = double(opts.RsP);
 end
 if isfinite(opts.SymbolsPerHop)
-    pBase.fh.symbolsPerHop = double(opts.SymbolsPerHop);
+    pBase.profileTx.cfg.fh.symbolsPerHop = double(opts.SymbolsPerHop);
 end
 if ~isnan(opts.PayloadDiversityEnable)
-    pBase.fh.payloadDiversity.enable = logical(opts.PayloadDiversityEnable);
+    pBase.profileTx.cfg.fh.payloadDiversity.enable = logical(opts.PayloadDiversityEnable);
 end
 if isfinite(opts.PayloadDiversityCopies)
-    pBase.fh.payloadDiversity.copies = double(opts.PayloadDiversityCopies);
+    pBase.profileTx.cfg.fh.payloadDiversity.copies = double(opts.PayloadDiversityCopies);
 end
 if isfinite(opts.PayloadDiversityIndexOffset)
-    pBase.fh.payloadDiversity.indexOffset = double(opts.PayloadDiversityIndexOffset);
+    pBase.profileTx.cfg.fh.payloadDiversity.indexOffset = double(opts.PayloadDiversityIndexOffset);
 end
 if isfinite(opts.ScFdeCpLenSymbols)
-    pBase.scFde.cpLenSymbols = double(opts.ScFdeCpLenSymbols);
+    pBase.profileTx.cfg.scFde.cpLenSymbols = double(opts.ScFdeCpLenSymbols);
 end
 if isfinite(opts.ScFdePilotLength)
-    pBase.scFde.pilotLength = double(opts.ScFdePilotLength);
+    pBase.profileTx.cfg.scFde.pilotLength = double(opts.ScFdePilotLength);
 end
 if isfinite(opts.ScFdePilotMseThreshold)
-    pBase.scFde.fdePilotMseThreshold = double(opts.ScFdePilotMseThreshold);
+    pBase.profileTx.cfg.scFde.fdePilotMseThreshold = double(opts.ScFdePilotMseThreshold);
 end
 if isfinite(opts.ScFdePilotMseMargin)
-    pBase.scFde.fdePilotMseMargin = double(opts.ScFdePilotMseMargin);
+    pBase.profileTx.cfg.scFde.fdePilotMseMargin = double(opts.ScFdePilotMseMargin);
 end
 if isfinite(opts.ScFdeLambdaFactor)
-    pBase.scFde.lambdaFactor = double(opts.ScFdeLambdaFactor);
+    pBase.profileTx.cfg.scFde.lambdaFactor = double(opts.ScFdeLambdaFactor);
 end
 if ~isempty(opts.CompareMethods)
-    pBase.rxSync.multipathEq.compareMethods = string(opts.CompareMethods(:).');
+    pBase.profileRx.cfg.sync.multipathEq.compareMethods = string(opts.CompareMethods(:).');
 end
+
+[activeMethods, ~, ~] = resolve_profile_methods(pBase);
+requestedMethods = unique(string(opts.MitigationMethods(:).'), "stable");
+if ~isempty(requestedMethods) ...
+        && (~isequal(size(activeMethods), size(requestedMethods)) || any(activeMethods ~= requestedMethods))
+    error("scan_rayleigh_multipath_cases:InvalidMethods", ...
+        "Requested methods %s are not valid for the rayleigh_multipath profile. Resolved methods: %s.", ...
+        strjoin(cellstr(requestedMethods), ", "), ...
+        strjoin(cellstr(activeMethods), ", "));
+end
+pBase.profileRx.cfg.methods = activeMethods;
 
 validate_link_profile(pBase);
 

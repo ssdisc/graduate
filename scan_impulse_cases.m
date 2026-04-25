@@ -16,40 +16,48 @@ pBase.sim.saveFigures = logical(opts.SaveFigures);
 pBase.sim.useParallel = false;
 pBase.linkBudget.ebN0dBList = double(opts.EbN0);
 pBase.linkBudget.jsrDbList = double(opts.JsrDb);
-pBase.mitigation.methods = string(opts.Method);
-if isfield(pBase.mitigation, "binding") && isstruct(pBase.mitigation.binding) ...
-        && isfield(pBase.mitigation.binding, "impulseMethods")
-    pBase.mitigation.binding.impulseMethods = unique([ ...
-        string(pBase.mitigation.binding.impulseMethods(:).') ...
+pBase.profileRx.cfg.methods = string(opts.Method);
+if isfield(pBase.profileRx.cfg.mitigation, "binding") && isstruct(pBase.profileRx.cfg.mitigation.binding) ...
+        && isfield(pBase.profileRx.cfg.mitigation.binding, "impulseMethods")
+    pBase.profileRx.cfg.mitigation.binding.impulseMethods = unique([ ...
+        string(pBase.profileRx.cfg.mitigation.binding.impulseMethods(:).') ...
         string(opts.Method)], "stable");
 end
 pBase = local_force_requested_impulse_ml_models(pBase, opts);
 
 if isfinite(opts.SampleRateHz)
-    pBase.waveform.sampleRateHz = double(opts.SampleRateHz);
-    pBase.waveform.symbolRateHz = pBase.waveform.sampleRateHz / double(pBase.waveform.sps);
+    pBase.commonTx.waveform.sampleRateHz = double(opts.SampleRateHz);
+    pBase.commonTx.waveform.symbolRateHz = pBase.commonTx.waveform.sampleRateHz / double(pBase.commonTx.waveform.sps);
 end
 if strlength(opts.LdpcRate) > 0
-    pBase.fec.ldpc.rate = opts.LdpcRate;
+    pBase.commonTx.innerCode.ldpc.rate = opts.LdpcRate;
 end
 if isfinite(opts.PayloadBitsPerPacket)
-    pBase.packet.payloadBitsPerPacket = double(opts.PayloadBitsPerPacket);
+    pBase.commonTx.packet.payloadBitsPerPacket = double(opts.PayloadBitsPerPacket);
 end
 if isfinite(opts.RsK)
-    pBase.outerRs.dataPacketsPerBlock = double(opts.RsK);
+    pBase.commonTx.outerRs.dataPacketsPerBlock = double(opts.RsK);
 end
 if isfinite(opts.RsP)
-    pBase.outerRs.parityPacketsPerBlock = double(opts.RsP);
+    pBase.commonTx.outerRs.parityPacketsPerBlock = double(opts.RsP);
 end
 if strlength(opts.ThresholdStrategy) > 0
-    pBase.mitigation.thresholdStrategy = opts.ThresholdStrategy;
+    pBase.profileRx.cfg.mitigation.thresholdStrategy = opts.ThresholdStrategy;
 end
 if isfinite(opts.ThresholdAlpha)
-    pBase.mitigation.thresholdAlpha = double(opts.ThresholdAlpha);
+    pBase.profileRx.cfg.mitigation.thresholdAlpha = double(opts.ThresholdAlpha);
 end
 if isfinite(opts.ThresholdFixed)
-    pBase.mitigation.thresholdFixed = double(opts.ThresholdFixed);
+    pBase.profileRx.cfg.mitigation.thresholdFixed = double(opts.ThresholdFixed);
 end
+
+[activeMethods, ~, ~] = resolve_profile_methods(pBase);
+if ~(numel(activeMethods) == 1 && activeMethods(1) == string(opts.Method))
+    error("scan_impulse_cases:InvalidMethod", ...
+        "Requested method %s is not valid for the impulse profile. Resolved methods: %s.", ...
+        char(string(opts.Method)), strjoin(cellstr(activeMethods), ", "));
+end
+pBase.profileRx.cfg.methods = activeMethods;
 
 validate_link_profile(pBase);
 
@@ -203,7 +211,7 @@ if any(string(opts.Method) == "ml_blanking") && any(requested == "lr")
         "strict", true, ...
         "allowBatchFallback", true, ...
         "expectedContext", []);
-    pOut.mitigation.ml = model;
+    pOut.extensions.ml.preloaded.impulseLr = model;
 end
 
 if any(string(opts.Method) == ["ml_cnn" "ml_cnn_hard"]) && any(requested == "cnn")
@@ -213,7 +221,7 @@ if any(string(opts.Method) == ["ml_cnn" "ml_cnn_hard"]) && any(requested == "cnn
         "strict", true, ...
         "allowBatchFallback", true, ...
         "expectedContext", []);
-    pOut.mitigation.mlCnn = model;
+    pOut.extensions.ml.preloaded.impulseCnn = model;
 end
 
 if any(string(opts.Method) == ["ml_gru" "ml_gru_hard"]) && any(requested == "gru")
@@ -223,6 +231,6 @@ if any(string(opts.Method) == ["ml_gru" "ml_gru_hard"]) && any(requested == "gru
         "strict", true, ...
         "allowBatchFallback", true, ...
         "expectedContext", []);
-    pOut.mitigation.mlGru = model;
+    pOut.extensions.ml.preloaded.impulseGru = model;
 end
 end

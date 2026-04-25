@@ -36,10 +36,17 @@ pBase = default_params( ...
 
 % Keep only requested methods and channel-compatible methods.
 if ~isempty(opts.Methods)
-    pBase.mitigation.methods = string(opts.Methods(:).');
+    pBase.profileRx.cfg.methods = string(opts.Methods(:).');
 end
-[activeMethods, ~, ~] = resolve_mitigation_methods(pBase.mitigation, pBase.channel);
-pBase.mitigation.methods = activeMethods;
+[activeMethods, ~, ~] = resolve_profile_methods(pBase);
+requestedMethods = unique(string(opts.Methods(:).'), "stable");
+if ~isempty(requestedMethods) && (~isequal(size(activeMethods), size(requestedMethods)) || any(activeMethods ~= requestedMethods))
+    error("scan_narrowband_centers:InvalidMethods", ...
+        "Requested methods %s are not valid for the narrowband profile. Resolved methods: %s.", ...
+        strjoin(cellstr(requestedMethods), ", "), ...
+        strjoin(cellstr(activeMethods), ", "));
+end
+pBase.profileRx.cfg.methods = activeMethods;
 
 % Per-point simulation baseline config.
 pBase.sim.nFramesPerPoint = double(opts.NFramesPerPoint);
@@ -63,7 +70,7 @@ fprintf("========================================\n");
 fprintf("Center sweep count: %d\n", numel(centerPoints));
 fprintf("Eb/N0 list: %s dB\n", mat2str(double(pBase.linkBudget.ebN0dBList)));
 fprintf("JSR list: %s dB\n", mat2str(double(pBase.linkBudget.jsrDbList)));
-fprintf("Methods: %s\n", strjoin(cellstr(string(pBase.mitigation.methods)), ", "));
+fprintf("Methods: %s\n", strjoin(cellstr(string(pBase.profileRx.cfg.methods)), ", "));
 fprintf("Output root: %s\n", outRoot);
 fprintf("========================================\n\n");
 
@@ -185,8 +192,9 @@ opts.ResultsRoot = string(opts.ResultsRoot);
 end
 
 function pts = local_default_center_points(p, step)
-waveform = resolve_waveform_cfg(p);
-[maxAbs, ~] = narrowband_center_freq_points_limit(p.fh, waveform, p.channel.narrowband.bandwidthFreqPoints);
+runtimeCfg = compile_runtime_config(p);
+waveform = resolve_waveform_cfg(runtimeCfg);
+[maxAbs, ~] = narrowband_center_freq_points_limit(runtimeCfg.fh, waveform, p.channel.narrowband.bandwidthFreqPoints);
 maxAbs = floor(maxAbs / step) * step;
 if maxAbs <= 0
     pts = 0;

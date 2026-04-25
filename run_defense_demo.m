@@ -32,19 +32,19 @@ p = default_params( ...
     "allowBatchModelFallback", false, ...
     "loadMlModels", requiredMlModels);
 
-p.source.useBuiltinImage = false;
-p.source.imagePath = opts.ImagePath;
+p.commonTx.source.useBuiltinImage = false;
+p.commonTx.source.imagePath = opts.ImagePath;
 p.sim.nFramesPerPoint = 1;
 p.sim.saveFigures = false;
 p.sim.useParallel = false;
 p.linkBudget.ebN0dBList = opts.EbN0dB;
 p.linkBudget.jsrDbList = opts.JsrDb;
-p.mitigation.methods = opts.MitigationMethod;
 
 [p, expectedActiveType, interferenceInfo] = local_apply_single_interference( ...
     p, opts.InterferenceType, opts.InterferenceParams, opts.JsrDb);
+p.profileRx.cfg.methods = opts.MitigationMethod;
 
-[activeMethods, activeTypes, allowedMethods] = resolve_mitigation_methods(p.mitigation, p.channel);
+[activeMethods, activeTypes, allowedMethods] = resolve_profile_methods(p);
 if numel(activeTypes) ~= 1
     error("run_defense_demo:ActiveInterferenceCount", ...
         "Exactly one active interference type is required, got %d (%s).", ...
@@ -60,7 +60,7 @@ if numel(activeMethods) ~= 1 || activeMethods(1) ~= opts.MitigationMethod
         "Method %s is not valid for active interference type %s. Allowed methods: %s.", ...
         opts.MitigationMethod, activeTypes(1), strjoin(cellstr(allowedMethods), ", "));
 end
-p.mitigation.methods = activeMethods;
+p.profileRx.cfg.methods = activeMethods;
 
 timestampTag = string(datetime("now", "Format", "yyyyMMdd_HHmmss"));
 runDir = fullfile(char(opts.ResultsRoot), char("defense_demo_" + timestampTag));
@@ -181,9 +181,10 @@ switch interferenceType
         p.channel.narrowband.centerFreqPoints = params.centerFreqPoints;
         p.channel.narrowband.bandwidthFreqPoints = params.bandwidthFreqPoints;
 
-        waveform = resolve_waveform_cfg(p);
+        runtimeCfg = compile_runtime_config(p);
+        waveform = resolve_waveform_cfg(runtimeCfg);
         [maxAbsCenter, ~] = narrowband_center_freq_points_limit( ...
-            p.fh, waveform, p.channel.narrowband.bandwidthFreqPoints);
+            runtimeCfg.fh, waveform, p.channel.narrowband.bandwidthFreqPoints);
         if abs(p.channel.narrowband.centerFreqPoints) > maxAbsCenter
             error("run_defense_demo:NarrowbandCenterOutOfRange", ...
                 "centerFreqPoints %.6g exceeds valid range [-%.6g, %.6g].", ...

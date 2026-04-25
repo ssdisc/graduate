@@ -201,6 +201,8 @@ for pktIdx = 1:nPackets
     txSymPkt = [syncSymPkt; phyHeaderSymTx; dataSymHop];
     txSymForChannel = pulse_tx_from_symbol_rate(txSymPkt, waveform);
     txSymForSpectrum = txSymForChannel;
+    [preambleSampleHopInfo, phyHeaderSampleHopInfo, dataSampleHopInfo] = local_packet_sample_hop_info_local( ...
+        txSymForChannel, numel(syncSymPkt), numel(phyHeaderSymTx), preambleFhCfg, phyHeaderFhCfg, fhCfgPkt, waveform);
     if (isfield(preambleFhCfg, "enable") && preambleFhCfg.enable) ...
             || (isfield(phyHeaderFhCfg, "enable") && phyHeaderFhCfg.enable) ...
             || (isfield(fhCfgPkt, "enable") && fhCfgPkt.enable)
@@ -237,8 +239,10 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).phyHeaderSymTx = phyHeaderSymTx;
     txPackets(pktIdx).phyHeaderFhCfg = phyHeaderFhCfg;
     txPackets(pktIdx).phyHeaderHopInfo = phyHeaderHopInfo;
+    txPackets(pktIdx).phyHeaderSampleHopInfo = phyHeaderSampleHopInfo;
     txPackets(pktIdx).preambleFhCfg = preambleFhCfg;
     txPackets(pktIdx).preambleHopInfo = preambleHopInfo;
+    txPackets(pktIdx).preambleSampleHopInfo = preambleSampleHopInfo;
     txPackets(pktIdx).stateOffsets = offsetsPkt;
     txPackets(pktIdx).scrambleCfg = scrambleCfgPkt;
     txPackets(pktIdx).dsssCfg = dsssCfgPkt;
@@ -256,6 +260,7 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).nPhyHeaderSymTx = numel(phyHeaderSymTx);
     txPackets(pktIdx).fhCfg = fhCfgPkt;
     txPackets(pktIdx).hopInfo = hopInfo;
+    txPackets(pktIdx).sampleHopInfo = dataSampleHopInfo;
     txPackets(pktIdx).intState = intState;
     txPackets(pktIdx).txSymPkt = txSymPkt;
     txPackets(pktIdx).txSymForChannel = txSymForChannel;
@@ -401,6 +406,37 @@ function tf = local_use_compact_phy_header(frameCfg)
 tf = true;
 if isfield(frameCfg, "phyHeaderMode") && strlength(string(frameCfg.phyHeaderMode)) > 0
     tf = lower(string(frameCfg.phyHeaderMode)) == "compact_fec";
+end
+end
+
+function [preambleHopInfo, headerHopInfo, dataHopInfo] = local_packet_sample_hop_info_local(txIn, nSyncSym, nHeaderSym, preambleFhCfg, headerFhCfg, dataFhCfg, waveform)
+txIn = txIn(:);
+headerStart = local_symbol_boundary_sample_index(nSyncSym, waveform);
+dataStart = local_symbol_boundary_sample_index(nSyncSym + nHeaderSym, waveform);
+
+preambleHopInfo = struct('enable', false);
+headerHopInfo = struct('enable', false);
+dataHopInfo = struct('enable', false);
+
+if isstruct(preambleFhCfg) && isfield(preambleFhCfg, "enable") && preambleFhCfg.enable
+    preambleStop = min(numel(txIn), headerStart - 1);
+    if preambleStop >= 1
+        preambleHopInfo = fh_sample_hop_info_from_cfg(preambleFhCfg, waveform, preambleStop);
+    end
+end
+
+if isstruct(headerFhCfg) && isfield(headerFhCfg, "enable") && headerFhCfg.enable
+    headerStop = min(numel(txIn), dataStart - 1);
+    if headerStart <= headerStop
+        headerHopInfo = fh_sample_hop_info_from_cfg(headerFhCfg, waveform, headerStop - headerStart + 1);
+    end
+end
+
+if isstruct(dataFhCfg) && isfield(dataFhCfg, "enable") && dataFhCfg.enable
+    dataStart = min(max(1, dataStart), numel(txIn) + 1);
+    if dataStart <= numel(txIn)
+        dataHopInfo = fh_sample_hop_info_from_cfg(dataFhCfg, waveform, numel(txIn) - dataStart + 1);
+    end
 end
 end
 

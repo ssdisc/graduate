@@ -3,12 +3,13 @@ function run_offline_training()
 
 addpath(genpath(fullfile(fileparts(mfilename('fullpath')), 'src')));
 
-p = default_params( ...
+linkSpec = default_params( ...
     "strictModelLoad", false, ...
     "requireTrainedMlModels", false, ...
     "loadMlModels", strings(1, 0));
-[activeMethods, activeInterferenceTypes, allowedMethods] = resolve_mitigation_methods(p.mitigation, p.channel);
-p.mitigation.methods = activeMethods;
+[activeMethods, activeInterferenceTypes, allowedMethods] = resolve_profile_methods(linkSpec);
+linkSpec.profileRx.cfg.methods = activeMethods;
+p = compile_runtime_config(linkSpec);
 
 modelDir = fullfile(pwd, 'models');
 if ~exist(modelDir, 'dir')

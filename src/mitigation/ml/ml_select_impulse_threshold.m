@@ -184,7 +184,7 @@ pEval = local_force_pure_impulse_eval_channel(pEval);
 pEval = local_apply_method_model(pEval, methodName, model);
 
 resultsEval = [];
-evalc("resultsEval = simulate(pEval);");
+evalc("resultsEval = legacy_simulate(pEval);");
 methodIdx = local_find_method_index(resultsEval.methods, methodName);
 berByPoint = double(resultsEval.ber(methodIdx, :));
 perByPoint = double(resultsEval.per(methodIdx, :));
