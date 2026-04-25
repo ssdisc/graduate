@@ -2934,6 +2934,7 @@ rawReliability = local_fit_reliability_length_local(rawReliabilityIn, rxState.nD
 fastFhEnabled = isfield(rxState, "fhCfg") && isstruct(rxState.fhCfg) ...
     && isfield(rxState.fhCfg, "enable") && rxState.fhCfg.enable && fh_is_fast(rxState.fhCfg);
 sampleFhDataDemod = isfield(rxState, "sampleFhDataDemod") && logical(rxState.sampleFhDataDemod);
+scFdeEnabled = local_rx_state_sc_fde_enabled_local(rxState);
 
 if fastFhEnabled
     [r, rawReliability] = local_fast_fh_symbol_prepare_local(r, rawReliability, hopInfoUsed, rxState);
@@ -2946,7 +2947,7 @@ relPrep = local_fit_reliability_length_local(relPrep, numel(r));
 if any(actionName == ["fh_erasure" "ml_fh_erasure"])
     [r, relPrep] = local_apply_multipath_fade_erasure_local(r, relPrep, rxState, mitigation);
 end
-if local_rx_payload_diversity_enabled_local(rxState)
+if local_rx_payload_diversity_enabled_local(rxState) && ~scFdeEnabled
     [r, relPrep] = local_combine_payload_fh_diversity_symbols_local(r, relPrep, rxState);
     rawReliability = local_payload_fh_diversity_combine_reliability_local(rawReliability, rxState);
 end
@@ -3169,7 +3170,8 @@ cfg = rxState.scFdeCfg;
 
 if local_rx_payload_diversity_enabled_local(rxState)
     if local_sc_fde_equalizer_method_local(rxSyncCfg)
-        error("SC-FDE MMSE payload equalization does not support fh.payloadDiversity.");
+        [rOut, relOut] = local_apply_sc_fde_mmse_payload_hop_diversity_local(rIn, relIn, rxState, cfg, plan);
+        return;
     end
     [rOut, relOut] = local_apply_sc_fde_payload_hop_diversity_local(rIn, relIn, rxState, cfg, plan);
     return;
@@ -3275,6 +3277,61 @@ for hopIdx = 1:plan.nHops
         scoreList, sprintf("payload FH diversity hop %d", hopIdx));
     [xCoreComb, relCoreComb] = local_sc_fde_mrc_combine_branch_cores_local( ...
         coreList, relList, ones(copies, 1), scoreList, sprintf("payload FH diversity hop %d", hopIdx));
+    dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
+    dataOutFull(dataIdx) = xCoreComb(plan.pilotLength + 1:end);
+    relOutFull(dataIdx) = relCoreComb(plan.pilotLength + 1:end);
+end
+
+dataOut = dataOutFull(1:min(plan.nInputSymbols, numel(dataOutFull)));
+relOut = relOutFull(1:min(plan.nInputSymbols, numel(relOutFull)));
+end
+
+function [dataOut, relOut] = local_apply_sc_fde_mmse_payload_hop_diversity_local(rIn, relIn, rxState, cfg, plan)
+[~, copies, ~, expectedPhysicalLen] = local_payload_fh_diversity_dims_local(rxState);
+r = fit_complex_length_local(rIn, expectedPhysicalLen);
+rel = local_fit_reliability_length_local(relIn, expectedPhysicalLen);
+if ~(isfield(rxState, "scFdeEq") && isstruct(rxState.scFdeEq))
+    error("SC-FDE MMSE payload diversity requires rxState.scFdeEq.");
+end
+if ~(isfield(rxState, "hopInfo") && isstruct(rxState.hopInfo))
+    error("SC-FDE MMSE payload diversity requires rxState.hopInfo.");
+end
+eq = rxState.scFdeEq;
+N0 = local_sc_fde_noise_power_local(rxState, eq);
+lambda = double(cfg.lambdaFactor) * N0;
+if ~(isscalar(lambda) && isfinite(lambda) && lambda >= 0)
+    error("SC-FDE MMSE payload diversity requires a finite nonnegative lambda.");
+end
+
+hopFreqs = local_sc_fde_hop_frequencies_local(rxState.hopInfo, plan.nHops * copies);
+bankIdx = local_equalizer_bank_indices_for_freqs_local(eq.frequencyOffsets, hopFreqs);
+dataOutFull = complex(zeros(plan.nHops * plan.dataSymbolsPerHop, 1));
+relOutFull = ones(plan.nHops * plan.dataSymbolsPerHop, 1);
+
+for hopIdx = 1:plan.nHops
+    pilot = sc_fde_payload_pilot_symbols(cfg, rxState.packetIndex, hopIdx);
+    coreList = cell(copies, 1);
+    relList = cell(copies, 1);
+    scoreList = zeros(copies, 1);
+    for copyIdx = 1:copies
+        physicalHopIdx = (hopIdx - 1) * copies + copyIdx;
+        [core, relCore] = local_sc_fde_core_from_physical_hop_local(r, rel, physicalHopIdx, plan);
+        h = eq.hBank(:, bankIdx(physicalHopIdx));
+        if numel(h) - 1 > plan.cpLen
+            error("SC-FDE MMSE payload diversity CP length %d is shorter than channel memory %d at physical hop %d.", ...
+                plan.cpLen, numel(h) - 1, physicalHopIdx);
+        end
+        xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, plan);
+        maxPilotShift = min(plan.cpLen, max(0, numel(h) - 1));
+        [xCore, hopRel] = local_sc_fde_apply_pilot_scalar_local(xCore, pilot, cfg, maxPilotShift);
+        coreList{copyIdx} = xCore;
+        relList{copyIdx} = min(relCore, hopRel);
+        scoreList(copyIdx) = mean(relList{copyIdx});
+    end
+    scoreList = local_sc_fde_gate_branch_scores_local( ...
+        scoreList, sprintf("SC-FDE MMSE payload diversity hop %d", hopIdx));
+    [xCoreComb, relCoreComb] = local_sc_fde_mrc_combine_branch_cores_local( ...
+        coreList, relList, ones(copies, 1), scoreList, sprintf("SC-FDE MMSE payload diversity hop %d", hopIdx));
     dataIdx = (hopIdx - 1) * plan.dataSymbolsPerHop + (1:plan.dataSymbolsPerHop);
     dataOutFull(dataIdx) = xCoreComb(plan.pilotLength + 1:end);
     relOutFull(dataIdx) = relCoreComb(plan.pilotLength + 1:end);
