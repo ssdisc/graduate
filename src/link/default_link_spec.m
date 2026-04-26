@@ -226,6 +226,7 @@ profileTxCfg = struct( ...
         "nFreqs", 1, ...
         "freqSet", 0, ...
         "sequenceType", 'chaos', ...
+        "balanceMode", "none", ...
         "pnPolynomial", [1 0 0 0 0 0 0 0 0 1 0 1], ...
         "pnInit", [0 0 0 0 0 0 0 0 0 1 1], ...
         "chaosMethod", 'logistic', ...
@@ -307,14 +308,17 @@ switch profileName
         commonTx.control.phyHeaderRepeatCompact = 3;
         commonTx.control.phyHeaderSpreadFactor = 4;
         commonTx.control.preambleDiversity.enable = true;
-        commonTx.control.preambleDiversity.copies = 3;
+        commonTx.control.preambleDiversity.copies = 2;
+        commonTx.control.preambleDiversity.freqSet = [-4.375 4.375];
         commonTx.control.sessionHeaderBodyDiversity.enable = true;
-        commonTx.control.sessionHeaderBodyDiversity.copies = 3;
+        commonTx.control.sessionHeaderBodyDiversity.copies = 2;
+        commonTx.control.sessionHeaderBodyDiversity.freqSet = [-4.375 4.375];
         commonTx.control.phyHeaderDiversity.enable = true;
-        commonTx.control.phyHeaderDiversity.copies = 3;
+        commonTx.control.phyHeaderDiversity.copies = 4;
+        commonTx.control.phyHeaderFhFreqSet = [-4.375 -0.625 0.625 4.375];
         commonTx.payload.dct.keepRows = 1;
         commonTx.payload.dct.keepCols = 1;
-        commonTx.packet.payloadBitsPerPacket = 4096;
+        commonTx.packet.payloadBitsPerPacket = 8192;
         commonTx.outerRs.dataPacketsPerBlock = 1;
         commonTx.outerRs.parityPacketsPerBlock = 11;
 
@@ -327,13 +331,14 @@ switch profileName
         channel.multipath.enable = false;
 
         profileTxCfg.fh.enable = true;
-        profileTxCfg.fh.nFreqs = 6;
-        profileTxCfg.fh.freqSet = [-4.375 -3.125 -1.875 1.875 3.125 4.375];
+        profileTxCfg.fh.nFreqs = 8;
+        profileTxCfg.fh.freqSet = [-4.375 -3.125 -1.875 -0.625 0.625 1.875 3.125 4.375];
         profileTxCfg.fh.sequenceType = 'chaos';
+        profileTxCfg.fh.balanceMode = "permutation_block";
         profileTxCfg.fh.symbolsPerHop = 48;
         profileTxCfg.fh.payloadDiversity.enable = true;
         profileTxCfg.fh.payloadDiversity.copies = 3;
-        profileTxCfg.fh.payloadDiversity.indexOffset = 2;
+        profileTxCfg.fh.payloadDiversity.indexOffset = 3;
         profileTxCfg.scFde.enable = false;
 
         profileRxCfg.methods = "fh_erasure";

@@ -29,6 +29,7 @@ end
 
 nFreqs = fh.nFreqs;
 seqType = lower(string(fh.sequenceType));
+balanceMode = local_balance_mode_local(fh);
 if nFreqs < 1 || abs(nFreqs - round(nFreqs)) > 1e-12
     error("fh.nFreqs必须为正整数，当前为%g。", nFreqs);
 end
@@ -102,17 +103,39 @@ switch seqType
             offsetHops = max(0, round(double(fh.sequenceOffsetHops)));
         end
 
-        chaosSeqFull = double(chaos_generate(nLogicalHops + offsetHops, chaosMethod, chaosParams));
-        chaosSeq = chaosSeqFull(offsetHops + 1:end);
-        chaosSeq = max(min(chaosSeq(:), 1 - eps), 0);
-        freqIdxBase = floor(chaosSeq * nFreqs) + 1;
-        freqIdxBase = min(max(freqIdxBase, 1), nFreqs);
+        switch balanceMode
+            case "none"
+                chaosSeqFull = double(chaos_generate(nLogicalHops + offsetHops, chaosMethod, chaosParams));
+                chaosSeq = chaosSeqFull(offsetHops + 1:end);
+                chaosSeq = max(min(chaosSeq(:), 1 - eps), 0);
+                freqIdxBase = floor(chaosSeq * nFreqs) + 1;
+                freqIdxBase = min(max(freqIdxBase, 1), nFreqs);
+
+            case "permutation_block"
+                totalLogicalHops = nLogicalHops + offsetHops;
+                nBlocks = ceil(double(totalLogicalHops) / double(nFreqs));
+                nChaos = nBlocks * nFreqs;
+                chaosSeqFull = double(chaos_generate(nChaos, chaosMethod, chaosParams));
+                chaosSeqFull = max(min(chaosSeqFull(:), 1 - eps), 0);
+                freqIdxBalanced = zeros(nChaos, 1);
+                for blockIdx = 1:nBlocks
+                    blockRange = (blockIdx - 1) * nFreqs + (1:nFreqs);
+                    blockSeq = chaosSeqFull(blockRange);
+                    [~, order] = sort(blockSeq, "ascend");
+                    freqIdxBalanced(blockRange) = order(:);
+                end
+                freqIdxBase = freqIdxBalanced(offsetHops + 1:offsetHops + nLogicalHops);
+
+            otherwise
+                error("Unsupported fh.balanceMode for chaos sequence: %s", char(balanceMode));
+        end
 
         state = struct();
         state.type = "chaos";
         state.chaosMethod = chaosMethod;
         state.chaosParams = chaosParams;
         state.sequenceOffsetHops = offsetHops;
+        state.balanceMode = balanceMode;
         if ~isempty(chaosSeqFull)
             state.lastValue = chaosSeqFull(end);
         else
@@ -218,5 +241,12 @@ function tf = local_fh_is_fast_local(fh)
 tf = false;
 if isfield(fh, "mode") && strlength(string(fh.mode)) > 0
     tf = lower(string(fh.mode)) == "fast";
+end
+end
+
+function balanceMode = local_balance_mode_local(fh)
+balanceMode = "none";
+if isfield(fh, "balanceMode") && strlength(string(fh.balanceMode)) > 0
+    balanceMode = lower(string(fh.balanceMode));
 end
 end
