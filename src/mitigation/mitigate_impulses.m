@@ -114,6 +114,7 @@ switch lower(string(method))
         else
             % 未训练：退回到置零
             rOut(mask) = 0;
+            rel(mask) = 0;
         end
         % 确保double精度和CPU数组（vitdec需要）
         rOut = double(gather(rOut));
@@ -149,6 +150,7 @@ switch lower(string(method))
             rOut = (1 - blendWeight) .* r + blendWeight .* cleanSym;
         else
             rOut(mask) = 0;
+            rel(mask) = 0;
         end
         % 确保double精度和CPU数组（vitdec需要）
         rOut = double(gather(rOut));

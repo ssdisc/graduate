@@ -9,32 +9,36 @@ function model = ml_cnn_impulse_model()
 %   - 清洁符号估计
 
 model = struct();
-model.name = "impulse_cnn_1d";
+model.name = "impulse_cnn_tcn_v3";
 model.type = "cnn_dl";
 model.trained = false;
-model.featureVersion = 2;
-model.trainingLogicVersion = 4;
-model.featureNames = ["abs_r" "abs_over_median" "absdiff_abs" "phase_diff"];
+model.featureVersion = 3;
+model.trainingLogicVersion = 6;
+model.rxProfile = "impulse";
+model.rxFrontend = "impulse_profile_ml_frontend_v1";
+model.featureNames = ["real_over_median" "imag_over_median" "abs_r" ...
+    "abs_over_median" "absdiff_over_median" "phase_diff" ...
+    "abs_over_local_median" "absdev_over_local_median"];
+model.cleanOutputMode = "residual_correction";
 
 % 网络参数
-model.inputChannels = 4;  % [幅度, 归一化幅度, 幅度差分, 差分相位]
-model.outputSize = 4;     % [p_impulse, reliability, clean_real, clean_imag]
+model.inputChannels = 8;
+model.outputSize = 4;     % [p_impulse, reliability, delta_clean_real, delta_clean_imag]
 
 % 创建网络层
 layers = [
     sequenceInputLayer(model.inputChannels, 'Name', 'input', 'Normalization', 'none')
 
-    % Conv1: 16个滤波器，核大小5
-    convolution1dLayer(5, 16, 'Padding', 'same', 'Name', 'conv1')
-    batchNormalizationLayer('Name', 'bn1')
+    % 轻量TCN式局部上下文，比旧两层CNN更适合识别短突发脉冲。
+    convolution1dLayer(9, 16, 'Padding', 'same', 'Name', 'conv_wide')
     reluLayer('Name', 'relu1')
 
-    % Conv2: 32个滤波器，核大小3
-    convolution1dLayer(3, 32, 'Padding', 'same', 'Name', 'conv2')
-    batchNormalizationLayer('Name', 'bn2')
+    convolution1dLayer(5, 24, 'Padding', 'same', 'Name', 'conv_mid1')
     reluLayer('Name', 'relu2')
 
-    % Conv3: 输出层，4个滤波器
+    convolution1dLayer(5, 24, 'Padding', 'same', 'Name', 'conv_mid2')
+    reluLayer('Name', 'relu3')
+
     convolution1dLayer(1, model.outputSize, 'Padding', 'same', 'Name', 'conv_out')
 ];
 

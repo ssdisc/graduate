@@ -95,6 +95,14 @@ if isfield(reference, "featureVersion")
     ok = ok && isfield(candidate, "featureVersion") ...
         && isequal(candidate.featureVersion, reference.featureVersion);
 end
+if isfield(reference, "rxProfile")
+    ok = ok && isfield(candidate, "rxProfile") ...
+        && string(candidate.rxProfile) == string(reference.rxProfile);
+end
+if isfield(reference, "rxFrontend")
+    ok = ok && isfield(candidate, "rxFrontend") ...
+        && string(candidate.rxFrontend) == string(reference.rxFrontend);
+end
 if isfield(reference, "featureNames")
     ok = ok && isfield(candidate, "featureNames") ...
         && isequal(string(candidate.featureNames(:)).', string(reference.featureNames(:)).');
@@ -129,7 +137,6 @@ end
 end
 
 function [ok, reason] = local_model_context_compatible(candidate, loadedData, expectedContext)
-reason = "";
 expectedContext = local_canonicalize_context(expectedContext);
 candidateContext = [];
 

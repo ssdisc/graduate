@@ -22,7 +22,8 @@ for actionName = actions
     for copyIdx = 1:copies
         triedCopy = copyIdx;
         copyRange = (copyIdx - 1) * copyLen + (1:copyLen);
-        hdrUse = local_prepare_header_symbols_local(headerSym(copyRange), actionName, ctx.runtimeCfg.mitigation);
+        hdrUse = local_prepare_header_symbols_local( ...
+            headerSym(copyRange), actionName, ctx.runtimeCfg.mitigation, ctx.profileName);
         copyCache{copyIdx} = hdrUse;
         hdrBitsNow = decode_phy_header_symbols(hdrUse, ctx.runtimeCfg.frame, ctx.runtimeCfg.fec, ctx.runtimeCfg.softMetric);
         [phyNow, okNow] = parse_phy_header_bits(hdrBitsNow, ctx.runtimeCfg.frame);
@@ -81,7 +82,7 @@ end
 actions = unique([actions string(cfg.actions(:).')], "stable");
 end
 
-function hdrSymPrep = local_prepare_header_symbols_local(hdrSym, actionName, mitigation)
+function hdrSymPrep = local_prepare_header_symbols_local(hdrSym, actionName, mitigation, profileName)
 hdrSym = hdrSym(:);
 actionName = string(actionName);
 if any(actionName == ["none" "fh_erasure" "sc_fde_mmse"])
@@ -94,6 +95,12 @@ if actionName == "fft_bandstop" && isfield(mitigation, "headerBandstop") ...
         && isfield(mitigation.headerBandstop, "enable") && logical(mitigation.headerBandstop.enable)
     cfg = local_header_bandstop_cfg_local(mitigation);
     [hdrSymPrep, ~] = fft_bandstop_filter(hdrSym, cfg);
+    return;
+end
+
+if string(profileName) == "impulse" && any(actionName == ["blanking" "clipping" ...
+        "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard"])
+    [hdrSymPrep, ~] = impulse_profile_frontend(hdrSym, actionName, mitigation);
     return;
 end
 

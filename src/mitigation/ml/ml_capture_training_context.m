@@ -55,10 +55,9 @@ rxSyncCfg = p.rxSync;
 if ~(isfield(rxSyncCfg, "multipathEq") && isstruct(rxSyncCfg.multipathEq) && isscalar(rxSyncCfg.multipathEq))
     error("ml_capture_training_context requires p.rxSync.multipathEq as a scalar struct.");
 end
-if ~isfield(rxSyncCfg.multipathEq, "mlMlp")
-    error("ml_capture_training_context requires p.rxSync.multipathEq.mlMlp.");
+if isfield(rxSyncCfg.multipathEq, "mlMlp")
+    rxSyncCfg.multipathEq = rmfield(rxSyncCfg.multipathEq, "mlMlp");
 end
-rxSyncCfg.multipathEq = rmfield(rxSyncCfg.multipathEq, "mlMlp");
 out = local_capture_value(rxSyncCfg, "p.rxSync");
 end
 

@@ -120,7 +120,9 @@ sampler.impulseToBgRatioRange = local_resolve_range(double(p.channel.impulseToBg
 sampler.singleToneProbability = local_validate_probability(opts.singleToneProbability, "singleToneProbability");
 sampler.singleTonePowerRange = local_resolve_range(0.01, opts.singleTonePowerRange, ...
     "singleTonePowerRange", 0, inf);
-sampler.singleToneFreqHzRange = local_resolve_range(double(p.channel.singleTone.freqHz), opts.singleToneFreqHzRange, ...
+singleToneFreqHz = local_frequency_hz_default(p.channel.singleTone, sampleRateHz, "freqHz", "normFreq", ...
+    "channel.singleTone");
+sampler.singleToneFreqHzRange = local_resolve_range(singleToneFreqHz, opts.singleToneFreqHzRange, ...
     "singleToneFreqHzRange", -freqLimit, freqLimit);
 
 sampler.narrowbandProbability = local_validate_probability(opts.narrowbandProbability, "narrowbandProbability");
@@ -135,9 +137,13 @@ sampler.narrowbandCenterFreqPointsRange = local_resolve_range(double(p.channel.n
 sampler.sweepProbability = local_validate_probability(opts.sweepProbability, "sweepProbability");
 sampler.sweepPowerRange = local_resolve_range(0.01, opts.sweepPowerRange, ...
     "sweepPowerRange", 0, inf);
-sampler.sweepStartHzRange = local_resolve_range(double(p.channel.sweep.startHz), opts.sweepStartHzRange, ...
+sweepStartHz = local_frequency_hz_default(p.channel.sweep, sampleRateHz, "startHz", "startFreq", ...
+    "channel.sweep");
+sweepStopHz = local_frequency_hz_default(p.channel.sweep, sampleRateHz, "stopHz", "stopFreq", ...
+    "channel.sweep");
+sampler.sweepStartHzRange = local_resolve_range(sweepStartHz, opts.sweepStartHzRange, ...
     "sweepStartHzRange", -freqLimit, freqLimit);
-sampler.sweepStopHzRange = local_resolve_range(double(p.channel.sweep.stopHz), opts.sweepStopHzRange, ...
+sampler.sweepStopHzRange = local_resolve_range(sweepStopHz, opts.sweepStopHzRange, ...
     "sweepStopHzRange", -freqLimit, freqLimit);
 if sampler.sweepStartHzRange(2) >= sampler.sweepStopHzRange(1)
     error("sweepStartHzRange 必须整体小于 sweepStopHzRange，避免训练采样到倒扫或零跨度扫频。");
@@ -288,6 +294,24 @@ if extraFlags(5)
 end
 
 profile.cleanBlock = ~(profile.impulseEnable || profile.activeExtraCount > 0);
+end
+
+function freqHz = local_frequency_hz_default(cfg, sampleRateHz, hzField, normField, ownerName)
+if ~(isstruct(cfg) && isscalar(cfg))
+    error("%s must be a scalar struct.", ownerName);
+end
+hzField = char(string(hzField));
+normField = char(string(normField));
+if isfield(cfg, hzField) && ~isempty(cfg.(hzField))
+    freqHz = double(cfg.(hzField));
+elseif isfield(cfg, normField) && ~isempty(cfg.(normField))
+    freqHz = double(cfg.(normField)) * double(sampleRateHz);
+else
+    error("%s must define either %s or %s.", ownerName, hzField, normField);
+end
+if ~(isscalar(freqHz) && isfinite(freqHz))
+    error("%s frequency default must be a finite scalar.", ownerName);
+end
 end
 
 function rangeOut = local_resolve_range(defaultValue, requestedRange, rangeName, minAllowed, maxAllowed)

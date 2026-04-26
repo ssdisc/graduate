@@ -36,8 +36,11 @@ dataStart = headerStop + 1;
 ySymUse = captureStage.ySymRaw;
 symbolReliability = rx_expand_reliability(captureStage.symbolReliabilityFront, numel(ySymUse));
 if ctx.method ~= "none"
-    [ySymUse, reliabilityNow] = mitigate_impulses(captureStage.ySymRaw, ctx.method, ctx.runtimeCfg.mitigation);
+    [ySymUse, reliabilityNow, methodDiag] = impulse_profile_frontend( ...
+        captureStage.ySymRaw, ctx.method, ctx.runtimeCfg.mitigation);
     symbolReliability = min(symbolReliability, rx_expand_reliability(reliabilityNow, numel(ySymUse)));
+else
+    methodDiag = struct("frontEndMethod", "none", "ok", true);
 end
 
 headerSym = ySymUse(headerStart:headerStop);
@@ -47,7 +50,9 @@ if ~(isfield(ctx, "fhCaptureCfg") && isstruct(ctx.fhCaptureCfg) ...
     dataSym = rx_dehop_payload_symbols(dataSym, ctx.pkt);
 end
 symbolReliability = symbolReliability(dataStart:end);
-diagOut = struct("ok", true, "frontEndMethod", string(ctx.method));
+diagOut = methodDiag;
+diagOut.ok = true;
+diagOut.frontEndMethod = string(ctx.method);
 end
 
 function [packetDataBitsRx, symbolReliabilityData] = local_decode_impulse_payload_local(ctx, dataSym, symbolReliability)

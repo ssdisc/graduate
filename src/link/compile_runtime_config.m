@@ -41,7 +41,20 @@ p.linkProfile = struct( ...
     "name", profileName, ...
     "supportedProfiles", ["impulse" "narrowband" "rayleigh_multipath"]);
 
+if isfield(linkSpec.extensions, "ml") && isstruct(linkSpec.extensions.ml)
+    if isfield(linkSpec.extensions.ml, "strictModelLoad")
+        p.mitigation.strictModelLoad = logical(linkSpec.extensions.ml.strictModelLoad);
+    end
+    if isfield(linkSpec.extensions.ml, "requireTrainedModels")
+        p.mitigation.requireTrainedModels = logical(linkSpec.extensions.ml.requireTrainedModels);
+    end
+    if isfield(linkSpec.extensions.ml, "preloaded") && isstruct(linkSpec.extensions.ml.preloaded)
+        p = local_apply_preloaded_models_local(p, linkSpec.extensions.ml.preloaded);
+    end
+end
+
 p = local_finalize_runtime_config_local(p);
+p = local_attach_training_profiles_local(p);
 end
 
 function local_validate_profile_sections_local(linkSpec, profileName)
@@ -153,6 +166,37 @@ for idx = 1:numel(fieldNames)
     fieldName = fieldNames(idx);
     out.(fieldName) = overlay.(fieldName);
 end
+end
+
+function p = local_apply_preloaded_models_local(p, preloaded)
+if isfield(preloaded, "impulseLr")
+    p.mitigation.ml = preloaded.impulseLr;
+end
+if isfield(preloaded, "impulseCnn")
+    p.mitigation.mlCnn = preloaded.impulseCnn;
+end
+if isfield(preloaded, "impulseGru")
+    p.mitigation.mlGru = preloaded.impulseGru;
+end
+if isfield(preloaded, "selector")
+    p.mitigation.selector = preloaded.selector;
+end
+if isfield(preloaded, "narrowbandAction")
+    p.mitigation.mlNarrowband = preloaded.narrowbandAction;
+end
+if isfield(preloaded, "fhErasure")
+    p.mitigation.mlFhErasure = preloaded.fhErasure;
+end
+if isfield(preloaded, "multipathEq")
+    p.rxSync.multipathEq.mlMlp = preloaded.multipathEq;
+end
+end
+
+function p = local_attach_training_profiles_local(p)
+if ~isfield(p.mitigation, "offlineTraining") || ~isstruct(p.mitigation.offlineTraining)
+    p.mitigation.offlineTraining = struct();
+end
+p.mitigation.offlineTraining.impulse = ml_default_impulse_offline_training_profile(p);
 end
 
 function local_require_field_local(s, fieldName, ownerName)
