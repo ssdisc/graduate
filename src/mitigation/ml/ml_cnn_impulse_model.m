@@ -4,26 +4,26 @@ function model = ml_cnn_impulse_model()
 % 使用dlnetwork创建网络，支持GPU加速训练。
 %
 % 输出:
-%   - 每样本的脉冲概率
-%   - 软译码的可靠性权重
-%   - 清洁符号估计
+%   - 每样本的脉冲/抑制概率
+%   - 每样本 keep 系数（soft blanking）
+%   - 预留辅助通道
 
 model = struct();
-model.name = "impulse_cnn_tcn_v3";
+model.name = "impulse_cnn_softblank_distill_v2";
 model.type = "cnn_dl";
 model.trained = false;
 model.featureVersion = 3;
-model.trainingLogicVersion = 6;
+model.trainingLogicVersion = 9;
 model.rxProfile = "impulse";
 model.rxFrontend = "impulse_profile_ml_frontend_v1";
 model.featureNames = ["real_over_median" "imag_over_median" "abs_r" ...
     "abs_over_median" "absdiff_over_median" "phase_diff" ...
     "abs_over_local_median" "absdev_over_local_median"];
-model.cleanOutputMode = "residual_correction";
+model.cleanOutputMode = "soft_blanking_distilled";
 
 % 网络参数
 model.inputChannels = 8;
-model.outputSize = 4;     % [p_impulse, reliability, delta_clean_real, delta_clean_imag]
+model.outputSize = 4;     % [p_impulse, keep_weight, aux1, aux2]
 
 % 创建网络层
 layers = [

@@ -1,5 +1,5 @@
-function [mask, reliability, cleanSym, pImpulse, diagOut] = impulse_ml_predict(rIn, model, expectedType)
-%IMPULSE_ML_PREDICT Predict impulse probability, correction and reliability.
+function [mask, suppressWeight, cleanSym, pImpulse, diagOut] = impulse_ml_predict(rIn, model, expectedType)
+%IMPULSE_ML_PREDICT Predict impulse probability, suppression weight, and correction.
 
 arguments
     rIn
@@ -29,12 +29,24 @@ if size(out, 2) ~= N
         "Impulse ML output length %d differs from input length %d.", size(out, 2), N);
 end
 
+outputMode = string(model.cleanOutputMode);
 pImpulse = local_sigmoid(out(1,:).');
-reliability = local_sigmoid(out(2,:).');
-deltaReal = out(3,:).';
-deltaImag = out(4,:).';
 mask = pImpulse >= double(model.threshold);
-cleanSym = r + complex(deltaReal, deltaImag);
+switch outputMode
+    case "soft_blanking_distilled"
+        keepWeight = local_sigmoid(out(2,:).');
+        keepWeight = max(min(keepWeight, 1), 0);
+        suppressWeight = 1 - keepWeight;
+        cleanSym = keepWeight .* r;
+    case "gated_residual_suppressor"
+        suppressWeight = local_sigmoid(out(2,:).');
+        deltaReal = out(3,:).';
+        deltaImag = out(4,:).';
+        cleanSym = r + complex(deltaReal, deltaImag);
+    otherwise
+        error("impulse_ml_predict:UnsupportedOutputMode", ...
+            "Unsupported impulse ML cleanOutputMode: %s.", char(outputMode));
+end
 
 diagOut = struct( ...
     "modelName", string(model.name), ...
@@ -44,7 +56,9 @@ diagOut = struct( ...
     "threshold", double(model.threshold), ...
     "featureVersion", double(model.featureVersion), ...
     "trainingLogicVersion", double(model.trainingLogicVersion), ...
+    "cleanOutputMode", outputMode, ...
     "meanImpulseProbability", mean(double(pImpulse)), ...
+    "meanSuppressWeight", mean(double(suppressWeight)), ...
     "hardImpulseRate", mean(double(mask)));
 end
 
@@ -63,9 +77,9 @@ for idx = 1:numel(requiredFields)
             "Impulse ML model is missing field %s.", char(fieldName));
     end
 end
-if string(model.cleanOutputMode) ~= "residual_correction"
+if ~any(string(model.cleanOutputMode) == ["gated_residual_suppressor" "soft_blanking_distilled"])
     error("impulse_ml_predict:UnsupportedOutputMode", ...
-        "Impulse ML model must use cleanOutputMode=""residual_correction"".");
+        "Impulse ML model cleanOutputMode is unsupported.");
 end
 if string(model.rxProfile) ~= "impulse" || string(model.rxFrontend) ~= "impulse_profile_ml_frontend_v1"
     error("impulse_ml_predict:WrongProfileFrontend", ...

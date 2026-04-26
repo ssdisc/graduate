@@ -103,7 +103,7 @@ end
 function opts = local_parse_inputs_local(varargin)
 p = inputParser();
 p.FunctionName = 'validate_impulse_ml_compare';
-addParameter(p, 'ImpulseProb', [0.01 0.03 0.05], @(x) isnumeric(x) && isvector(x));
+addParameter(p, 'ImpulseProb', [0.01 0.03 0.05 0.08 0.12 0.16], @(x) isnumeric(x) && isvector(x));
 addParameter(p, 'Methods', ["none" "blanking" "clipping" "ml_cnn"], @(x) isstring(x) || ischar(x) || iscellstr(x));
 addParameter(p, 'EbN0', 6, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
 addParameter(p, 'JsrDb', 0, @(x) isscalar(x) && isnumeric(x) && isfinite(x));

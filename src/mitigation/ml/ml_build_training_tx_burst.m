@@ -34,4 +34,5 @@ training.txPlan = txPlan;
 training.sessionFrames = txPlan.sessionFrames;
 training.txBurstForChannel = txPlan.txBurstForChannel;
 training.txBurstBasebandForSpectrum = txPlan.txBurstBasebandForSpectrum;
+training.burstReport = measure_tx_burst(training.txBurstForChannel(:), waveform);
 end

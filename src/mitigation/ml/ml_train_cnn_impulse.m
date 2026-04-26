@@ -9,7 +9,7 @@ arguments
     opts.epochs (1,1) double {mustBeInteger, mustBePositive} = 30
     opts.batchSize (1,1) double {mustBeInteger, mustBePositive} = 64
     opts.lr (1,1) double {mustBePositive} = 0.001
-    opts.pfaTarget (1,1) double = 0.01
+    opts.pfaTarget (1,1) double = 0.02
     opts.valFraction (1,1) double = 0.15
     opts.testFraction (1,1) double = 0.15
     opts.splitSeed (1,1) double = 1
@@ -21,14 +21,19 @@ arguments
     opts.labelScoreThreshold (1,1) double {mustBePositive} = 0.1
     opts.minPositiveRate (1,1) double {mustBeNonnegative} = 0.002
     opts.maxPositiveRate (1,1) double {mustBePositive} = 0.35
-    opts.thresholdPolicy (1,1) string = "min_pe_under_pfa"
+    opts.thresholdPolicy (1,1) string = "max_fbeta_under_pfa"
     opts.thresholdPfaSlack (1,1) double {mustBeNonnegative} = 0
     opts.thresholdMaxCandidates (1,1) double {mustBeInteger, mustBePositive} = 257
+    opts.thresholdBeta (1,1) double {mustBePositive} = 3.0
     opts.thresholdEvalFramesPerPoint (1,1) double {mustBeInteger, mustBePositive} = 2
     opts.thresholdEvalEbN0dBList double = [6 8 10]
     opts.thresholdEvalJsrDbList double = 0
+    opts.impulsePowerMode (1,1) string {mustBeMember(opts.impulsePowerMode, ["direct_ratio" "jsr_calibrated"])} = "direct_ratio"
+    opts.jsrDbRange (1,2) double = [NaN NaN]
     opts.impulseEnableProbability (1,1) double = 1.0
     opts.impulseProbRange (1,2) double = [NaN NaN]
+    opts.impulseProbFocusRange (1,2) double = [NaN NaN]
+    opts.impulseProbFocusProbability (1,1) double = 0.0
     opts.impulseToBgRatioRange (1,2) double = [NaN NaN]
     opts.singleToneProbability (1,1) double = 0.0
     opts.singleTonePowerRange (1,2) double = [NaN NaN]
@@ -48,6 +53,10 @@ arguments
     opts.multipathProbability (1,1) double = 0.0
     opts.multipathRayleighProbability (1,1) double = 0.5
     opts.maxAdditionalImpairments (1,1) double {mustBeInteger, mustBeNonnegative} = 2
+    opts.focalGamma (1,1) double {mustBeNonnegative} = 2.0
+    opts.falseNegativeWeight (1,1) double {mustBePositive} = 4.0
+    opts.keepLossWeight (1,1) double {mustBeNonnegative} = 1.25
+    opts.consistencyLossWeight (1,1) double {mustBeNonnegative} = 0.35
     opts.saveArtifacts (1,1) logical = false
     opts.saveDir (1,1) string = "models"
     opts.saveTag (1,1) string = ""
@@ -84,8 +93,12 @@ end
 
 dataset = ml_generate_impulse_blocks(p, opts.nBlocks, opts.blockLen, opts.ebN0dBRange, ...
     "labelScoreThreshold", opts.labelScoreThreshold, ...
+    "impulsePowerMode", opts.impulsePowerMode, ...
+    "jsrDbRange", opts.jsrDbRange, ...
     "impulseEnableProbability", opts.impulseEnableProbability, ...
     "impulseProbRange", opts.impulseProbRange, ...
+    "impulseProbFocusRange", opts.impulseProbFocusRange, ...
+    "impulseProbFocusProbability", opts.impulseProbFocusProbability, ...
     "impulseToBgRatioRange", opts.impulseToBgRatioRange, ...
     "singleToneProbability", opts.singleToneProbability, ...
     "singleTonePowerRange", opts.singleTonePowerRange, ...
@@ -114,14 +127,16 @@ if split.nVal < 1 || split.nTest < 1
 end
 
 trainRx = dataset.rxInput(split.trainIdx);
-trainTx = dataset.txClean(split.trainIdx);
-trainY = dataset.impMask(split.trainIdx);
+trainY = dataset.teacherBlankMask(split.trainIdx);
 trainScore = dataset.impulseScore(split.trainIdx);
+trainKeep = dataset.teacherSoftKeep(split.trainIdx);
 valRx = dataset.rxInput(split.valIdx);
-valY = dataset.impMask(split.valIdx);
+valY = dataset.teacherBlankMask(split.valIdx);
 valScore = dataset.impulseScore(split.valIdx);
+valKeep = dataset.teacherSoftKeep(split.valIdx);
 testRx = dataset.rxInput(split.testIdx);
-testY = dataset.impMask(split.testIdx);
+testY = dataset.teacherBlankMask(split.testIdx);
+testKeep = dataset.teacherSoftKeep(split.testIdx);
 
 trainX = local_extract_features(trainRx);
 valX = local_extract_features(valRx);
@@ -137,6 +152,7 @@ valX = local_normalize_features(valX, inputMean, inputStd);
 model = ml_cnn_impulse_model();
 model.inputMean = inputMean;
 model.inputStd = inputStd;
+lossCfg = local_loss_cfg(opts);
 
 trainPosRate = mean(cell2mat(cellfun(@double, trainY, 'UniformOutput', false)));
 valPosRate = local_positive_rate(valY);
@@ -160,13 +176,11 @@ wNeg = 0.5 / max(1 - trainPosRate, 1e-6);
 XTrain = local_to_network_inputs(trainX);
 YTrain = local_to_label_inputs(trainY);
 ScoreTrain = local_to_score_inputs(trainScore);
-TxRealTrain = local_to_residual_real_imag_inputs(trainTx, trainRx, "real");
-TxImagTrain = local_to_residual_real_imag_inputs(trainTx, trainRx, "imag");
+KeepTrain = local_to_keep_inputs(trainKeep);
 XVal = local_to_network_inputs(valX);
 YVal = local_to_label_inputs(valY);
 ScoreVal = local_to_score_inputs(valScore);
-TxRealVal = local_to_residual_real_imag_inputs(dataset.txClean(split.valIdx), valRx, "real");
-TxImagVal = local_to_residual_real_imag_inputs(dataset.txClean(split.valIdx), valRx, "imag");
+KeepVal = local_to_keep_inputs(valKeep);
 
 averageGrad = [];
 averageSqGrad = [];
@@ -191,8 +205,7 @@ for epoch = 1:opts.epochs
         XData = cat(3, XTrain{batchIdx});
         YData = cat(3, YTrain{batchIdx});
         ScoreData = cat(3, ScoreTrain{batchIdx});
-        TxRealData = cat(3, TxRealTrain{batchIdx});
-        TxImagData = cat(3, TxImagTrain{batchIdx});
+        KeepData = cat(3, KeepTrain{batchIdx});
 
         WData = ones(size(YData));
         WData(YData == 1) = wPos;
@@ -201,20 +214,18 @@ for epoch = 1:opts.epochs
         XDl = dlarray(single(XData), 'CTB');
         YDl = dlarray(single(YData), 'CTB');
         ScoreDl = dlarray(single(ScoreData), 'CTB');
-        TxRealDl = dlarray(single(TxRealData), 'CTB');
-        TxImagDl = dlarray(single(TxImagData), 'CTB');
+        KeepDl = dlarray(single(KeepData), 'CTB');
         WDl = dlarray(single(WData), 'CTB');
 
         if executionEnvironment == "gpu"
             XDl = gpuArray(XDl);
             YDl = gpuArray(YDl);
             ScoreDl = gpuArray(ScoreDl);
-            TxRealDl = gpuArray(TxRealDl);
-            TxImagDl = gpuArray(TxImagDl);
+            KeepDl = gpuArray(KeepDl);
             WDl = gpuArray(WDl);
         end
 
-        [loss, gradients] = dlfeval(@modelLoss, model.net, XDl, YDl, ScoreDl, TxRealDl, TxImagDl, WDl);
+        [loss, gradients] = dlfeval(@modelLoss, model.net, XDl, YDl, ScoreDl, KeepDl, WDl, lossCfg);
         [model.net, averageGrad, averageSqGrad] = adamupdate(model.net, gradients, ...
             averageGrad, averageSqGrad, epoch, opts.lr);
 
@@ -223,8 +234,8 @@ for epoch = 1:opts.epochs
 
     epochLoss = epochLoss / numel(XTrain);
     losses(epoch) = epochLoss;
-    valLoss = local_eval_sequence_loss(model.net, XVal, YVal, ScoreVal, TxRealVal, TxImagVal, ...
-        wPos, wNeg, executionEnvironment, @modelLossOnly);
+    valLoss = local_eval_sequence_loss(model.net, XVal, YVal, ScoreVal, KeepVal, ...
+        wPos, wNeg, executionEnvironment, lossCfg, @modelLossOnly);
     valLosses(epoch) = valLoss;
 
     if isfinite(valLoss) && (valLoss < bestValLoss - opts.earlyStoppingMinDelta || bestEpoch == 0)
@@ -262,6 +273,7 @@ model.net = bestNet;
     "policy", opts.thresholdPolicy, ...
     "pfaSlack", opts.thresholdPfaSlack, ...
     "maxCandidates", opts.thresholdMaxCandidates, ...
+    "beta", opts.thresholdBeta, ...
     "evalFramesPerPoint", opts.thresholdEvalFramesPerPoint, ...
     "evalEbN0dBList", opts.thresholdEvalEbN0dBList, ...
     "evalJsrDbList", opts.thresholdEvalJsrDbList, ...
@@ -366,21 +378,10 @@ for k = 1:numel(scoreSet)
 end
 end
 
-function arr = local_to_residual_real_imag_inputs(cleanSet, rxSet, part)
-if numel(cleanSet) ~= numel(rxSet)
-    error("cleanSet与rxSet数量不一致，无法构造残差修复标签。");
-end
-arr = cell(numel(cleanSet), 1);
-for k = 1:numel(cleanSet)
-    residual = cleanSet{k}(:) - rxSet{k}(:);
-    switch part
-        case "real"
-            arr{k} = real(residual).';
-        case "imag"
-            arr{k} = imag(residual).';
-        otherwise
-            error("未知部分: %s", part);
-    end
+function arr = local_to_keep_inputs(keepSet)
+arr = cell(numel(keepSet), 1);
+for k = 1:numel(keepSet)
+    arr{k} = double(keepSet{k}(:)).';
 end
 end
 
@@ -408,14 +409,13 @@ out = struct( ...
     "savedBy", "");
 end
 
-function lossVal = local_eval_sequence_loss(net, XSet, YSet, ScoreSet, TxRealSet, TxImagSet, wPos, wNeg, executionEnvironment, lossFn)
+function lossVal = local_eval_sequence_loss(net, XSet, YSet, ScoreSet, KeepSet, wPos, wNeg, executionEnvironment, lossCfg, lossFn)
 totalLoss = 0;
 for k = 1:numel(XSet)
     XData = XSet{k};
     YData = YSet{k};
     ScoreData = ScoreSet{k};
-    TxRealData = TxRealSet{k};
-    TxImagData = TxImagSet{k};
+    KeepData = KeepSet{k};
 
     WData = ones(size(YData), 'single');
     WData(YData == 1) = wPos;
@@ -424,72 +424,82 @@ for k = 1:numel(XSet)
     XDl = dlarray(single(XData), 'CTB');
     YDl = dlarray(single(YData), 'CTB');
     ScoreDl = dlarray(single(ScoreData), 'CTB');
-    TxRealDl = dlarray(single(TxRealData), 'CTB');
-    TxImagDl = dlarray(single(TxImagData), 'CTB');
+    KeepDl = dlarray(single(KeepData), 'CTB');
     WDl = dlarray(single(WData), 'CTB');
 
     if executionEnvironment == "gpu"
         XDl = gpuArray(XDl);
         YDl = gpuArray(YDl);
         ScoreDl = gpuArray(ScoreDl);
-        TxRealDl = gpuArray(TxRealDl);
-        TxImagDl = gpuArray(TxImagDl);
+        KeepDl = gpuArray(KeepDl);
         WDl = gpuArray(WDl);
     end
 
-    loss = dlfeval(lossFn, net, XDl, YDl, ScoreDl, TxRealDl, TxImagDl, WDl);
+    loss = dlfeval(lossFn, net, XDl, YDl, ScoreDl, KeepDl, WDl, lossCfg);
     totalLoss = totalLoss + double(gather(extractdata(loss)));
 end
 lossVal = totalLoss / max(numel(XSet), 1);
 end
 
-function loss = modelLossOnly(net, X, Y, Score, TxReal, TxImag, W)
+function loss = modelLossOnly(net, X, Y, Score, KeepTarget, W, lossCfg)
 out = forward(net, X);
 
 pImpulse = sigmoid(out(1,:,:));
-reliability = sigmoid(out(2,:,:));
-deltaReal = out(3,:,:);
-deltaImag = out(4,:,:);
+keepPred = sigmoid(out(2,:,:));
 
-bce = -W .* (Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
-lossBce = mean(bce, 'all');
+scoreClipped = min(max(Score, 0), 8);
+severity = 1 - exp(-scoreClipped / 1.5);
+focalPos = (1 - pImpulse) .^ lossCfg.focalGamma;
+focalNeg = pImpulse .^ lossCfg.focalGamma;
+bce = -(Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
+clsWeight = W .* (Y .* (1 + lossCfg.falseNegativeWeight) .* focalPos + (1 - Y) .* focalNeg);
+lossBce = sum(clsWeight .* bce, 'all') / (sum(clsWeight, 'all') + 1e-8);
 
-scoreClippedRepair = min(max(Score, 0), 4);
-repairWeight = 0.05 + scoreClippedRepair / 4;
-mse = (deltaReal - TxReal).^2 + (deltaImag - TxImag).^2;
-lossMse = sum(repairWeight .* mse, 'all') / (sum(repairWeight, 'all') + 1e-8);
+keepWeight = 0.10 + 0.90 * (1 + severity + 1.5 * Y .* (1 - KeepTarget));
+lossKeep = sum(keepWeight .* (keepPred - KeepTarget).^2, 'all') / (sum(keepWeight, 'all') + 1e-8);
 
-scoreClippedRel = min(max(Score, 0), 8);
-relTarget = 1 ./ (1 + scoreClippedRel);
-relLoss = (reliability - relTarget).^2;
-lossRel = mean(relLoss, 'all');
+targetSuppress = Y .* (1 - KeepTarget);
+predSuppress = (1 - keepPred) .* pImpulse;
+consistencyWeight = 0.05 + Y + severity;
+lossConsistency = sum(consistencyWeight .* (predSuppress - targetSuppress).^2, 'all') ...
+    / (sum(consistencyWeight, 'all') + 1e-8);
 
-loss = 1.0 * lossBce + 0.7 * lossMse + 0.2 * lossRel;
+loss = 1.0 * lossBce + lossCfg.keepLossWeight * lossKeep + lossCfg.consistencyLossWeight * lossConsistency;
 end
 
-function [loss, gradients] = modelLoss(net, X, Y, Score, TxReal, TxImag, W)
+function [loss, gradients] = modelLoss(net, X, Y, Score, KeepTarget, W, lossCfg)
 out = forward(net, X);
 
 pImpulse = sigmoid(out(1,:,:));
-reliability = sigmoid(out(2,:,:));
-deltaReal = out(3,:,:);
-deltaImag = out(4,:,:);
+keepPred = sigmoid(out(2,:,:));
 
-bce = -W .* (Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
-lossBce = mean(bce, 'all');
+scoreClipped = min(max(Score, 0), 8);
+severity = 1 - exp(-scoreClipped / 1.5);
+focalPos = (1 - pImpulse) .^ lossCfg.focalGamma;
+focalNeg = pImpulse .^ lossCfg.focalGamma;
+bce = -(Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
+clsWeight = W .* (Y .* (1 + lossCfg.falseNegativeWeight) .* focalPos + (1 - Y) .* focalNeg);
+lossBce = sum(clsWeight .* bce, 'all') / (sum(clsWeight, 'all') + 1e-8);
 
-scoreClippedRepair = min(max(Score, 0), 4);
-repairWeight = 0.05 + scoreClippedRepair / 4;
-mse = (deltaReal - TxReal).^2 + (deltaImag - TxImag).^2;
-lossMse = sum(repairWeight .* mse, 'all') / (sum(repairWeight, 'all') + 1e-8);
+keepWeight = 0.10 + 0.90 * (1 + severity + 1.5 * Y .* (1 - KeepTarget));
+lossKeep = sum(keepWeight .* (keepPred - KeepTarget).^2, 'all') / (sum(keepWeight, 'all') + 1e-8);
 
-scoreClippedRel = min(max(Score, 0), 8);
-relTarget = 1 ./ (1 + scoreClippedRel);
-relLoss = (reliability - relTarget).^2;
-lossRel = mean(relLoss, 'all');
+targetSuppress = Y .* (1 - KeepTarget);
+predSuppress = (1 - keepPred) .* pImpulse;
+consistencyWeight = 0.05 + Y + severity;
+lossConsistency = sum(consistencyWeight .* (predSuppress - targetSuppress).^2, 'all') ...
+    / (sum(consistencyWeight, 'all') + 1e-8);
 
-loss = 1.0 * lossBce + 0.7 * lossMse + 0.2 * lossRel;
+loss = 1.0 * lossBce + lossCfg.keepLossWeight * lossKeep + lossCfg.consistencyLossWeight * lossConsistency;
 gradients = dlgradient(loss, net.Learnables);
+end
+
+function lossCfg = local_loss_cfg(opts)
+lossCfg = struct( ...
+    "focalGamma", double(opts.focalGamma), ...
+    "falseNegativeWeight", double(opts.falseNegativeWeight), ...
+    "keepLossWeight", double(opts.keepLossWeight), ...
+    "consistencyLossWeight", double(opts.consistencyLossWeight));
 end
 
 function y = sigmoid(x)

@@ -13,6 +13,7 @@ arguments
     opts.policy (1,1) string = "min_pe_under_pfa"
     opts.pfaSlack (1,1) double {mustBeNonnegative} = 0
     opts.maxCandidates (1,1) double {mustBeInteger, mustBePositive} = 257
+    opts.beta (1,1) double {mustBePositive} = 2.0
     opts.evalFramesPerPoint (1,1) double {mustBeInteger, mustBePositive} = 2
     opts.evalEbN0dBList double = [6 8 10]
     opts.evalJsrDbList double = 0
@@ -21,12 +22,12 @@ arguments
 end
 
 policy = lower(string(opts.policy));
-samplePolicies = ["min_pe_under_pfa", "max_pd_under_pfa", "min_pe"];
+samplePolicies = ["min_pe_under_pfa", "max_pd_under_pfa", "max_fbeta_under_pfa", "min_pe"];
 packetPolicies = ["min_packet_ber", "min_packet_per"];
 
 if any(policy == samplePolicies)
     [threshold, chosenMetrics, selection] = ml_select_threshold_for_pfa(scores, truth, pfaTarget, ...
-        "policy", policy, "pfaSlack", opts.pfaSlack, "maxCandidates", opts.maxCandidates);
+        "policy", policy, "pfaSlack", opts.pfaSlack, "maxCandidates", opts.maxCandidates, "beta", opts.beta);
     return;
 end
 if any(policy == packetPolicies)

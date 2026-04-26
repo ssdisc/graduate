@@ -33,15 +33,15 @@ headerStart = numel(ctx.pkt.syncSym) + 1;
 headerStop = headerStart + double(ctx.pkt.nPhyHeaderSymTx) - 1;
 dataStart = headerStop + 1;
 
+% The refactored impulse chain keeps only the sample-stage front-end that is
+% already applied during capture/synchronization. Do not run a second
+% symbol-stage mitigation pass here.
 ySymUse = captureStage.ySymRaw;
 symbolReliability = rx_expand_reliability(captureStage.symbolReliabilityFront, numel(ySymUse));
-if ctx.method ~= "none"
-    [ySymUse, reliabilityNow, methodDiag] = impulse_profile_frontend( ...
-        captureStage.ySymRaw, ctx.method, ctx.runtimeCfg.mitigation);
-    symbolReliability = min(symbolReliability, rx_expand_reliability(reliabilityNow, numel(ySymUse)));
-else
-    methodDiag = struct("frontEndMethod", "none", "ok", true);
-end
+methodDiag = struct( ...
+    "frontEndMethod", string(ctx.sampleAction), ...
+    "ok", true, ...
+    "symbolStageBypassed", true);
 
 headerSym = ySymUse(headerStart:headerStop);
 dataSym = ySymUse(dataStart:end);

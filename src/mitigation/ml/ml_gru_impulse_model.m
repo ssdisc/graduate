@@ -5,27 +5,27 @@ function model = ml_gru_impulse_model()
 %
 % 输出:
 %   - 每样本的脉冲概率
-%   - 软译码的可靠性权重
+%   - 每样本的抑制/替换强度
 %   - 清洁符号估计
 
 model = struct();
-model.name = "impulse_gru_dl";
+model.name = "impulse_gru_dl_v2";
 model.type = "gru_dl";
 model.trained = false;
 model.featureVersion = 3;
-model.trainingLogicVersion = 6;
+model.trainingLogicVersion = 7;
 model.rxProfile = "impulse";
 model.rxFrontend = "impulse_profile_ml_frontend_v1";
 model.featureNames = ["real_over_median" "imag_over_median" "abs_r" ...
     "abs_over_median" "absdiff_over_median" "phase_diff" ...
     "abs_over_local_median" "absdev_over_local_median"];
-model.cleanOutputMode = "residual_correction";
+model.cleanOutputMode = "gated_residual_suppressor";
 
 % 网络参数
 model.inputChannels = 8;
 model.projectionSize = 16;
 model.hiddenSize = 24;
-model.outputSize = 4;     % [p_impulse, reliability, delta_clean_real, delta_clean_imag]
+model.outputSize = 4;     % [p_impulse, suppress_weight, delta_clean_real, delta_clean_imag]
 
 % 创建网络层
 layers = [

@@ -38,14 +38,14 @@ switch method
 
     case {"ml_cnn", "ml_cnn_hard"}
         model = local_required_model(mitigation, "mlCnn", @ml_cnn_impulse_model, method);
-        [mask, rel, cleanSym, pImpulse, modelDiag] = impulse_ml_predict(r, model, "cnn_dl");
-        [rOut, reliability] = local_apply_ml_output(r, cleanSym, rel, pImpulse, mask, model.threshold, method);
+        [mask, suppressWeight, cleanSym, pImpulse, modelDiag] = impulse_ml_predict(r, model, "cnn_dl");
+        [rOut, reliability] = local_apply_ml_output(r, cleanSym, suppressWeight, pImpulse, model, method);
         diagOut = local_merge_diag(diagOut, modelDiag);
 
     case {"ml_gru", "ml_gru_hard"}
         model = local_required_model(mitigation, "mlGru", @ml_gru_impulse_model, method);
-        [mask, rel, cleanSym, pImpulse, modelDiag] = impulse_ml_predict(r, model, "gru_dl");
-        [rOut, reliability] = local_apply_ml_output(r, cleanSym, rel, pImpulse, mask, model.threshold, method);
+        [mask, suppressWeight, cleanSym, pImpulse, modelDiag] = impulse_ml_predict(r, model, "gru_dl");
+        [rOut, reliability] = local_apply_ml_output(r, cleanSym, suppressWeight, pImpulse, model, method);
         diagOut = local_merge_diag(diagOut, modelDiag);
 
     otherwise
@@ -91,34 +91,11 @@ if requireTrained && ~(isfield(model, "trained") && logical(model.trained))
 end
 end
 
-function [rOut, reliability] = local_apply_ml_output(r, cleanSym, rel, pImpulse, mask, threshold, method)
+function [rOut, reliability] = local_apply_ml_output(r, cleanSym, suppressWeight, pImpulse, model, method)
 method = lower(string(method));
-if endsWith(method, "_hard")
-    rOut = r;
-    rOut(mask) = 0;
-    reliability = rel(:);
-    reliability(mask) = 0;
-    return;
-end
-blendWeight = local_threshold_gate_probability(pImpulse, threshold);
-rOut = (1 - blendWeight) .* r + blendWeight .* cleanSym(:);
-reliability = rel(:);
-end
-
-function w = local_threshold_gate_probability(p, threshold)
-p = double(gather(p(:)));
-threshold = double(gather(threshold));
-if isempty(threshold) || ~isfinite(threshold)
-    error("Impulse ML threshold is invalid.");
-end
-threshold = min(max(threshold(1), 0), 0.999);
-w = zeros(size(p));
-if threshold >= 0.999
-    return;
-end
-active = p >= threshold;
-w(active) = (p(active) - threshold) / max(1 - threshold, eps);
-w = max(min(w, 1), 0);
+hardMode = endsWith(method, "_hard");
+[rOut, reliability] = impulse_ml_runtime_apply( ...
+    r, cleanSym, suppressWeight, pImpulse, model.threshold, model.cleanOutputMode, hardMode);
 end
 
 function diagOut = local_merge_diag(base, extra)

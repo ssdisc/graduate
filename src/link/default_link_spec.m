@@ -280,8 +280,9 @@ switch profileName
         commonTx.control.phyHeaderRepeatCompact = 2;
         commonTx.control.phyHeaderSpreadFactor = 4;
         commonTx.packet.payloadBitsPerPacket = 4096;
+        commonTx.modulation.type = "QPSK";
         commonTx.outerRs.dataPacketsPerBlock = 8;
-        commonTx.outerRs.parityPacketsPerBlock = 3;
+        commonTx.outerRs.parityPacketsPerBlock = 2;
 
         channel.impulseProb = 0.03;
         channel.impulseWeight = 1.0;
@@ -290,7 +291,7 @@ switch profileName
         channel.narrowband.weight = 0.0;
 
         profileTxCfg.fh.enable = true;
-        profileTxCfg.fh.nFreqs = 4;
+        profileTxCfg.fh.nFreqs = 3;
         profileTxCfg.fh.freqSet = [];
         profileTxCfg.fh.sequenceType = 'chaos';
         profileTxCfg.fh.symbolsPerHop = 64;

@@ -9,7 +9,7 @@ arguments
     opts.epochs (1,1) double {mustBeInteger, mustBePositive} = 30
     opts.batchSize (1,1) double {mustBeInteger, mustBePositive} = 64
     opts.lr (1,1) double {mustBePositive} = 0.001
-    opts.pfaTarget (1,1) double = 0.01
+    opts.pfaTarget (1,1) double = 0.02
     opts.valFraction (1,1) double = 0.15
     opts.testFraction (1,1) double = 0.15
     opts.splitSeed (1,1) double = 1
@@ -21,12 +21,15 @@ arguments
     opts.labelScoreThreshold (1,1) double {mustBePositive} = 0.1
     opts.minPositiveRate (1,1) double {mustBeNonnegative} = 0.002
     opts.maxPositiveRate (1,1) double {mustBePositive} = 0.35
-    opts.thresholdPolicy (1,1) string = "min_pe_under_pfa"
+    opts.thresholdPolicy (1,1) string = "max_fbeta_under_pfa"
     opts.thresholdPfaSlack (1,1) double {mustBeNonnegative} = 0
     opts.thresholdMaxCandidates (1,1) double {mustBeInteger, mustBePositive} = 257
+    opts.thresholdBeta (1,1) double {mustBePositive} = 3.0
     opts.thresholdEvalFramesPerPoint (1,1) double {mustBeInteger, mustBePositive} = 2
     opts.thresholdEvalEbN0dBList double = [6 8 10]
     opts.thresholdEvalJsrDbList double = 0
+    opts.impulsePowerMode (1,1) string {mustBeMember(opts.impulsePowerMode, ["direct_ratio" "jsr_calibrated"])} = "direct_ratio"
+    opts.jsrDbRange (1,2) double = [NaN NaN]
     opts.impulseEnableProbability (1,1) double = 1.0
     opts.impulseProbRange (1,2) double = [NaN NaN]
     opts.impulseToBgRatioRange (1,2) double = [NaN NaN]
@@ -48,6 +51,10 @@ arguments
     opts.multipathProbability (1,1) double = 0.0
     opts.multipathRayleighProbability (1,1) double = 0.5
     opts.maxAdditionalImpairments (1,1) double {mustBeInteger, mustBeNonnegative} = 2
+    opts.focalGamma (1,1) double {mustBeNonnegative} = 2.0
+    opts.falseNegativeWeight (1,1) double {mustBePositive} = 2.5
+    opts.suppressLossWeight (1,1) double {mustBeNonnegative} = 0.35
+    opts.repairLossWeight (1,1) double {mustBeNonnegative} = 0.90
     opts.saveArtifacts (1,1) logical = false
     opts.saveDir (1,1) string = "models"
     opts.saveTag (1,1) string = ""
@@ -84,6 +91,8 @@ end
 
 dataset = ml_generate_impulse_blocks(p, opts.nBlocks, opts.blockLen, opts.ebN0dBRange, ...
     "labelScoreThreshold", opts.labelScoreThreshold, ...
+    "impulsePowerMode", opts.impulsePowerMode, ...
+    "jsrDbRange", opts.jsrDbRange, ...
     "impulseEnableProbability", opts.impulseEnableProbability, ...
     "impulseProbRange", opts.impulseProbRange, ...
     "impulseToBgRatioRange", opts.impulseToBgRatioRange, ...
@@ -137,6 +146,7 @@ valX = local_normalize_features(valX, inputMean, inputStd);
 model = ml_gru_impulse_model();
 model.inputMean = inputMean;
 model.inputStd = inputStd;
+lossCfg = local_loss_cfg(opts);
 
 trainPosRate = mean(cell2mat(cellfun(@double, trainY, 'UniformOutput', false)));
 valPosRate = local_positive_rate(valY);
@@ -214,7 +224,7 @@ for epoch = 1:opts.epochs
             WDl = gpuArray(WDl);
         end
 
-        [loss, gradients] = dlfeval(@modelLossGru, model.net, XDl, YDl, ScoreDl, TxRealDl, TxImagDl, WDl);
+        [loss, gradients] = dlfeval(@modelLossGru, model.net, XDl, YDl, ScoreDl, TxRealDl, TxImagDl, WDl, lossCfg);
         [model.net, averageGrad, averageSqGrad] = adamupdate(model.net, gradients, ...
             averageGrad, averageSqGrad, epoch, opts.lr);
 
@@ -224,7 +234,7 @@ for epoch = 1:opts.epochs
     epochLoss = epochLoss / numel(XTrain);
     losses(epoch) = epochLoss;
     valLoss = local_eval_sequence_loss(model.net, XVal, YVal, ScoreVal, TxRealVal, TxImagVal, ...
-        wPos, wNeg, executionEnvironment, @modelLossGruOnly);
+        wPos, wNeg, executionEnvironment, lossCfg, @modelLossGruOnly);
     valLosses(epoch) = valLoss;
 
     if isfinite(valLoss) && (valLoss < bestValLoss - opts.earlyStoppingMinDelta || bestEpoch == 0)
@@ -262,6 +272,7 @@ model.net = bestNet;
     "policy", opts.thresholdPolicy, ...
     "pfaSlack", opts.thresholdPfaSlack, ...
     "maxCandidates", opts.thresholdMaxCandidates, ...
+    "beta", opts.thresholdBeta, ...
     "evalFramesPerPoint", opts.thresholdEvalFramesPerPoint, ...
     "evalEbN0dBList", opts.thresholdEvalEbN0dBList, ...
     "evalJsrDbList", opts.thresholdEvalJsrDbList, ...
@@ -408,7 +419,7 @@ out = struct( ...
     "savedBy", "");
 end
 
-function lossVal = local_eval_sequence_loss(net, XSet, YSet, ScoreSet, TxRealSet, TxImagSet, wPos, wNeg, executionEnvironment, lossFn)
+function lossVal = local_eval_sequence_loss(net, XSet, YSet, ScoreSet, TxRealSet, TxImagSet, wPos, wNeg, executionEnvironment, lossCfg, lossFn)
 totalLoss = 0;
 for k = 1:numel(XSet)
     XData = XSet{k};
@@ -437,59 +448,75 @@ for k = 1:numel(XSet)
         WDl = gpuArray(WDl);
     end
 
-    loss = dlfeval(lossFn, net, XDl, YDl, ScoreDl, TxRealDl, TxImagDl, WDl);
+    loss = dlfeval(lossFn, net, XDl, YDl, ScoreDl, TxRealDl, TxImagDl, WDl, lossCfg);
     totalLoss = totalLoss + double(gather(extractdata(loss)));
 end
 lossVal = totalLoss / max(numel(XSet), 1);
 end
 
-function loss = modelLossGruOnly(net, X, Y, Score, TxReal, TxImag, W)
+function loss = modelLossGruOnly(net, X, Y, Score, TxReal, TxImag, W, lossCfg)
 out = forward(net, X);
 
 pImpulse = sigmoid(out(1,:,:));
-reliability = sigmoid(out(2,:,:));
+suppressWeight = sigmoid(out(2,:,:));
 deltaReal = out(3,:,:);
 deltaImag = out(4,:,:);
 
-bce = -W .* (Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
-lossBce = mean(bce, 'all');
+scoreClipped = min(max(Score, 0), 8);
+severity = 1 - exp(-scoreClipped / 1.5);
+focalPos = (1 - pImpulse) .^ lossCfg.focalGamma;
+focalNeg = pImpulse .^ lossCfg.focalGamma;
+bce = -(Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
+clsWeight = W .* (Y .* (1 + lossCfg.falseNegativeWeight) .* focalPos + (1 - Y) .* focalNeg);
+lossBce = sum(clsWeight .* bce, 'all') / (sum(clsWeight, 'all') + 1e-8);
 
-scoreClippedRepair = min(max(Score, 0), 4);
-repairWeight = 0.05 + scoreClippedRepair / 4;
+suppressTarget = Y .* (0.60 + 0.40 * severity);
+suppressWeighting = 0.10 + 0.90 * (Y + severity);
+lossSuppress = sum(suppressWeighting .* (suppressWeight - suppressTarget).^2, 'all') ...
+    / (sum(suppressWeighting, 'all') + 1e-8);
+
+repairWeight = 0.02 + suppressTarget + 0.25 * Y;
 mse = (deltaReal - TxReal).^2 + (deltaImag - TxImag).^2;
 lossMse = sum(repairWeight .* mse, 'all') / (sum(repairWeight, 'all') + 1e-8);
 
-scoreClippedRel = min(max(Score, 0), 8);
-relTarget = 1 ./ (1 + scoreClippedRel);
-relLoss = (reliability - relTarget).^2;
-lossRel = mean(relLoss, 'all');
-
-loss = lossBce + 0.7 * lossMse + 0.2 * lossRel;
+loss = 1.0 * lossBce + lossCfg.suppressLossWeight * lossSuppress + lossCfg.repairLossWeight * lossMse;
 end
 
-function [loss, gradients] = modelLossGru(net, X, Y, Score, TxReal, TxImag, W)
+function [loss, gradients] = modelLossGru(net, X, Y, Score, TxReal, TxImag, W, lossCfg)
 out = forward(net, X);
 
 pImpulse = sigmoid(out(1,:,:));
-reliability = sigmoid(out(2,:,:));
+suppressWeight = sigmoid(out(2,:,:));
 deltaReal = out(3,:,:);
 deltaImag = out(4,:,:);
 
-bce = -W .* (Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
-lossBce = mean(bce, 'all');
+scoreClipped = min(max(Score, 0), 8);
+severity = 1 - exp(-scoreClipped / 1.5);
+focalPos = (1 - pImpulse) .^ lossCfg.focalGamma;
+focalNeg = pImpulse .^ lossCfg.focalGamma;
+bce = -(Y .* log(pImpulse + 1e-8) + (1 - Y) .* log(1 - pImpulse + 1e-8));
+clsWeight = W .* (Y .* (1 + lossCfg.falseNegativeWeight) .* focalPos + (1 - Y) .* focalNeg);
+lossBce = sum(clsWeight .* bce, 'all') / (sum(clsWeight, 'all') + 1e-8);
 
-scoreClippedRepair = min(max(Score, 0), 4);
-repairWeight = 0.05 + scoreClippedRepair / 4;
+suppressTarget = Y .* (0.60 + 0.40 * severity);
+suppressWeighting = 0.10 + 0.90 * (Y + severity);
+lossSuppress = sum(suppressWeighting .* (suppressWeight - suppressTarget).^2, 'all') ...
+    / (sum(suppressWeighting, 'all') + 1e-8);
+
+repairWeight = 0.02 + suppressTarget + 0.25 * Y;
 mse = (deltaReal - TxReal).^2 + (deltaImag - TxImag).^2;
 lossMse = sum(repairWeight .* mse, 'all') / (sum(repairWeight, 'all') + 1e-8);
 
-scoreClippedRel = min(max(Score, 0), 8);
-relTarget = 1 ./ (1 + scoreClippedRel);
-relLoss = (reliability - relTarget).^2;
-lossRel = mean(relLoss, 'all');
-
-loss = lossBce + 0.7 * lossMse + 0.2 * lossRel;
+loss = 1.0 * lossBce + lossCfg.suppressLossWeight * lossSuppress + lossCfg.repairLossWeight * lossMse;
 gradients = dlgradient(loss, net.Learnables);
+end
+
+function lossCfg = local_loss_cfg(opts)
+lossCfg = struct( ...
+    "focalGamma", double(opts.focalGamma), ...
+    "falseNegativeWeight", double(opts.falseNegativeWeight), ...
+    "suppressLossWeight", double(opts.suppressLossWeight), ...
+    "repairLossWeight", double(opts.repairLossWeight));
 end
 
 function y = sigmoid(x)

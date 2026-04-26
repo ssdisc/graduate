@@ -6,8 +6,12 @@ arguments
     blockLen (1,1) double {mustBeInteger, mustBePositive}
     ebN0dBRange (1,2) double
     opts.labelScoreThreshold (1,1) double {mustBePositive} = 0.1
+    opts.impulsePowerMode (1,1) string {mustBeMember(opts.impulsePowerMode, ["direct_ratio" "jsr_calibrated"])} = "direct_ratio"
+    opts.jsrDbRange (1,2) double = [NaN NaN]
     opts.impulseEnableProbability (1,1) double = 1.0
     opts.impulseProbRange (1,2) double = [NaN NaN]
+    opts.impulseProbFocusRange (1,2) double = [NaN NaN]
+    opts.impulseProbFocusProbability (1,1) double = 0.0
     opts.impulseToBgRatioRange (1,2) double = [NaN NaN]
     opts.singleToneProbability (1,1) double = 0.0
     opts.singleTonePowerRange (1,2) double = [NaN NaN]
@@ -27,6 +31,7 @@ arguments
     opts.multipathProbability (1,1) double = 0.0
     opts.multipathRayleighProbability (1,1) double = 0.5
     opts.maxAdditionalImpairments (1,1) double {mustBeInteger, mustBeNonnegative} = 2
+    opts.trainingBurstBankSize (1,1) double {mustBeInteger, mustBePositive} = 8
 end
 
 [~, modInfo] = modulate_bits(uint8([0; 1]), p.mod, p.fec);
@@ -37,6 +42,9 @@ Es = 1.0;
 waveform = resolve_waveform_cfg(p);
 sampleRateHz = waveform.sampleRateHz;
 sampler = local_build_channel_sampler(p, sampleRateHz, opts);
+nTrainSymbols = local_training_symbol_count_for_sample_window(p, blockLen, waveform);
+payloadBitsLen = max(512, 8 * ceil(double(nTrainSymbols * bitsPerSym) / 8));
+trainingBurstBank = local_build_training_burst_bank(p, payloadBitsLen, waveform, opts.trainingBurstBankSize, nBlocks);
 
 dataset = struct();
 dataset.domain = "raw_samples";
@@ -45,18 +53,26 @@ dataset.blockLen = blockLen;
 dataset.sampleWindowLen = blockLen;
 dataset.ebN0dBRange = ebN0dBRange;
 dataset.ebN0dBPerBlock = zeros(nBlocks, 1);
+dataset.jsrDbPerBlock = nan(nBlocks, 1);
 dataset.impulseProbPerBlock = zeros(nBlocks, 1);
 dataset.impulseToBgRatioPerBlock = zeros(nBlocks, 1);
+dataset.impulseProbSamplePerBlock = zeros(nBlocks, 1);
+dataset.txBaseAveragePowerLinPerBlock = zeros(nBlocks, 1);
 dataset.txClean = cell(nBlocks, 1);
 dataset.rxInput = cell(nBlocks, 1);
 dataset.impulseScore = cell(nBlocks, 1);
 dataset.impMask = cell(nBlocks, 1);
+dataset.teacherBlankMask = cell(nBlocks, 1);
+dataset.teacherSoftKeep = cell(nBlocks, 1);
+dataset.teacherThreshold = zeros(nBlocks, 1);
 dataset.labelPositiveRate = zeros(nBlocks, 1);
+dataset.teacherPositiveRate = zeros(nBlocks, 1);
 dataset.labeling = struct( ...
     "mode", "score_threshold", ...
     "scoreThreshold", opts.labelScoreThreshold);
 dataset.channelSampling = sampler.summary;
 dataset.channelProfile = local_allocate_channel_profile(nBlocks);
+dataset.trainingBurstBankSize = numel(trainingBurstBank);
 
 for b = 1:nBlocks
     ebN0dB = ebN0dBRange(1) + rand() * diff(ebN0dBRange);
@@ -66,20 +82,36 @@ for b = 1:nBlocks
 
     [pBlock, blockProfile] = local_sample_block_channel(p, sampler);
     dataset.impulseProbPerBlock(b) = pBlock.channel.impulseProb;
-    dataset.impulseToBgRatioPerBlock(b) = pBlock.channel.impulseToBgRatio;
-    dataset.channelProfile = local_store_channel_profile(dataset.channelProfile, b, blockProfile);
+    dataset.jsrDbPerBlock(b) = blockProfile.jsrDb;
 
-    nTrainSymbols = local_training_symbol_count_for_sample_window(pBlock, blockLen, waveform);
-    payloadBitsLen = max(512, 8 * ceil(double(nTrainSymbols * bitsPerSym) / 8));
-    bits = randi([0 1], payloadBitsLen, 1, 'uint8');
-    [txClean, rxInput, ~, impScore] = ml_simulate_training_chain(bits, pBlock, N0, blockLen);
+    bankIdx = 1 + mod(b - 1, numel(trainingBurstBank));
+    training = trainingBurstBank{bankIdx};
+    bits = training.payloadBits;
+    [txClean, rxInput, ~, impScore, runtimeProfile] = ml_simulate_training_chain(bits, pBlock, N0, blockLen, ...
+        "impulsePowerMode", sampler.impulsePowerMode, ...
+        "jsrDb", blockProfile.jsrDb, ...
+        "prebuiltTraining", training);
     impMask = impScore >= opts.labelScoreThreshold;
+    [teacherMask, teacherSoftKeep, teacherThreshold] = local_soft_blanking_teacher_local(rxInput, txClean, p.mitigation);
+
+    blockProfile.impulseToBgRatio = runtimeProfile.impulseToBgRatio;
+    blockProfile.impulseProbSample = runtimeProfile.impulseProbSample;
+    blockProfile.txBaseAveragePowerLin = runtimeProfile.txBaseAveragePowerLin;
+
+    dataset.impulseToBgRatioPerBlock(b) = runtimeProfile.impulseToBgRatio;
+    dataset.impulseProbSamplePerBlock(b) = runtimeProfile.impulseProbSample;
+    dataset.txBaseAveragePowerLinPerBlock(b) = runtimeProfile.txBaseAveragePowerLin;
+    dataset.channelProfile = local_store_channel_profile(dataset.channelProfile, b, blockProfile);
 
     dataset.txClean{b} = txClean;
     dataset.rxInput{b} = rxInput;
     dataset.impulseScore{b} = impScore;
     dataset.impMask{b} = logical(impMask ~= 0);
+    dataset.teacherBlankMask{b} = logical(teacherMask);
+    dataset.teacherSoftKeep{b} = double(teacherSoftKeep(:));
+    dataset.teacherThreshold(b) = double(teacherThreshold);
     dataset.labelPositiveRate(b) = mean(double(dataset.impMask{b}));
+    dataset.teacherPositiveRate(b) = mean(double(dataset.teacherBlankMask{b}));
 end
 dataset.channelProfileSummary = local_summarize_channel_profile(dataset.channelProfile);
 end
@@ -106,16 +138,37 @@ nTrainSymbols = ceil(channelSymbolsNeeded / max(spreadFactor, 1));
 nTrainSymbols = max(nTrainSymbols, 64);
 end
 
+function trainingBurstBank = local_build_training_burst_bank(p, payloadBitsLen, waveform, requestedBankSize, nBlocks)
+bankSize = min(max(1, round(double(requestedBankSize))), max(1, round(double(nBlocks))));
+trainingBurstBank = cell(bankSize, 1);
+for idx = 1:bankSize
+    payloadBits = randi([0 1], payloadBitsLen, 1, "uint8");
+    trainingBurstBank{idx} = ml_build_training_tx_burst(p, payloadBits, waveform);
+end
+end
+
 function sampler = local_build_channel_sampler(p, sampleRateHz, opts)
 freqLimit = 0.499 * sampleRateHz;
 
 sampler = struct();
 sampler.sampleRateHz = sampleRateHz;
+sampler.impulsePowerMode = string(opts.impulsePowerMode);
+sampler.jsrDbRange = local_resolve_jsr_range_local(opts);
 sampler.impulseEnableProbability = local_validate_probability(opts.impulseEnableProbability, "impulseEnableProbability");
 sampler.impulseProbRange = local_resolve_range(double(p.channel.impulseProb), opts.impulseProbRange, ...
     "impulseProbRange", 0, 1);
-sampler.impulseToBgRatioRange = local_resolve_range(double(p.channel.impulseToBgRatio), opts.impulseToBgRatioRange, ...
-    "impulseToBgRatioRange", 0, inf);
+sampler.impulseProbFocusRange = local_resolve_optional_focus_range_local(opts.impulseProbFocusRange, ...
+    "impulseProbFocusRange", 0, 1);
+sampler.impulseProbFocusProbability = local_validate_probability(opts.impulseProbFocusProbability, "impulseProbFocusProbability");
+switch sampler.impulsePowerMode
+    case "direct_ratio"
+        sampler.impulseToBgRatioRange = local_resolve_range(double(p.channel.impulseToBgRatio), opts.impulseToBgRatioRange, ...
+            "impulseToBgRatioRange", 0, inf);
+    case "jsr_calibrated"
+        sampler.impulseToBgRatioRange = [NaN NaN];
+    otherwise
+        error("Unsupported impulsePowerMode: %s", char(sampler.impulsePowerMode));
+end
 
 sampler.singleToneProbability = local_validate_probability(opts.singleToneProbability, "singleToneProbability");
 sampler.singleTonePowerRange = local_resolve_range(0.01, opts.singleTonePowerRange, ...
@@ -163,8 +216,12 @@ sampler.maxAdditionalImpairments = double(opts.maxAdditionalImpairments);
 
 sampler.summary = struct( ...
     "sampleRateHz", sampleRateHz, ...
+    "impulsePowerMode", sampler.impulsePowerMode, ...
+    "jsrDbRange", sampler.jsrDbRange, ...
     "impulseEnableProbability", sampler.impulseEnableProbability, ...
     "impulseProbRange", sampler.impulseProbRange, ...
+    "impulseProbFocusRange", sampler.impulseProbFocusRange, ...
+    "impulseProbFocusProbability", sampler.impulseProbFocusProbability, ...
     "impulseToBgRatioRange", sampler.impulseToBgRatioRange, ...
     "singleToneProbability", sampler.singleToneProbability, ...
     "singleTonePowerRange", sampler.singleTonePowerRange, ...
@@ -191,8 +248,11 @@ pBlock = p;
 
 profile = struct( ...
     "impulseEnable", false, ...
+    "jsrDb", NaN, ...
     "impulseProb", 0, ...
+    "impulseProbSample", 0, ...
     "impulseToBgRatio", 0, ...
+    "txBaseAveragePowerLin", NaN, ...
     "singleToneEnable", false, ...
     "singleTonePower", NaN, ...
     "singleToneFreqHz", NaN, ...
@@ -217,8 +277,16 @@ pBlock.channel.impulseProb = 0;
 pBlock.channel.impulseToBgRatio = 0;
 profile.impulseEnable = rand() < sampler.impulseEnableProbability;
 if profile.impulseEnable
-    pBlock.channel.impulseProb = local_sample_uniform(sampler.impulseProbRange);
-    pBlock.channel.impulseToBgRatio = local_sample_uniform(sampler.impulseToBgRatioRange);
+    pBlock.channel.impulseProb = local_sample_impulse_probability_local(sampler);
+    switch sampler.impulsePowerMode
+        case "direct_ratio"
+            pBlock.channel.impulseToBgRatio = local_sample_uniform(sampler.impulseToBgRatioRange);
+        case "jsr_calibrated"
+            pBlock.channel.impulseToBgRatio = 0;
+            profile.jsrDb = local_sample_uniform(sampler.jsrDbRange);
+        otherwise
+            error("Unsupported impulsePowerMode: %s", char(sampler.impulsePowerMode));
+    end
 end
 profile.impulseProb = pBlock.channel.impulseProb;
 profile.impulseToBgRatio = pBlock.channel.impulseToBgRatio;
@@ -296,6 +364,37 @@ end
 profile.cleanBlock = ~(profile.impulseEnable || profile.activeExtraCount > 0);
 end
 
+function [teacherMask, teacherSoftKeep, threshold] = local_soft_blanking_teacher_local(rxInput, txClean, mitigationCfg)
+rxInput = rxInput(:);
+txClean = txClean(:);
+if numel(rxInput) ~= numel(txClean)
+    error("teacher blanking target generation requires matched rxInput and txClean lengths.");
+end
+if ~(isfield(mitigationCfg, "thresholdStrategy") && isfield(mitigationCfg, "thresholdAlpha") && isfield(mitigationCfg, "thresholdFixed"))
+    error("teacher blanking target generation requires mitigation threshold fields.");
+end
+
+switch string(mitigationCfg.thresholdStrategy)
+    case "median"
+        threshold = double(mitigationCfg.thresholdAlpha) * median(abs(rxInput));
+    case "fixed"
+        threshold = double(mitigationCfg.thresholdFixed);
+    otherwise
+        error("Unsupported mitigation.thresholdStrategy for teacher blanking: %s", string(mitigationCfg.thresholdStrategy));
+end
+if ~(isscalar(threshold) && isfinite(threshold) && threshold >= 0)
+    error("Teacher blanking threshold must be a finite nonnegative scalar.");
+end
+
+mag = abs(rxInput);
+teacherMask = mag > threshold;
+teacherSoftKeep = ones(size(rxInput));
+if any(teacherMask)
+    teacherSoftKeep(teacherMask) = 0;
+end
+teacherSoftKeep = max(min(teacherSoftKeep, 1), 0);
+end
+
 function freqHz = local_frequency_hz_default(cfg, sampleRateHz, hzField, normField, ownerName)
 if ~(isstruct(cfg) && isscalar(cfg))
     error("%s must be a scalar struct.", ownerName);
@@ -351,12 +450,64 @@ end
 rangeOut = [lo, hi];
 end
 
+function rangeOut = local_resolve_jsr_range_local(opts)
+requestedRange = double(opts.jsrDbRange(:).');
+switch string(opts.impulsePowerMode)
+    case "direct_ratio"
+        rangeOut = [NaN NaN];
+    case "jsr_calibrated"
+        if all(isnan(requestedRange))
+            error("jsr_calibrated impulse training requires an explicit jsrDbRange.");
+        end
+        if numel(requestedRange) ~= 2 || any(~isfinite(requestedRange))
+            error("jsrDbRange 必须是长度为2的有限数值范围。");
+        end
+        if requestedRange(1) > requestedRange(2)
+            error("jsrDbRange 的下界不能大于上界。");
+        end
+        rangeOut = requestedRange;
+    otherwise
+        error("Unsupported impulsePowerMode: %s", char(opts.impulsePowerMode));
+end
+end
+
+function rangeOut = local_resolve_optional_focus_range_local(requestedRange, rangeName, minAllowed, maxAllowed)
+requestedRange = double(requestedRange(:).');
+if all(isnan(requestedRange))
+    rangeOut = [NaN NaN];
+    return;
+end
+if numel(requestedRange) ~= 2 || any(~isfinite(requestedRange))
+    error("%s 必须是长度为2的有限数值范围。", rangeName);
+end
+lo = requestedRange(1);
+hi = requestedRange(2);
+if lo > hi
+    error("%s 的下界不能大于上界。", rangeName);
+end
+if lo < minAllowed || hi > maxAllowed
+    error("%s 超出允许范围 [%.4g, %.4g]。", rangeName, minAllowed, maxAllowed);
+end
+rangeOut = [lo, hi];
+end
+
 function value = local_sample_uniform(valueRange)
 valueRange = double(valueRange(:).');
 if valueRange(1) == valueRange(2)
     value = valueRange(1);
 else
     value = valueRange(1) + rand() * diff(valueRange);
+end
+end
+
+function value = local_sample_impulse_probability_local(sampler)
+useFocus = all(isfinite(sampler.impulseProbFocusRange)) ...
+    && sampler.impulseProbFocusProbability > 0 ...
+    && rand() < sampler.impulseProbFocusProbability;
+if useFocus
+    value = local_sample_uniform(sampler.impulseProbFocusRange);
+else
+    value = local_sample_uniform(sampler.impulseProbRange);
 end
 end
 
@@ -382,8 +533,11 @@ end
 function profileSet = local_allocate_channel_profile(nBlocks)
 profileSet = struct( ...
     "impulseEnable", false(nBlocks, 1), ...
+    "jsrDb", nan(nBlocks, 1), ...
     "impulseProb", zeros(nBlocks, 1), ...
+    "impulseProbSample", zeros(nBlocks, 1), ...
     "impulseToBgRatio", zeros(nBlocks, 1), ...
+    "txBaseAveragePowerLin", nan(nBlocks, 1), ...
     "singleToneEnable", false(nBlocks, 1), ...
     "singleTonePower", nan(nBlocks, 1), ...
     "singleToneFreqHz", nan(nBlocks, 1), ...
@@ -427,8 +581,11 @@ summary.multipathBlocks = nnz(profile.multipathEnable);
 summary.rayleighBlocks = nnz(profile.multipathRayleigh);
 summary.extraImpairmentBlocks = nnz(profile.activeExtraCount > 0);
 summary.mixedExtraBlocks = nnz(profile.activeExtraCount >= 2);
+summary.realizedJsrDbRange = local_realized_range(profile.jsrDb, profile.impulseEnable);
 summary.realizedImpulseProbRange = local_realized_range(profile.impulseProb, profile.impulseEnable);
+summary.realizedImpulseProbSampleRange = local_realized_range(profile.impulseProbSample, profile.impulseEnable);
 summary.realizedImpulseToBgRatioRange = local_realized_range(profile.impulseToBgRatio, profile.impulseEnable);
+summary.realizedTxBaseAveragePowerLinRange = local_realized_range(profile.txBaseAveragePowerLin, profile.impulseEnable);
 summary.realizedSingleTonePowerRange = local_realized_range(profile.singleTonePower, profile.singleToneEnable);
 summary.realizedSingleToneFreqHzRange = local_realized_range(profile.singleToneFreqHz, profile.singleToneEnable);
 summary.realizedNarrowbandPowerRange = local_realized_range(profile.narrowbandPower, profile.narrowbandEnable);

@@ -103,22 +103,16 @@ switch lower(string(method))
             model = ml_cnn_impulse_model();
         end
         local_require_trained_dl_model(model, "ml_cnn", mit);
-        [mask, rel, cleanSym, pImp] = ml_cnn_impulse_detect(r, model);
+        [mask, suppressWeight, cleanSym, pImp] = ml_cnn_impulse_detect(r, model);
 
-        % 对检测到的脉冲使用清洁符号，否则使用原始符号
         rOut = r;
         if model.trained
-            % 使用由threshold门控后的软权重，避免低于阈值的样本也被过度修正。
-            blendWeight = local_threshold_gate_probability(pImp, model.threshold);
-            rOut = (1 - blendWeight) .* r + blendWeight .* cleanSym;
+            [rOut, reliability] = impulse_ml_runtime_apply( ...
+                r, cleanSym, suppressWeight, pImp, model.threshold, model.cleanOutputMode, false);
         else
-            % 未训练：退回到置零
             rOut(mask) = 0;
-            rel(mask) = 0;
+            reliability(mask) = 0;
         end
-        % 确保double精度和CPU数组（vitdec需要）
-        rOut = double(gather(rOut));
-        reliability = double(gather(rel));
 
     case "ml_cnn_hard"
         % 1D CNN硬置零（用于比较）
@@ -128,11 +122,9 @@ switch lower(string(method))
             model = ml_cnn_impulse_model();
         end
         local_require_trained_dl_model(model, "ml_cnn_hard", mit);
-        [mask, rel, ~, ~] = ml_cnn_impulse_detect(r, model);
-        rOut = r;
-        rOut(mask) = 0;
-        reliability = double(rel);
-        reliability(mask) = 0;
+        [~, suppressWeight, cleanSym, pImp] = ml_cnn_impulse_detect(r, model);
+        [rOut, reliability] = impulse_ml_runtime_apply( ...
+            r, cleanSym, suppressWeight, pImp, model.threshold, model.cleanOutputMode, true);
 
     case "ml_gru"
         % GRU带软输出
@@ -142,19 +134,16 @@ switch lower(string(method))
             model = ml_gru_impulse_model();
         end
         local_require_trained_dl_model(model, "ml_gru", mit);
-        [mask, rel, cleanSym, pImp] = ml_gru_impulse_detect(r, model);
+        [mask, suppressWeight, cleanSym, pImp] = ml_gru_impulse_detect(r, model);
 
         rOut = r;
         if model.trained
-            blendWeight = local_threshold_gate_probability(pImp, model.threshold);
-            rOut = (1 - blendWeight) .* r + blendWeight .* cleanSym;
+            [rOut, reliability] = impulse_ml_runtime_apply( ...
+                r, cleanSym, suppressWeight, pImp, model.threshold, model.cleanOutputMode, false);
         else
             rOut(mask) = 0;
-            rel(mask) = 0;
+            reliability(mask) = 0;
         end
-        % 确保double精度和CPU数组（vitdec需要）
-        rOut = double(gather(rOut));
-        reliability = double(gather(rel));
 
     case "ml_gru_hard"
         % GRU硬置零
@@ -164,11 +153,9 @@ switch lower(string(method))
             model = ml_gru_impulse_model();
         end
         local_require_trained_dl_model(model, "ml_gru_hard", mit);
-        [mask, rel, ~, ~] = ml_gru_impulse_detect(r, model);
-        rOut = r;
-        rOut(mask) = 0;
-        reliability = double(rel);
-        reliability(mask) = 0;
+        [~, suppressWeight, cleanSym, pImp] = ml_gru_impulse_detect(r, model);
+        [rOut, reliability] = impulse_ml_runtime_apply( ...
+            r, cleanSym, suppressWeight, pImp, model.threshold, model.cleanOutputMode, true);
 
     case "ml_narrowband"
         if isfield(mit, "mlNarrowband") && ~isempty(mit.mlNarrowband)
@@ -217,18 +204,3 @@ end
 cfg = mit.fftBandstop;
 end
 
-function w = local_threshold_gate_probability(p, threshold)
-p = double(gather(p(:)));
-threshold = double(gather(threshold));
-if isempty(threshold) || ~isfinite(threshold)
-    error("ML模型threshold无效，无法计算软门控权重。");
-end
-threshold = min(max(threshold(1), 0), 0.999);
-w = zeros(size(p));
-if threshold >= 0.999
-    return;
-end
-active = p >= threshold;
-w(active) = (p(active) - threshold) / max(1 - threshold, eps);
-w = max(min(w, 1), 0);
-end
