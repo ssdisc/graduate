@@ -65,8 +65,9 @@ for pointIdx = 1:nPoints
         end
 
         txBurst = txScale * txArtifacts.burstForChannel(:);
-        [rxBurst, ~, chState] = channel_bg_impulsive(txBurst, noisePsdLin, pointChannel);
+        [rxBurst, chState] = local_capture_frame_waveform_local(txBurst, noisePsdLin, pointChannel, runtimeCfg.rxDiversity);
         captureGuardSamples = local_capture_guard_samples_local(runtimeCfg, waveform);
+        totalRxSamples = rx_capture_total_samples(rxBurst);
 
         for methodIdx = 1:nMethods
             sessionCfg = struct( ...
@@ -87,12 +88,8 @@ for pointIdx = 1:nPoints
             pktLenSamples = numel(txPacket.txSymForChannel);
             for methodIdx = 1:nMethods
                 rxCursor = max(1, round(double(rxCursorByMethod(methodIdx))));
-                rxStop = min(numel(rxBurst), rxCursor + pktLenSamples + captureGuardSamples - 1);
-                if rxCursor > numel(rxBurst)
-                    rxWindow = complex(zeros(0, 1));
-                else
-                    rxWindow = rxBurst(rxCursor:rxStop);
-                end
+                rxStop = min(totalRxSamples, rxCursor + pktLenSamples + captureGuardSamples - 1);
+                rxWindow = rx_slice_capture_window(rxBurst, rxCursor, rxStop);
                 rxCfg = struct( ...
                     "packetIndex", pktIdx, ...
                     "runtimeCfg", runtimeCfg, ...
@@ -113,7 +110,7 @@ for pointIdx = 1:nPoints
                     sessionCtxByMethod{methodIdx} = rxPacket.sessionCtx;
                 end
                 rxCursorByMethod(methodIdx) = local_advance_packet_cursor_local( ...
-                    rxCursor, pktLenSamples, rxPacket, numel(rxBurst));
+                    rxCursor, pktLenSamples, rxPacket, totalRxSamples);
             end
         end
 
@@ -206,6 +203,17 @@ if isfield(runtimeCfg.sim, "saveFigures") && logical(runtimeCfg.sim.saveFigures)
         mkdir(char(runtimeCfg.sim.resultsDir));
     end
     save_figures(results);
+end
+end
+
+function [rxBurst, chState] = local_capture_frame_waveform_local(txBurst, noisePsdLin, pointChannel, rxDiversityCfg)
+cfg = rx_validate_diversity_cfg(rxDiversityCfg, "runtimeCfg.rxDiversity");
+if cfg.enable
+    channelBank = freeze_rx_diversity_channel_bank(pointChannel, cfg);
+    [rxBurst, chState] = capture_rx_diversity_waveforms(txBurst, noisePsdLin, channelBank, cfg);
+else
+    [rxBurst, ~, chState] = channel_bg_impulsive(txBurst, noisePsdLin, pointChannel);
+    chState.rxDiversity = cfg;
 end
 end
 

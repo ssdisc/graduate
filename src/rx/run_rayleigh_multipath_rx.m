@@ -2,7 +2,7 @@ function rxResult = run_rayleigh_multipath_rx(rxSamples, txArtifacts, rxCfg)
 %RUN_RAYLEIGH_MULTIPATH_RX Dedicated Rayleigh multipath receiver entry contract.
 
 arguments
-    rxSamples (:,1) double
+    rxSamples
     txArtifacts (1,1) struct
     rxCfg (1,1) struct
 end
@@ -29,37 +29,24 @@ rxResult = rx_finalize_packet_result( ...
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_rayleigh_channel_stage_local(ctx, captureStage)
-headerStart = numel(ctx.pkt.syncSym) + 1;
-headerStop = headerStart + double(ctx.pkt.nPhyHeaderSymTx) - 1;
-dataStart = headerStop + 1;
-
-ySymUse = captureStage.ySymRaw;
-diagOut = struct("ok", true, "headerEqualizer", "none");
-if ctx.method == "sc_fde_mmse"
-    freqBySymbol = local_packet_frequency_offsets_local(ctx.pkt, numel(captureStage.ySymRaw));
-    eq = multipath_equalizer_from_preamble( ...
-        ctx.pkt.syncSym(:), captureStage.ySymRaw(1:numel(ctx.pkt.syncSym)), ...
-        local_header_equalizer_cfg_local(ctx.runtimeCfg, ctx.pkt), ...
-        double(ctx.rxCfg.noisePsdLin), ...
-        numel(ctx.rxCfg.channelState.multipathTaps));
-    ySymUse = local_apply_frequency_aware_equalizer_block_local(captureStage.ySymRaw, eq, freqBySymbol);
-    diagOut.headerEqualizer = eq.method;
-    diagOut.payloadEqualizer = eq;
+if local_rayleigh_branch_diversity_active_local(captureStage.front)
+    [headerSym, dataSym, symbolReliability, diagOut] = local_rayleigh_branch_diversity_stage_local(ctx, captureStage.front);
+    return;
 end
-
-headerSym = ySymUse(headerStart:headerStop);
-dataSym = captureStage.ySymRaw(dataStart:end);
-if ~(isfield(ctx, "fhCaptureCfg") && isstruct(ctx.fhCaptureCfg) ...
-        && isfield(ctx.fhCaptureCfg, "enable") && logical(ctx.fhCaptureCfg.enable))
-    dataSym = rx_dehop_payload_symbols(dataSym, ctx.pkt);
-end
-symbolReliability = rx_expand_reliability(captureStage.symbolReliabilityFront(dataStart:end), numel(dataSym));
+[headerSym, dataSym, symbolReliability, diagOut] = local_rayleigh_single_branch_stage_local( ...
+    ctx, captureStage.ySymRaw, captureStage.symbolReliabilityFront);
 end
 
 function [packetDataBitsRx, symbolReliabilityData, profileDiag] = local_decode_rayleigh_payload_local(ctx, dataSym, symbolReliability, frontEndDiag)
-[dataSymUse, reliabilityNow, scFdeDiag] = local_sc_fde_payload_decode_local(dataSym(:), ctx, frontEndDiag);
-symbolReliabilityData = min(rx_expand_reliability(symbolReliability, numel(dataSymUse)), ...
-    rx_expand_reliability(reliabilityNow, numel(dataSymUse)));
+if isfield(frontEndDiag, "payloadBranchState") && isstruct(frontEndDiag.payloadBranchState) ...
+        && isfield(frontEndDiag.payloadBranchState, "enable") && logical(frontEndDiag.payloadBranchState.enable)
+    [dataSymUse, symbolReliabilityData, scFdeDiag] = local_decode_rayleigh_payload_diversity_local( ...
+        ctx, frontEndDiag.payloadBranchState);
+else
+    [dataSymUse, reliabilityNow, scFdeDiag] = local_sc_fde_payload_decode_local(dataSym(:), ctx, frontEndDiag);
+    symbolReliabilityData = min(rx_expand_reliability(symbolReliability, numel(dataSymUse)), ...
+        rx_expand_reliability(reliabilityNow, numel(dataSymUse)));
+end
 packetDataBitsRx = rx_decode_packet_bits_common(dataSymUse, symbolReliabilityData, ctx.pkt, ctx.runtimeCfg);
 profileDiag = struct("scFde", scFdeDiag);
 end
@@ -109,13 +96,7 @@ for hopIdx = 1:nHops
     if numel(h) > coreLen
         error("SC-FDE core length %d is shorter than channel length %d.", coreLen, numel(h));
     end
-    H = fft([h(:); zeros(coreLen - numel(h), 1)]);
-    if isfinite(lambda)
-        W = conj(H) ./ max(abs(H).^2 + lambda, eps);
-        xCore = ifft(fft(core) .* W);
-    else
-        xCore = core;
-    end
+    xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, coreLen);
 
     pilotTx = sc_fde_payload_pilot_symbols(ctx.runtimeCfg.scFde, double(ctx.pkt.packetIndex), hopIdx);
     pilotRx = xCore(1:pilotLength);
@@ -141,6 +122,452 @@ diagOut = struct( ...
     "hopFrequencies", hopFreqs, ...
     "pilotMse", pilotMse, ...
     "hopReliability", reliabilityHop);
+end
+
+function [headerSym, dataSym, symbolReliability, diagOut] = local_rayleigh_single_branch_stage_local(ctx, ySymRawFull, symbolReliabilityFull)
+headerStart = numel(ctx.pkt.syncSym) + 1;
+headerStop = headerStart + double(ctx.pkt.nPhyHeaderSymTx) - 1;
+dataStart = headerStop + 1;
+
+ySymRawFull = rx_fit_complex_length(ySymRawFull, ctx.expectedLen);
+symbolReliabilityFull = rx_expand_reliability(symbolReliabilityFull, ctx.expectedLen);
+
+ySymUse = ySymRawFull;
+diagOut = struct("ok", true, "headerEqualizer", "none");
+if ctx.method == "sc_fde_mmse"
+    freqBySymbol = local_packet_frequency_offsets_local(ctx.pkt, numel(ySymRawFull));
+    eq = multipath_equalizer_from_preamble( ...
+        ctx.pkt.syncSym(:), ySymRawFull(1:numel(ctx.pkt.syncSym)), ...
+        local_header_equalizer_cfg_local(ctx.runtimeCfg, ctx.pkt), ...
+        double(ctx.rxCfg.noisePsdLin), ...
+        numel(ctx.rxCfg.channelState.multipathTaps));
+    ySymUse = local_apply_frequency_aware_equalizer_block_local(ySymRawFull, eq, freqBySymbol);
+    diagOut.headerEqualizer = eq.method;
+    diagOut.payloadEqualizer = eq;
+end
+
+headerSym = ySymUse(headerStart:headerStop);
+dataSym = ySymRawFull(dataStart:end);
+if ~(isfield(ctx, "fhCaptureCfg") && isstruct(ctx.fhCaptureCfg) ...
+        && isfield(ctx.fhCaptureCfg, "enable") && logical(ctx.fhCaptureCfg.enable))
+    dataSym = rx_dehop_payload_symbols(dataSym, ctx.pkt);
+end
+symbolReliability = rx_expand_reliability(symbolReliabilityFull(dataStart:end), numel(dataSym));
+diagOut.headerReliability = rx_expand_reliability(symbolReliabilityFull(headerStart:headerStop), numel(headerSym));
+diagOut.payloadInputLength = numel(dataSym);
+end
+
+function [headerSym, dataSym, symbolReliability, diagOut] = local_rayleigh_branch_diversity_stage_local(ctx, front)
+[branchFronts, branchPowerWeights] = local_valid_rayleigh_branch_fronts_local(front);
+nBranches = numel(branchFronts);
+headerBranches = cell(nBranches, 1);
+headerReliabilityBranches = cell(nBranches, 1);
+dataBranches = cell(nBranches, 1);
+dataReliabilityBranches = cell(nBranches, 1);
+branchDiagList = cell(nBranches, 1);
+branchScores = local_normalize_branch_weights_local(branchPowerWeights);
+
+for branchIdx = 1:nBranches
+    branchFront = branchFronts{branchIdx};
+    [headerBranches{branchIdx}, dataBranches{branchIdx}, dataReliabilityBranches{branchIdx}, branchDiagList{branchIdx}] = ...
+        local_rayleigh_single_branch_stage_local( ...
+            ctx, branchFront.rFull, branchFront.reliabilityFull);
+    headerReliabilityBranches{branchIdx} = branchDiagList{branchIdx}.headerReliability;
+    branchScores(branchIdx) = branchScores(branchIdx) * max(mean(headerReliabilityBranches{branchIdx}), eps);
+end
+
+branchScores = local_sc_fde_gate_branch_scores_local(branchScores, "Rayleigh header branch gating");
+[headerSym, headerReliability] = local_weighted_symbol_branch_combine_local( ...
+    headerBranches, headerReliabilityBranches, branchScores, "Rayleigh header branch combine");
+[~, bestBranchIdx] = max(branchScores);
+dataSym = dataBranches{bestBranchIdx};
+symbolReliability = dataReliabilityBranches{bestBranchIdx};
+
+diagOut = struct( ...
+    "ok", true, ...
+    "headerEqualizer", "branch_mmse_combine", ...
+    "nBranches", double(nBranches), ...
+    "branchPowerWeights", branchPowerWeights, ...
+    "branchScores", branchScores, ...
+    "bestBranchIndex", double(bestBranchIdx), ...
+    "headerReliability", headerReliability, ...
+    "payloadBranchState", struct( ...
+        "enable", true, ...
+        "branchDataSymbols", {dataBranches}, ...
+        "branchDataReliability", {dataReliabilityBranches}, ...
+        "branchFrontEndDiag", {branchDiagList}, ...
+        "branchPowerWeights", branchPowerWeights, ...
+        "branchScores", branchScores));
+end
+
+function [dataSymUse, symbolReliabilityData, diagOut] = local_decode_rayleigh_payload_diversity_local(ctx, payloadBranchState)
+requiredFields = ["branchDataSymbols" "branchDataReliability" "branchFrontEndDiag" "branchScores" "branchPowerWeights"];
+for idx = 1:numel(requiredFields)
+    fieldName = requiredFields(idx);
+    if ~isfield(payloadBranchState, fieldName)
+        error("Rayleigh payload diversity state requires payloadBranchState.%s.", fieldName);
+    end
+end
+
+branchDataSymbols = payloadBranchState.branchDataSymbols;
+branchDataReliability = payloadBranchState.branchDataReliability;
+branchFrontEndDiag = payloadBranchState.branchFrontEndDiag;
+nBranches = numel(branchDataSymbols);
+if ~(iscell(branchDataSymbols) && iscell(branchDataReliability) && iscell(branchFrontEndDiag) ...
+        && numel(branchDataReliability) == nBranches && numel(branchFrontEndDiag) == nBranches ...
+        && numel(payloadBranchState.branchPowerWeights) == nBranches)
+    error("Rayleigh payload diversity state lists must have matching branch counts.");
+end
+
+plan = ctx.pkt.scFdeInfo;
+if ~(isstruct(plan) && isfield(plan, "enable") && logical(plan.enable))
+    branchScores = local_normalize_branch_weights_local(double(payloadBranchState.branchPowerWeights(:)));
+    branchScores = local_sc_fde_gate_branch_scores_local(branchScores, "Rayleigh payload raw branch gating");
+    [dataSymUse, symbolReliabilityData] = local_weighted_symbol_branch_combine_local( ...
+        branchDataSymbols, branchDataReliability, branchScores, "Rayleigh payload raw branch combine");
+    diagOut = struct( ...
+        "enabled", false, ...
+        "method", string(ctx.method), ...
+        "diversityMode", "branch_raw_symbol_combine", ...
+        "nBranches", double(nBranches), ...
+        "branchScores", branchScores, ...
+        "combinedReliabilityMean", mean(symbolReliabilityData));
+    return;
+end
+
+hopLen = round(double(plan.hopLen));
+coreLen = round(double(plan.coreLen));
+cpLen = round(double(plan.cpLen));
+pilotLength = round(double(plan.pilotLength));
+dataPerHop = round(double(plan.dataSymbolsPerHop));
+nHops = round(double(plan.nHops));
+branchScoreBase = local_normalize_branch_weights_local(double(payloadBranchState.branchPowerWeights(:)));
+
+lambda = double(ctx.runtimeCfg.scFde.lambdaFactor) * double(ctx.rxCfg.noisePsdLin);
+if ctx.method ~= "sc_fde_mmse"
+    lambda = inf;
+end
+
+hBankList = cell(nBranches, 1);
+bankModes = strings(nBranches, 1);
+perBranchPilotMse = nan(nHops, nBranches);
+hopBranchScores = zeros(nHops, nBranches);
+hopFreqs = zeros(nHops, 1);
+for branchIdx = 1:nBranches
+    branchDataSymbols{branchIdx} = rx_fit_complex_length(branchDataSymbols{branchIdx}, nHops * hopLen);
+    branchDataReliability{branchIdx} = rx_expand_reliability(branchDataReliability{branchIdx}, nHops * hopLen);
+    [hopFreqsNow, hBankList{branchIdx}, bankModes(branchIdx)] = local_sc_fde_payload_channel_bank_local( ...
+        ctx, branchFrontEndDiag{branchIdx}, nHops);
+    if branchIdx == 1
+        hopFreqs = hopFreqsNow;
+    elseif any(abs(hopFreqsNow - hopFreqs) > 1e-10)
+        error("Rayleigh payload diversity requires the same hop frequencies across branches.");
+    end
+end
+
+dataOutFull = complex(zeros(nHops * dataPerHop, 1));
+relOutFull = ones(nHops * dataPerHop, 1);
+pilotMseCombined = nan(nHops, 1);
+hopReliabilityCombined = ones(nHops, 1);
+
+for hopIdx = 1:nHops
+    pilotTx = sc_fde_payload_pilot_symbols(ctx.runtimeCfg.scFde, double(ctx.pkt.packetIndex), hopIdx);
+    coreList = cell(nBranches, 1);
+    relList = cell(nBranches, 1);
+    scoreList = zeros(nBranches, 1);
+
+    for branchIdx = 1:nBranches
+        [core, relCore] = local_sc_fde_core_from_physical_hop_local( ...
+            branchDataSymbols{branchIdx}, branchDataReliability{branchIdx}, hopIdx, plan);
+        h = hBankList{branchIdx}{hopIdx};
+        if numel(h) > cpLen + 1
+            error("SC-FDE diversity requires channel length <= cpLen+1. Channel length=%d, cpLen=%d.", ...
+                numel(h), cpLen);
+        end
+        xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, coreLen);
+        [xCore, hopRel, mseNow] = local_sc_fde_pilot_scalar_simple_local(xCore, pilotTx, ctx.runtimeCfg.scFde);
+        perBranchPilotMse(hopIdx, branchIdx) = mseNow;
+        coreList{branchIdx} = xCore;
+        relList{branchIdx} = min(relCore, hopRel);
+        scoreList(branchIdx) = branchScoreBase(branchIdx) * max(mean(relList{branchIdx}), eps);
+    end
+
+    if ~any(scoreList > 0)
+        error("Rayleigh payload SC-FDE hop %d produced no positive branch scores.", hopIdx);
+    end
+    hopBranchScores(hopIdx, :) = scoreList;
+    [xCoreComb, relCoreComb] = local_sc_fde_mrc_combine_branch_cores_local( ...
+        coreList, relList, ones(nBranches, 1), scoreList, sprintf("Rayleigh payload SC-FDE hop %d", hopIdx));
+    [xCoreComb, hopReliabilityCombined(hopIdx), pilotMseCombined(hopIdx)] = local_sc_fde_pilot_scalar_simple_local( ...
+        xCoreComb, pilotTx, ctx.runtimeCfg.scFde);
+    relCoreComb = min(relCoreComb, hopReliabilityCombined(hopIdx));
+
+    dataIdx = (hopIdx - 1) * dataPerHop + (1:dataPerHop);
+    dataOutFull(dataIdx) = xCoreComb(pilotLength + 1:end);
+    relOutFull(dataIdx) = relCoreComb(pilotLength + 1:end);
+end
+
+dataSymUse = dataOutFull(1:double(ctx.pkt.nDataSymBase));
+symbolReliabilityData = relOutFull(1:double(ctx.pkt.nDataSymBase));
+diagOut = struct( ...
+    "enabled", true, ...
+    "method", string(ctx.method), ...
+    "diversityMode", "branch_post_sc_fde_core_mrc", ...
+    "nBranches", double(nBranches), ...
+    "branchBaseScores", branchScoreBase, ...
+    "hopBranchScores", hopBranchScores, ...
+    "hopFrequencies", hopFreqs, ...
+    "bankModes", bankModes, ...
+    "perBranchPilotMse", perBranchPilotMse, ...
+    "combinedPilotMse", pilotMseCombined, ...
+    "hopReliability", hopReliabilityCombined, ...
+    "combinedReliabilityMean", mean(symbolReliabilityData));
+end
+
+function tf = local_rayleigh_branch_diversity_active_local(front)
+tf = false;
+if ~(isstruct(front) && isfield(front, "branchFronts") && iscell(front.branchFronts) ...
+        && isfield(front, "branchOkMask") && ~isempty(front.branchOkMask))
+    return;
+end
+branchOkMask = logical(front.branchOkMask(:));
+tf = numel(front.branchFronts) > 1 && any(branchOkMask) && nnz(branchOkMask) > 1;
+end
+
+function [branchFronts, branchPowerWeights] = local_valid_rayleigh_branch_fronts_local(front)
+if ~(isstruct(front) && isfield(front, "branchFronts") && iscell(front.branchFronts) ...
+        && isfield(front, "branchOkMask") && ~isempty(front.branchOkMask))
+    error("Rayleigh branch diversity requires front.branchFronts and front.branchOkMask.");
+end
+branchOkMask = logical(front.branchOkMask(:));
+if numel(branchOkMask) ~= numel(front.branchFronts)
+    error("Rayleigh branch diversity branchOkMask size must match branchFronts.");
+end
+usedIdx = find(branchOkMask);
+if numel(usedIdx) <= 1
+    error("Rayleigh branch diversity requires at least two valid branches.");
+end
+branchFronts = front.branchFronts(usedIdx);
+if ~(isfield(front, "branchPowerWeights") && numel(front.branchPowerWeights) == numel(front.branchFronts))
+    error("Rayleigh branch diversity requires front.branchPowerWeights for all branches.");
+end
+branchPowerWeights = double(front.branchPowerWeights(usedIdx));
+if any(~isfinite(branchPowerWeights) | branchPowerWeights <= 0)
+    error("Rayleigh branch diversity requires positive finite branchPowerWeights.");
+end
+end
+
+function weightsOut = local_normalize_branch_weights_local(weightsIn)
+weightsIn = double(weightsIn(:));
+if isempty(weightsIn)
+    error("Rayleigh branch diversity requires non-empty branch weights.");
+end
+if any(~isfinite(weightsIn) | weightsIn <= 0)
+    error("Rayleigh branch diversity branch weights must be positive and finite.");
+end
+weightsOut = weightsIn / max(weightsIn);
+end
+
+function [symOut, relOut] = local_weighted_symbol_branch_combine_local(symList, relList, scoreWeights, ownerName)
+if nargin < 4 || strlength(string(ownerName)) == 0
+    ownerName = "Rayleigh branch combine";
+end
+if ~(iscell(symList) && iscell(relList) && numel(symList) == numel(relList) && numel(symList) == numel(scoreWeights))
+    error("%s requires matched symbol/reliability/weight lists.", char(ownerName));
+end
+
+scoreWeights = double(scoreWeights(:));
+validMask = isfinite(scoreWeights) & scoreWeights > 0;
+if ~any(validMask)
+    error("%s requires at least one positive branch weight.", char(ownerName));
+end
+
+usedIdx = find(validMask);
+targetLen = [];
+for idx = 1:numel(usedIdx)
+    branchIdx = usedIdx(idx);
+    symList{branchIdx} = symList{branchIdx}(:);
+    relList{branchIdx} = rx_expand_reliability(relList{branchIdx}, numel(symList{branchIdx}));
+    if isempty(targetLen)
+        targetLen = numel(symList{branchIdx});
+    elseif numel(symList{branchIdx}) ~= targetLen
+        error("%s branch lengths are inconsistent.", char(ownerName));
+    end
+end
+
+[~, refLocalIdx] = max(scoreWeights(usedIdx));
+refIdx = usedIdx(refLocalIdx);
+refSym = symList{refIdx};
+scoreNorm = scoreWeights / max(scoreWeights(usedIdx));
+
+symAccum = complex(zeros(targetLen, 1));
+weightAccum = zeros(targetLen, 1);
+qualityMat = zeros(targetLen, numel(usedIdx));
+for idx = 1:numel(usedIdx)
+    branchIdx = usedIdx(idx);
+    symNow = symList{branchIdx};
+    relNow = rx_expand_reliability(relList{branchIdx}, targetLen);
+    phaseRef = sum(symNow .* conj(refSym) .* relNow);
+    if abs(phaseRef) > eps
+        symNow = symNow * exp(-1j * angle(phaseRef));
+    end
+    weightNow = scoreNorm(branchIdx) * relNow;
+    symAccum = symAccum + weightNow .* symNow;
+    weightAccum = weightAccum + weightNow;
+    qualityMat(:, idx) = max(0, min(1, weightNow));
+end
+
+symOut = refSym;
+use = weightAccum > eps;
+symOut(use) = symAccum(use) ./ weightAccum(use);
+relOut = 1 - prod(1 - qualityMat, 2);
+relOut = max(0, min(1, relOut));
+end
+
+function scoreOut = local_sc_fde_gate_branch_scores_local(scoreIn, ownerName)
+if nargin < 2 || strlength(string(ownerName)) == 0
+    ownerName = "SC-FDE diversity branch gating";
+end
+scoreIn = double(scoreIn(:));
+if isempty(scoreIn)
+    error("%s requires a non-empty score vector.", char(ownerName));
+end
+if any(~isfinite(scoreIn) | scoreIn < 0)
+    error("%s scores must be finite and nonnegative.", char(ownerName));
+end
+
+[bestScore, bestIdx] = max(scoreIn);
+if ~(isfinite(bestScore) && bestScore > 0)
+    error("%s requires at least one positive branch score.", char(ownerName));
+end
+
+if bestScore < 0.20
+    keepMask = false(size(scoreIn));
+    keepMask(bestIdx) = true;
+else
+    keepMask = scoreIn >= 0.85 * bestScore;
+    if ~any(keepMask)
+        keepMask(bestIdx) = true;
+    end
+end
+
+scoreOut = zeros(size(scoreIn));
+scoreOut(keepMask) = scoreIn(keepMask);
+end
+
+function xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, coreLen)
+core = core(:);
+h = h(:);
+if numel(h) > coreLen
+    error("SC-FDE core length %d is shorter than channel length %d.", coreLen, numel(h));
+end
+if ~isfinite(lambda)
+    xCore = core;
+    return;
+end
+H = fft([h; complex(zeros(coreLen - numel(h), 1))]);
+denom = abs(H).^2 + lambda;
+if any(~isfinite(denom)) || any(denom <= 0)
+    error("SC-FDE MMSE denominator is invalid.");
+end
+xCore = ifft(conj(H) ./ denom .* fft(core));
+end
+
+function [xCoreOut, reliability, mse] = local_sc_fde_pilot_scalar_simple_local(xCore, pilot, cfg)
+xCore = xCore(:);
+pilot = pilot(:);
+if numel(xCore) < numel(pilot)
+    error("SC-FDE pilot length exceeds equalized core length.");
+end
+pilotRx = xCore(1:numel(pilot));
+alpha = sum(pilotRx .* conj(pilot)) / max(sum(abs(pilot).^2), eps);
+if abs(alpha) < max(double(cfg.pilotMinAbsGain), eps)
+    alpha = 1;
+end
+xCoreOut = xCore / alpha;
+mse = mean(abs(xCoreOut(1:numel(pilot)) - pilot).^2);
+if ~(isscalar(mse) && isfinite(mse) && mse >= 0)
+    error("SC-FDE pilot residual MSE is invalid.");
+end
+reliability = 1 / (1 + mse / max(double(cfg.pilotMseReference), eps));
+reliability = max(double(cfg.minReliability), min(1, reliability));
+end
+
+function [coreOut, relOut] = local_sc_fde_mrc_combine_branch_cores_local(coreList, relList, gains, scoreWeights, ownerName)
+if nargin < 4 || isempty(scoreWeights)
+    scoreWeights = ones(numel(coreList), 1);
+end
+if nargin < 5 || strlength(string(ownerName)) == 0
+    ownerName = "SC-FDE diversity combining";
+end
+if ~(iscell(coreList) && iscell(relList) && numel(coreList) == numel(relList) ...
+        && numel(gains) == numel(coreList) && numel(scoreWeights) == numel(coreList))
+    error("%s requires matched core/reliability/gain lists.", char(ownerName));
+end
+
+scoreWeights = double(scoreWeights(:));
+validMask = false(numel(coreList), 1);
+coreLen = [];
+for branchIdx = 1:numel(coreList)
+    coreNow = coreList{branchIdx};
+    relNow = relList{branchIdx};
+    if isempty(coreNow) || isempty(relNow)
+        error("%s branch %d is empty.", char(ownerName), branchIdx);
+    end
+    coreNow = coreNow(:);
+    relNow = rx_expand_reliability(relNow, numel(coreNow));
+    coreList{branchIdx} = coreNow;
+    relList{branchIdx} = relNow;
+    gainNow = gains(branchIdx);
+    scoreNow = scoreWeights(branchIdx);
+    if ~(isfinite(gainNow) && abs(gainNow) > 0 && isfinite(scoreNow) && scoreNow > 0)
+        continue;
+    end
+    validMask(branchIdx) = true;
+    if isempty(coreLen)
+        coreLen = numel(coreNow);
+    elseif numel(coreNow) ~= coreLen
+        error("%s branch lengths are inconsistent.", char(ownerName));
+    end
+end
+if ~any(validMask)
+    error("%s produced no valid branch gains.", char(ownerName));
+end
+
+usedIdx = find(validMask);
+coreMat = complex(zeros(coreLen, numel(usedIdx)));
+relMat = zeros(coreLen, numel(usedIdx));
+gainUse = complex(zeros(numel(usedIdx), 1));
+scoreUse = zeros(numel(usedIdx), 1);
+for k = 1:numel(usedIdx)
+    branchIdx = usedIdx(k);
+    coreMat(:, k) = coreList{branchIdx};
+    relMat(:, k) = relList{branchIdx};
+    gainUse(k) = gains(branchIdx);
+    scoreUse(k) = scoreWeights(branchIdx);
+end
+powerWeights = abs(gainUse).^2 .* scoreUse;
+denom = sum(powerWeights);
+if ~(isfinite(denom) && denom > 0)
+    error("%s denominator is invalid.", char(ownerName));
+end
+combineWeights = conj(gainUse) .* scoreUse;
+coreOut = (coreMat * combineWeights) / denom;
+relOut = (relMat * powerWeights) / denom;
+end
+
+function [core, relCore] = local_sc_fde_core_from_physical_hop_local(r, rel, hopIdx, plan)
+blockIdx = (hopIdx - 1) * plan.hopLen + (1:plan.hopLen);
+if blockIdx(end) > numel(r)
+    error("SC-FDE hop %d exceeds received payload length.", hopIdx);
+end
+block = r(blockIdx);
+relBlock = rel(blockIdx);
+core = block(plan.cpLen + 1:end);
+relCore = relBlock(plan.cpLen + 1:end);
+if numel(core) ~= plan.coreLen || numel(relCore) ~= plan.coreLen
+    error("SC-FDE core extraction length mismatch.");
+end
 end
 
 function [hopFreqs, hBank, bankMode] = local_sc_fde_payload_channel_bank_local(ctx, frontEndDiag, nHops)

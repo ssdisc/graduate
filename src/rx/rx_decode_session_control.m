@@ -3,7 +3,7 @@ function sessionResult = rx_decode_session_control(profileName, rxBurst, txArtif
 
 arguments
     profileName (1,1) string
-    rxBurst (:,1) double
+    rxBurst
     txArtifacts (1,1) struct
     rxCfg (1,1) struct
 end
@@ -72,12 +72,13 @@ for frameIdx = 1:numel(sessionFrames)
     totalLen = double(numel(sessionFrame.syncSym) + sessionFrame.nDataSym);
     fhCaptureCfg = local_session_sample_fh_capture_cfg_local(sessionFrame, waveform);
     syncCfg = rx_prepare_capture_sync_cfg(runtimeCfg.rxSync, runtimeCfg.channel);
-    capture = capture_synced_block_from_samples( ...
-        rxBurst(max(1, rxCursor):end), sessionFrame.syncSym(:), totalLen, syncCfg, runtimeCfg.mitigation, ...
-        sessionFrame.modCfg, waveform, sampleAction, "raw", fhCaptureCfg);
+    rxRemain = rx_slice_capture_window(rxBurst, max(1, rxCursor), rx_capture_total_samples(rxBurst));
+    capture = capture_synced_block_with_diversity( ...
+        rxRemain, sessionFrame.syncSym(:), totalLen, syncCfg, runtimeCfg.mitigation, ...
+        sessionFrame.modCfg, waveform, sampleAction, "raw", fhCaptureCfg, runtimeCfg.rxDiversity);
     frameFrontOk(frameIdx) = logical(capture.ok);
     if ~capture.ok
-        rxCursor = min(numel(rxBurst) + 1, rxCursor + numel(sessionFrame.txSymForChannel));
+        rxCursor = min(rx_capture_total_samples(rxBurst) + 1, rxCursor + numel(sessionFrame.txSymForChannel));
         continue;
     end
 
@@ -105,7 +106,7 @@ for frameIdx = 1:numel(sessionFrames)
             "frameStopSample", frameStop);
         return;
     end
-    rxCursor = min(numel(rxBurst) + 1, max(double(baseCursor), frameStop(frameIdx) + 1));
+    rxCursor = min(rx_capture_total_samples(rxBurst) + 1, max(double(baseCursor), frameStop(frameIdx) + 1));
 end
 
 if numel(decodedBlocks) >= 2

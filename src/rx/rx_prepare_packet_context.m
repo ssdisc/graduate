@@ -3,7 +3,7 @@ function ctx = rx_prepare_packet_context(profileName, rxSamples, txArtifacts, rx
 
 arguments
     profileName (1,1) string
-    rxSamples (:,1) double
+    rxSamples
     txArtifacts (1,1) struct
     rxCfg (1,1) struct
 end
@@ -18,7 +18,7 @@ method = string(rxCfg.method);
 
 ctx = struct();
 ctx.profileName = string(profileName);
-ctx.rxSamples = rxSamples(:);
+ctx.rxCapture = rxSamples;
 ctx.txArtifacts = txArtifacts;
 ctx.rxCfg = rxCfg;
 ctx.runtimeCfg = runtimeCfg;

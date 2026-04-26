@@ -386,6 +386,9 @@ switch profileName
         profileRxCfg.sync.multipathEq.nTaps = 9;
         profileRxCfg.sync.multipathEq.lambdaFactor = 0.05;
         profileRxCfg.sync.multipathEq.compareMethods = "sc_fde_mmse";
+        profileRxCfg.rxDiversity.enable = true;
+        profileRxCfg.rxDiversity.nRx = 2;
+        profileRxCfg.rxDiversity.combineMethod = "mrc";
 
     otherwise
         error("Unexpected profile name: %s", char(profileName));
