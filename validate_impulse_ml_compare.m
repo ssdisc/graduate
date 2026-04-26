@@ -19,70 +19,69 @@ methods = local_resolve_methods_local(opts, mlAvailable);
 rows = repmat(local_empty_row_local(), 0, 1);
 caseIndex = 0;
 for ip = 1:numel(opts.ImpulseProb)
-    for ir = 1:numel(opts.ImpulseToBgRatio)
-        caseIndex = caseIndex + 1;
-        prob = double(opts.ImpulseProb(ip));
-        ratio = double(opts.ImpulseToBgRatio(ir));
-        caseName = sprintf('prob_%0.3f_ratio_%0.0f', prob, ratio);
-        runDir = fullfile(outRoot, caseName);
-        if ~exist(runDir, 'dir')
-            mkdir(runDir);
-        end
+    caseIndex = caseIndex + 1;
+    prob = double(opts.ImpulseProb(ip));
+    caseName = sprintf('prob_%0.3f_jsr_%+0.1f', prob, double(opts.JsrDb));
+    runDir = fullfile(outRoot, caseName);
+    if ~exist(runDir, 'dir')
+        mkdir(runDir);
+    end
 
-        cfg = default_params( ...
-            "linkProfileName", "impulse", ...
-            "loadMlModels", strings(1, 0), ...
-            "strictModelLoad", false, ...
-            "requireTrainedMlModels", true);
-        cfg.linkBudget.ebN0dBList = double(opts.EbN0);
-        cfg.linkBudget.jsrDbList = double(opts.JsrDb);
-        cfg.sim.nFramesPerPoint = double(opts.NFrames);
-        cfg.sim.useParallel = false;
-        cfg.sim.saveFigures = false;
-        cfg.sim.resultsDir = string(runDir);
-        cfg.channel.impulseProb = prob;
-        cfg.channel.impulseWeight = 1.0;
-        cfg.channel.impulseToBgRatio = ratio;
-        cfg.profileRx.cfg.methods = methods;
-        cfg.extensions.ml.preloaded = preloaded;
+    cfg = default_params( ...
+        "linkProfileName", "impulse", ...
+        "loadMlModels", strings(1, 0), ...
+        "strictModelLoad", false, ...
+        "requireTrainedMlModels", true);
+    cfg.linkBudget.ebN0dBList = double(opts.EbN0);
+    cfg.linkBudget.jsrDbList = double(opts.JsrDb);
+    cfg.sim.nFramesPerPoint = double(opts.NFrames);
+    cfg.sim.useParallel = false;
+    cfg.sim.saveFigures = false;
+    cfg.sim.resultsDir = string(runDir);
+    cfg.channel.impulseProb = prob;
+    cfg.channel.impulseWeight = 1.0;
+    cfg.channel.impulseToBgRatio = 0;
+    cfg.profileRx.cfg.methods = methods;
+    cfg.extensions.ml.preloaded = preloaded;
 
-        tStart = tic;
-        try
-            results = simulate(cfg);
-            elapsedSec = toc(tStart);
-            save(fullfile(runDir, 'results.mat'), 'results');
-            for methodIdx = 1:numel(methods)
-                row = local_result_row_local(results, methodIdx);
-                row.caseIndex = caseIndex;
-                row.caseName = string(caseName);
-                row.impulseProb = prob;
-                row.impulseToBgRatio = ratio;
-                row.method = methods(methodIdx);
-                row.elapsedSec = elapsedSec;
-                row.burstSec = double(results.tx.burstDurationSec);
-                row.runDir = string(runDir);
-                row.runOk = true;
-                row.pass = local_pass_local(row, opts);
-                rows(end + 1, 1) = row; %#ok<AGROW>
-            end
-            fprintf('[IMP-ML] %-24s elapsed=%6.2fs burst=%6.2fs methods=%s\n', ...
-                caseName, elapsedSec, double(results.tx.burstDurationSec), strjoin(cellstr(methods), ','));
-        catch ME
-            elapsedSec = toc(tStart);
-            for methodIdx = 1:numel(methods)
-                row = local_empty_row_local();
-                row.caseIndex = caseIndex;
-                row.caseName = string(caseName);
-                row.impulseProb = prob;
-                row.impulseToBgRatio = ratio;
-                row.method = methods(methodIdx);
-                row.elapsedSec = elapsedSec;
-                row.runDir = string(runDir);
-                row.errorMessage = string(ME.message);
-                rows(end + 1, 1) = row; %#ok<AGROW>
-            end
-            fprintf('[IMP-ML] %-24s FAILED: %s\n', caseName, ME.message);
+    tStart = tic;
+    try
+        results = simulate(cfg);
+        elapsedSec = toc(tStart);
+        save(fullfile(runDir, 'results.mat'), 'results');
+        derivedRatio = local_derived_impulse_to_bg_ratio_local(results, prob);
+        for methodIdx = 1:numel(methods)
+            row = local_result_row_local(results, methodIdx);
+            row.caseIndex = caseIndex;
+            row.caseName = string(caseName);
+            row.impulseProb = prob;
+            row.jsrDb = double(opts.JsrDb);
+            row.derivedImpulseToBgRatio = derivedRatio;
+            row.method = methods(methodIdx);
+            row.elapsedSec = elapsedSec;
+            row.burstSec = double(results.tx.burstDurationSec);
+            row.runDir = string(runDir);
+            row.runOk = true;
+            row.pass = local_pass_local(row, opts);
+            rows(end + 1, 1) = row; %#ok<AGROW>
         end
+        fprintf('[IMP-ML] %-24s elapsed=%6.2fs burst=%6.2fs derivedRatio=%8.2f methods=%s\n', ...
+            caseName, elapsedSec, double(results.tx.burstDurationSec), derivedRatio, strjoin(cellstr(methods), ','));
+    catch ME
+        elapsedSec = toc(tStart);
+        for methodIdx = 1:numel(methods)
+            row = local_empty_row_local();
+            row.caseIndex = caseIndex;
+            row.caseName = string(caseName);
+            row.impulseProb = prob;
+            row.jsrDb = double(opts.JsrDb);
+            row.method = methods(methodIdx);
+            row.elapsedSec = elapsedSec;
+            row.runDir = string(runDir);
+            row.errorMessage = string(ME.message);
+            rows(end + 1, 1) = row; %#ok<AGROW>
+        end
+        fprintf('[IMP-ML] %-24s FAILED: %s\n', caseName, ME.message);
     end
 end
 
@@ -105,7 +104,6 @@ function opts = local_parse_inputs_local(varargin)
 p = inputParser();
 p.FunctionName = 'validate_impulse_ml_compare';
 addParameter(p, 'ImpulseProb', [0.01 0.03 0.05], @(x) isnumeric(x) && isvector(x));
-addParameter(p, 'ImpulseToBgRatio', [20 50 80], @(x) isnumeric(x) && isvector(x));
 addParameter(p, 'Methods', ["none" "blanking" "clipping" "ml_cnn"], @(x) isstring(x) || ischar(x) || iscellstr(x));
 addParameter(p, 'EbN0', 6, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
 addParameter(p, 'JsrDb', 0, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
@@ -200,7 +198,8 @@ row = struct( ...
     "caseIndex", NaN, ...
     "caseName", "", ...
     "impulseProb", NaN, ...
-    "impulseToBgRatio", NaN, ...
+    "jsrDb", NaN, ...
+    "derivedImpulseToBgRatio", NaN, ...
     "method", "", ...
     "runOk", false, ...
     "pass", false, ...
@@ -243,4 +242,21 @@ for method = methods
     values = tbl.(metricName)(use);
     out.(matlab.lang.makeValidName(char(method))) = mean(values, 'omitnan');
 end
+end
+
+function ratio = local_derived_impulse_to_bg_ratio_local(results, impulseProbSym)
+if ~(isscalar(impulseProbSym) && isfinite(impulseProbSym) && impulseProbSym > 0 && impulseProbSym < 1)
+    error("Impulse probability must be a finite scalar in (0, 1).");
+end
+runtimeCfg = results.params;
+if ~(isfield(runtimeCfg, "waveform") && isstruct(runtimeCfg.waveform) ...
+        && isfield(runtimeCfg.waveform, "sps") && isfinite(double(runtimeCfg.waveform.sps)))
+    error("results.params.waveform.sps is required to derive the impulse amplitude.");
+end
+sps = max(1, round(double(runtimeCfg.waveform.sps)));
+impulseProbSample = 1 - (1 - double(impulseProbSym))^(1 / sps);
+txPowerLin = double(results.linkBudget.bob.txPowerLin(1));
+noisePsdLin = double(results.linkBudget.bob.noisePsdLin(1));
+jsrLin = 10^(double(results.jsrDb(1)) / 10);
+ratio = txPowerLin * jsrLin / max(impulseProbSample * noisePsdLin, eps);
 end

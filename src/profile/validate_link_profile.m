@@ -220,8 +220,23 @@ end
 if ~(isfield(p.linkBudget, "noisePsdLin") && double(p.linkBudget.noisePsdLin) > 0)
     error("linkBudget.noisePsdLin must be positive.");
 end
-if profile ~= "narrowband" && numel(double(p.linkBudget.jsrDbList(:))) > 1
-    error("Only narrowband profile supports a JSR sweep in the refactored core.");
+jsrCount = numel(double(p.linkBudget.jsrDbList(:)));
+if ~(profile == "impulse" || profile == "narrowband") && jsrCount > 1
+    error("Only impulse and narrowband profiles support a JSR sweep in the refactored core.");
+end
+if profile == "impulse"
+    if ~(isfield(p.channel, "impulseToBgRatio") && isfinite(double(p.channel.impulseToBgRatio)))
+        error("impulse profile requires channel.impulseToBgRatio to exist for internal runtime use.");
+    end
+    if abs(double(p.channel.impulseToBgRatio)) > 1e-12
+        error("impulse profile derives channel.impulseToBgRatio from linkBudget.jsrDbList and channel.impulseProb. Set channel.impulseToBgRatio=0.");
+    end
+    if jsrCount > 1
+        if ~(isfield(p.channel, "impulseWeight") && double(p.channel.impulseWeight) > 0 ...
+                && isfield(p.channel, "impulseProb") && double(p.channel.impulseProb) > 0)
+            error("Impulse JSR sweep requires active impulse interference with channel.impulseWeight>0 and channel.impulseProb>0.");
+        end
+    end
 end
 
 preambleCopies = preamble_diversity_copies(p.frame);

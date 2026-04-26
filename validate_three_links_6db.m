@@ -88,27 +88,23 @@ end
 
 function [tbl, summary] = local_run_impulse_coverage(opts, outRoot)
 probs = [0.01 0.03 0.05];
-ratios = [20 50 80];
 rows = repmat(local_empty_primary_row(), 0, 1);
 suiteRoot = fullfile(outRoot, 'impulse_coverage');
 local_mkdir(suiteRoot);
 
 for ip = 1:numel(probs)
-    for ir = 1:numel(ratios)
-        prob = probs(ip);
-        ratio = ratios(ir);
-        caseName = sprintf('prob_%0.2f_ratio_%d', prob, ratio);
-        cfg = local_base_profile_cfg("impulse", opts, 1, "blanking", fullfile(suiteRoot, caseName));
-        cfg.channel.impulseProb = prob;
-        cfg.channel.impulseWeight = 1.0;
-        cfg.channel.impulseToBgRatio = ratio;
-        row = local_run_primary_case(cfg, "blanking", opts, "impulse", "coverage", caseName);
-        row.paramA = prob;
-        row.paramB = ratio;
-        row.paramAText = "impulseProb";
-        row.paramBText = "impulseToBgRatio";
-        rows(end + 1, 1) = row; %#ok<AGROW>
-    end
+    prob = probs(ip);
+    caseName = sprintf('prob_%0.2f_jsr_%+0.1f', prob, double(opts.JsrDb));
+    cfg = local_base_profile_cfg("impulse", opts, 1, "blanking", fullfile(suiteRoot, caseName));
+    cfg.channel.impulseProb = prob;
+    cfg.channel.impulseWeight = 1.0;
+    cfg.channel.impulseToBgRatio = 0;
+    row = local_run_primary_case(cfg, "blanking", opts, "impulse", "coverage", caseName);
+    row.paramA = prob;
+    row.paramB = double(opts.JsrDb);
+    row.paramAText = "impulseProb";
+    row.paramBText = "jsrDb";
+    rows(end + 1, 1) = row; %#ok<AGROW>
 end
 
 tbl = struct2table(rows);
@@ -117,24 +113,23 @@ summary = local_build_pass_summary(tbl, "impulse coverage");
 end
 
 function [tbl, summary] = local_run_impulse_confidence(opts, outRoot)
-caseList = [0.03 50; 0.05 80];
+caseList = [0.03; 0.05];
 rows = repmat(local_empty_primary_row(), 0, 1);
 suiteRoot = fullfile(outRoot, 'impulse_confidence');
 local_mkdir(suiteRoot);
 
-for idx = 1:size(caseList, 1)
-    prob = caseList(idx, 1);
-    ratio = caseList(idx, 2);
-    caseName = sprintf('prob_%0.2f_ratio_%d_f3', prob, round(ratio));
+for idx = 1:numel(caseList)
+    prob = caseList(idx);
+    caseName = sprintf('prob_%0.2f_jsr_%+0.1f_f3', prob, double(opts.JsrDb));
     cfg = local_base_profile_cfg("impulse", opts, 3, "blanking", fullfile(suiteRoot, caseName));
     cfg.channel.impulseProb = prob;
     cfg.channel.impulseWeight = 1.0;
-    cfg.channel.impulseToBgRatio = ratio;
+    cfg.channel.impulseToBgRatio = 0;
     row = local_run_primary_case(cfg, "blanking", opts, "impulse", "confidence", caseName);
     row.paramA = prob;
-    row.paramB = ratio;
+    row.paramB = double(opts.JsrDb);
     row.paramAText = "impulseProb";
-    row.paramBText = "impulseToBgRatio";
+    row.paramBText = "jsrDb";
     rows(end + 1, 1) = row; %#ok<AGROW>
 end
 
@@ -144,25 +139,24 @@ summary = local_build_pass_summary(tbl, "impulse confidence");
 end
 
 function [tbl, summary] = local_run_impulse_research(opts, outRoot)
-caseList = [0.03 50 0.50; 0.05 80 0.30];
+caseList = [0.03 0.50; 0.05 0.30];
 rows = repmat(local_empty_compare_row(), 0, 1);
 suiteRoot = fullfile(outRoot, 'impulse_research');
 local_mkdir(suiteRoot);
 
 for idx = 1:size(caseList, 1)
     prob = caseList(idx, 1);
-    ratio = caseList(idx, 2);
-    minImprove = caseList(idx, 3);
-    caseName = sprintf('prob_%0.2f_ratio_%d_compare', prob, round(ratio));
+    minImprove = caseList(idx, 2);
+    caseName = sprintf('prob_%0.2f_jsr_%+0.1f_compare', prob, double(opts.JsrDb));
     cfg = local_base_profile_cfg("impulse", opts, 1, ["none" "blanking"], fullfile(suiteRoot, caseName));
     cfg.channel.impulseProb = prob;
     cfg.channel.impulseWeight = 1.0;
-    cfg.channel.impulseToBgRatio = ratio;
+    cfg.channel.impulseToBgRatio = 0;
     row = local_run_compare_case(cfg, "none", "blanking", opts, "impulse", "research", caseName);
     row.paramA = prob;
-    row.paramB = ratio;
+    row.paramB = double(opts.JsrDb);
     row.paramAText = "impulseProb";
-    row.paramBText = "impulseToBgRatio";
+    row.paramBText = "jsrDb";
     row.minImprovement = minImprove;
     row.pass = row.runOk && row.improvement >= minImprove;
     rows(end + 1, 1) = row; %#ok<AGROW>

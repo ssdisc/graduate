@@ -188,7 +188,7 @@ function channel = local_channel_defaults_local()
 channel = struct();
 channel.impulseProb = 0.0;
 channel.impulseWeight = 0.0;
-channel.impulseToBgRatio = 20;
+channel.impulseToBgRatio = 0.0;
 channel.maxDelaySymbols = 24;
 channel.singleTone = struct( ...
     "enable", false, ...
@@ -269,7 +269,7 @@ switch profileName
         commonTx.waveform.enable = true;
         commonTx.waveform.sampleRateHz = 160e3;
         commonTx.waveform.sps = 4;
-        commonTx.waveform.rolloff = 0.0;
+        commonTx.waveform.rolloff = 0.25;
         commonTx.waveform.spanSymbols = 6;
         commonTx.control.sessionHeaderMode = "session_frame_repeat";
         commonTx.control.sessionFrameRepeatCount = 2;
@@ -359,7 +359,7 @@ switch profileName
         commonTx.waveform.enable = true;
         commonTx.waveform.sampleRateHz = 240e3;
         commonTx.waveform.sps = 4;
-        commonTx.waveform.rolloff = 0.0;
+        commonTx.waveform.rolloff = 0.25;
         commonTx.waveform.spanSymbols = 6;
         commonTx.control.sessionHeaderMode = "session_frame_repeat";
         commonTx.control.sessionFrameRepeatCount = 2;

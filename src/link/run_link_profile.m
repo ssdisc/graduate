@@ -231,18 +231,30 @@ end
 end
 
 function tf = local_profile_has_jsr_axis_local(profileName, channelCfg)
-if profileName ~= "narrowband"
-    tf = false;
-    return;
+switch string(profileName)
+    case "impulse"
+        tf = local_impulse_power_budget_active_local(channelCfg);
+    case "narrowband"
+        tf = isfield(channelCfg, "narrowband") && isstruct(channelCfg.narrowband) ...
+            && isfield(channelCfg.narrowband, "enable") && logical(channelCfg.narrowband.enable) ...
+            && isfield(channelCfg.narrowband, "weight") && double(channelCfg.narrowband.weight) > 0;
+    otherwise
+        tf = false;
 end
-tf = isfield(channelCfg, "narrowband") && isstruct(channelCfg.narrowband) && isfield(channelCfg.narrowband, "enable") ...
-    && logical(channelCfg.narrowband.enable);
 end
 
 function pointChannel = local_build_point_channel_local(runtimeCfg, budget, pointIdx, waveform)
-pointChannel = runtimeCfg.channel;
+pointChannel = adapt_channel_for_sps(runtimeCfg.channel, waveform, runtimeCfg.fh);
 jsrLin = 10^(double(budget.bob.jsrDb(pointIdx)) / 10);
 txPowerLin = double(budget.bob.txPowerLin(pointIdx));
+noisePsdLin = double(budget.bob.noisePsdLin(pointIdx));
+if local_impulse_power_budget_active_local(runtimeCfg.channel)
+    impulseProbSample = local_required_impulse_probability_local(pointChannel);
+    targetImpulsePower = txPowerLin * jsrLin;
+    pointChannel.impulseToBgRatio = targetImpulsePower / max(impulseProbSample * noisePsdLin, eps);
+else
+    pointChannel.impulseToBgRatio = 0;
+end
 if isfield(pointChannel, "singleTone") && isstruct(pointChannel.singleTone) && logical(pointChannel.singleTone.enable)
     pointChannel.singleTone.power = txPowerLin * jsrLin;
 end
@@ -252,7 +264,23 @@ end
 if isfield(pointChannel, "sweep") && isstruct(pointChannel.sweep) && logical(pointChannel.sweep.enable)
     pointChannel.sweep.power = txPowerLin * jsrLin;
 end
-pointChannel = adapt_channel_for_sps(pointChannel, waveform, runtimeCfg.fh);
+end
+
+function tf = local_impulse_power_budget_active_local(channelCfg)
+tf = isfield(channelCfg, "impulseWeight") && isfinite(double(channelCfg.impulseWeight)) ...
+    && double(channelCfg.impulseWeight) > 0 ...
+    && isfield(channelCfg, "impulseProb") && isfinite(double(channelCfg.impulseProb)) ...
+    && double(channelCfg.impulseProb) > 0;
+end
+
+function impulseProbSample = local_required_impulse_probability_local(channelCfg)
+if ~(isfield(channelCfg, "impulseProb") && isfinite(double(channelCfg.impulseProb)))
+    error("Impulse JSR power calibration requires a finite sample-domain channel.impulseProb.");
+end
+impulseProbSample = double(channelCfg.impulseProb);
+if ~(isscalar(impulseProbSample) && impulseProbSample > 0 && impulseProbSample <= 1)
+    error("Impulse JSR power calibration requires sample-domain channel.impulseProb in (0, 1].");
+end
 end
 
 function cursor = local_initial_packet_cursor_local(txArtifacts)
