@@ -102,12 +102,17 @@ commonTx.source = struct( ...
     "maxDimension", 256);
 commonTx.payload = struct( ...
     "bitsPerPixel", 8, ...
-    "codec", "dct", ...
+    "codec", "toolbox_image", ...
     "dct", struct( ...
         "blockSize", 8, ...
         "keepRows", 4, ...
         "keepCols", 4, ...
-        "quantStep", 16));
+        "quantStep", 16), ...
+    "toolboxImage", struct( ...
+        "format", "jp2", ...
+        "mode", "lossy", ...
+        "compressionRatio", 8, ...
+        "quality", 75));
 commonTx.security = struct( ...
     "chaosEncrypt", struct("enable", false, "packetIndependent", true), ...
     "scramble", struct("enable", false));
@@ -266,15 +271,17 @@ switch profileName
         commonTx.waveform.sps = 4;
         commonTx.waveform.rolloff = 0.0;
         commonTx.waveform.spanSymbols = 6;
+        commonTx.control.sessionHeaderMode = "session_frame_repeat";
+        commonTx.control.sessionFrameRepeatCount = 2;
         commonTx.control.preambleLength = 63;
         commonTx.control.packetSyncLength = 63;
         commonTx.control.resyncIntervalPackets = 0;
         commonTx.control.phyHeaderFhEnable = false;
         commonTx.control.phyHeaderRepeatCompact = 2;
         commonTx.control.phyHeaderSpreadFactor = 4;
-        commonTx.packet.payloadBitsPerPacket = 2048;
-        commonTx.outerRs.dataPacketsPerBlock = 4;
-        commonTx.outerRs.parityPacketsPerBlock = 4;
+        commonTx.packet.payloadBitsPerPacket = 4096;
+        commonTx.outerRs.dataPacketsPerBlock = 8;
+        commonTx.outerRs.parityPacketsPerBlock = 3;
 
         channel.impulseProb = 0.03;
         channel.impulseWeight = 1.0;
@@ -303,10 +310,11 @@ switch profileName
         commonTx.control.preambleLength = 63;
         commonTx.control.packetSyncLength = 63;
         commonTx.control.resyncIntervalPackets = 1;
-        commonTx.control.sessionHeaderMode = "session_frame_repeat";
+        commonTx.control.sessionHeaderMode = "embedded_each_frame";
+        commonTx.control.sessionFrameRepeatCount = 2;
         commonTx.control.phyHeaderFhEnable = true;
-        commonTx.control.phyHeaderRepeatCompact = 3;
-        commonTx.control.phyHeaderSpreadFactor = 4;
+        commonTx.control.phyHeaderRepeatCompact = 2;
+        commonTx.control.phyHeaderSpreadFactor = 2;
         commonTx.control.preambleDiversity.enable = true;
         commonTx.control.preambleDiversity.copies = 2;
         commonTx.control.preambleDiversity.freqSet = [-4.375 4.375];
@@ -314,13 +322,11 @@ switch profileName
         commonTx.control.sessionHeaderBodyDiversity.copies = 2;
         commonTx.control.sessionHeaderBodyDiversity.freqSet = [-4.375 4.375];
         commonTx.control.phyHeaderDiversity.enable = true;
-        commonTx.control.phyHeaderDiversity.copies = 4;
+        commonTx.control.phyHeaderDiversity.copies = 2;
         commonTx.control.phyHeaderFhFreqSet = [-4.375 -0.625 0.625 4.375];
-        commonTx.payload.dct.keepRows = 1;
-        commonTx.payload.dct.keepCols = 1;
         commonTx.packet.payloadBitsPerPacket = 8192;
-        commonTx.outerRs.dataPacketsPerBlock = 1;
-        commonTx.outerRs.parityPacketsPerBlock = 11;
+        commonTx.outerRs.dataPacketsPerBlock = 4;
+        commonTx.outerRs.parityPacketsPerBlock = 4;
 
         channel.impulseProb = 0.0;
         channel.impulseWeight = 0.0;
@@ -336,13 +342,15 @@ switch profileName
         profileTxCfg.fh.sequenceType = 'chaos';
         profileTxCfg.fh.balanceMode = "permutation_block";
         profileTxCfg.fh.symbolsPerHop = 48;
-        profileTxCfg.fh.payloadDiversity.enable = true;
-        profileTxCfg.fh.payloadDiversity.copies = 3;
+        profileTxCfg.fh.payloadDiversity.enable = false;
+        profileTxCfg.fh.payloadDiversity.copies = 1;
         profileTxCfg.fh.payloadDiversity.indexOffset = 3;
+        profileTxCfg.dsss.enable = true;
+        profileTxCfg.dsss.spreadFactor = 4;
         profileTxCfg.scFde.enable = false;
 
-        profileRxCfg.methods = "fh_erasure";
-        profileRxCfg.allowedMethods = ["none" "fh_erasure"];
+        profileRxCfg.methods = "narrowband_notch_soft";
+        profileRxCfg.allowedMethods = ["none" "fh_erasure" "narrowband_notch_soft"];
         profileRxCfg.sync.multipathEq.enable = false;
         profileRxCfg.mitigation.headerBandstop.enable = true;
         profileRxCfg.mitigation.headerDecodeDiversity.enable = true;
@@ -353,17 +361,17 @@ switch profileName
         commonTx.waveform.sps = 4;
         commonTx.waveform.rolloff = 0.0;
         commonTx.waveform.spanSymbols = 6;
+        commonTx.control.sessionHeaderMode = "session_frame_repeat";
+        commonTx.control.sessionFrameRepeatCount = 2;
         commonTx.control.preambleLength = 127;
         commonTx.control.packetSyncLength = 63;
         commonTx.control.resyncIntervalPackets = 1;
         commonTx.control.phyHeaderFhEnable = false;
         commonTx.control.phyHeaderRepeatCompact = 2;
         commonTx.control.phyHeaderSpreadFactor = 2;
-        commonTx.packet.payloadBitsPerPacket = 3072;
-        commonTx.outerRs.dataPacketsPerBlock = 1;
-        commonTx.outerRs.parityPacketsPerBlock = 11;
-        commonTx.payload.dct.keepRows = 2;
-        commonTx.payload.dct.keepCols = 2;
+        commonTx.packet.payloadBitsPerPacket = 6144;
+        commonTx.outerRs.dataPacketsPerBlock = 6;
+        commonTx.outerRs.parityPacketsPerBlock = 3;
 
         channel.impulseProb = 0.0;
         channel.impulseWeight = 0.0;
@@ -411,7 +419,7 @@ mitigation.binding = struct( ...
     "impulseMethods", ["none" "blanking" "clipping" "adaptive_notch" "fft_notch" "stft_notch" ...
         "ml_blanking" "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard"], ...
     "singleToneMethods", ["none" "fft_notch" "adaptive_notch"], ...
-    "narrowbandMethods", ["none" "fh_erasure"], ...
+    "narrowbandMethods", ["none" "fh_erasure" "narrowband_notch_soft"], ...
     "sweepMethods", ["none" "stft_notch" "adaptive_notch"], ...
     "multipathMethods", ["none" "sc_fde_mmse"], ...
     "mixedMethods", "none");
@@ -477,6 +485,26 @@ mitigation.fhErasure = struct( ...
     "mlProbabilitySlope", 120.0, ...
     "mlRequirePowerEvidence", true, ...
     "multipathFadeEnable", false);
+mitigation.narrowbandNotchSoft = struct( ...
+    "observationSymbolsPerFreq", 144, ...
+    "minObservationSymbolsPerFreq", 48, ...
+    "edgeGuardSymbols", 2, ...
+    "minReliability", 0.08, ...
+    "maskFractionPenaltySlope", 0.20, ...
+    "powerRemovalPenaltySlope", 0.35, ...
+    "attenuateSymbols", false, ...
+    "bandstop", struct( ...
+        "peakRatio", 2.2, ...
+        "edgeRatio", 1.2, ...
+        "maxBands", 1, ...
+        "mergeGapBins", 2, ...
+        "padBins", 1, ...
+        "minBandBins", 3, ...
+        "smoothSpanBins", 7, ...
+        "fftOversample", 4, ...
+        "maxBandwidthFrac", 0.18, ...
+        "minFreqAbs", 0.005, ...
+        "suppressToFloor", true));
 end
 
 function rxSync = local_rx_sync_defaults_local()
@@ -576,7 +604,7 @@ switch profileName
     case "impulse"
         capabilities = struct("fh", true, "dsss", false, "scFde", false);
     case "narrowband"
-        capabilities = struct("fh", true, "dsss", false, "scFde", false);
+        capabilities = struct("fh", true, "dsss", true, "scFde", false);
     case "rayleigh_multipath"
         capabilities = struct("fh", true, "dsss", false, "scFde", true);
     otherwise

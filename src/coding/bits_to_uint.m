@@ -12,41 +12,26 @@ if nargin < 2
 end
 
 bits = uint8(bits(:) ~= 0);
+if exist("bit2int", "file") ~= 2
+    error("bits_to_uint requires Communications Toolbox function bit2int.");
+end
 
 switch lower(type)
     case {'uint8', 'uint8_scalar'}
-        val = uint8(0);
-        for k = 1:8
-            val = bitshift(val, 1);
-            val = bitor(val, uint8(bits(k)));
-        end
-        x = val;
+        x = uint8(bit2int(bits(1:8), 8));
 
     case 'uint16'
-        val = uint16(0);
-        for k = 1:16
-            val = bitshift(val, 1);
-            val = bitor(val, uint16(bits(k)));
-        end
-        x = val;
+        x = uint16(bit2int(bits(1:16), 16));
 
     case 'uint32'
-        val = uint32(0);
-        for k = 1:32
-            val = bitshift(val, 1);
-            val = bitor(val, uint32(bits(k)));
-        end
-        x = val;
+        x = uint32(bit2int(bits(1:32), 32));
 
     case {'uint8vec', 'uint8_vec'}
         nBits = numel(bits);
         nBytes = floor(nBits / 8);
         bits = bits(1:8*nBytes);
-        bits = reshape(bits, 8, nBytes).';%每行8比特对应一个字节
-        x = zeros(nBytes, 1, 'uint8');
-        for k = 1:8
-            x = bitset(x, 9-k, bits(:, k));%第k列的比特对应字节中的第(9-k)位（MSB在前）
-        end
+        bits = reshape(bits, 8, nBytes);
+        x = uint8(bit2int(bits, 8).');
 
     otherwise
         error('未知类型: %s。请使用uint8, uint16, uint32或uint8vec。', type);

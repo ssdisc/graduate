@@ -11,36 +11,22 @@ if nargin < 2
     type = 'uint8';
 end
 
+if exist("int2bit", "file") ~= 2
+    error("uint_to_bits requires Communications Toolbox function int2bit.");
+end
+
 switch lower(type)
     case {'uint8', 'uint8_scalar'}
-        bits = false(8, 1);
-        for k = 1:8
-            bits(k) = bitget(uint8(x), 9-k) ~= 0;
-        end
-        bits = uint8(bits);
+        bits = uint8(int2bit(uint8(x), 8));
 
     case 'uint16'
-        bits = false(16, 1);
-        for k = 1:16
-            bits(k) = bitget(uint16(x), 17-k) ~= 0;
-        end
-        bits = uint8(bits);
+        bits = uint8(int2bit(uint16(x), 16));
 
     case 'uint32'
-        bits = false(32, 1);
-        for k = 1:32
-            bits(k) = bitget(uint32(x), 33-k) ~= 0;
-        end
-        bits = uint8(bits);
+        bits = uint8(int2bit(uint32(x), 32));
 
     case {'uint8vec', 'uint8_vec'}
-        bytes = uint8(x(:));
-        n = numel(bytes);
-        bits = false(8*n, 1);
-        for k = 1:8
-            bits(k:8:end) = bitget(bytes, 9-k) ~= 0;
-        end
-        bits = uint8(bits);
+        bits = uint8(int2bit(uint8(x(:)), 8));
 
     otherwise
         error('未知类型: %s。请使用uint8, uint16, uint32或uint8vec。', type);

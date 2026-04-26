@@ -13,8 +13,11 @@ end
 codec = get_payload_codec(payload);
 if codec == "dct"
     mask = build_dct_pixel_mask_from_packets(ok, txPackets, meta, payload);
-else
+elseif codec == "raw"
     mask = build_raw_pixel_mask_from_packets(ok, txPackets, meta);
+else
+    error("conceal_image_from_packets:UnsupportedCodec", ...
+        "Packet-loss concealment is not implemented for payload.codec='%s'.", codec);
 end
 
 imgOut = inpaint_image_by_mask(img, mask, mode);

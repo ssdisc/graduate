@@ -3,6 +3,10 @@ function action = rx_primary_header_action(method)
 
 method = lower(string(method));
 symbolActions = ["adaptive_notch" "fft_notch" "fft_bandstop" "stft_notch"];
+if method == "narrowband_notch_soft"
+    action = "fft_bandstop";
+    return;
+end
 if any(method == symbolActions)
     action = method;
 else

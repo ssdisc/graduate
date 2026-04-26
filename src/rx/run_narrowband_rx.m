@@ -41,51 +41,17 @@ diagOut = struct("ok", true, "frontEndMethod", "protected_control");
 end
 
 function [packetDataBitsRx, symbolReliabilityData, profileDiag] = local_decode_narrowband_payload_local(ctx, dataSym, symbolReliability)
-profileDiag = struct();
 symbolReliabilityData = rx_expand_reliability(symbolReliability, numel(dataSym));
+[dataSymPrep, reliabilityNow, profileDiag] = narrowband_profile_frontend(dataSym(:), ctx.pkt, ctx.runtimeCfg, ctx.method);
+symbolReliabilityData = min(symbolReliabilityData, rx_expand_reliability(reliabilityNow, numel(dataSymPrep)));
 
-if ctx.method == "fh_erasure"
-    [reliabilityNow, erasureInfo] = local_narrowband_hop_reliability_local(dataSym(:), ctx.pkt, ctx.runtimeCfg);
-    symbolReliabilityData = min(symbolReliabilityData, rx_expand_reliability(reliabilityNow, numel(dataSym)));
-    profileDiag.hopReliability = erasureInfo.hopReliability;
-    profileDiag.freqReliability = erasureInfo.freqReliability;
-end
-
-[dataSymUse, symbolReliabilityData] = rx_combine_payload_diversity_symbols(dataSym(:), symbolReliabilityData, ctx.pkt);
+[dataSymUse, symbolReliabilityData] = rx_combine_payload_diversity_symbols(dataSymPrep, symbolReliabilityData, ctx.pkt);
 profileDiag.payloadDiversityEnabled = isfield(ctx.pkt, "payloadDiversityInfo") ...
     && isstruct(ctx.pkt.payloadDiversityInfo) ...
     && isfield(ctx.pkt.payloadDiversityInfo, "enable") ...
     && logical(ctx.pkt.payloadDiversityInfo.enable);
 
 packetDataBitsRx = rx_decode_packet_bits_common(dataSymUse, symbolReliabilityData, ctx.pkt, ctx.runtimeCfg);
-end
-
-function [reliabilitySym, infoOut] = local_narrowband_hop_reliability_local(dataSym, pkt, runtimeCfg)
-featureNames = ml_fh_erasure_feature_names();
-ruleIdx = find(featureNames == "ruleReliability", 1, "first");
-if isempty(ruleIdx)
-    error("FH erasure feature set is missing ruleReliability.");
-end
-
-[featureMatrix, info] = ml_extract_fh_erasure_features(dataSym, pkt.hopInfo, runtimeCfg.mitigation.fhErasure, runtimeCfg.mod);
-hopReliability = featureMatrix(:, ruleIdx);
-reliabilitySym = repelem(hopReliability, round(double(pkt.hopInfo.hopLen)), 1);
-reliabilitySym = rx_expand_reliability(reliabilitySym, numel(dataSym));
-
-nFreqs = max(1, round(double(info.nFreqs)));
-freqReliability = zeros(nFreqs, 1);
-for freqIdx = 1:nFreqs
-    use = info.freqIdx == freqIdx;
-    if any(use)
-        freqReliability(freqIdx) = median(hopReliability(use));
-    else
-        freqReliability(freqIdx) = 1;
-    end
-end
-infoOut = struct( ...
-    "hopReliability", hopReliability, ...
-    "freqReliability", freqReliability, ...
-    "featureInfo", info);
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_failed_frontend_placeholder_local(pkt)

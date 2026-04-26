@@ -8,8 +8,8 @@ function [img, imgOriginal] = load_source_image(s)
 %       .grayscale       - 是否转灰度
 %       .resizeTo        - 显式重采样尺寸 [rows cols]；非空则直接按此尺寸重采样，
 %                          绕过 maxDimension
-%       .maxDimension    - 等比例上限：当 max(rows,cols) > maxDimension 时按比例
-%                          缩小，保持长宽比。resizeTo 非空时忽略。
+%       .maxDimension    - 等比例归一目标：将长边缩放到 maxDimension，
+%                          保持长宽比。resizeTo 非空时忽略。
 %
 % 输出:
 %   img         - 预处理（含缩小）后的uint8图像，供通信链路使用
@@ -42,7 +42,10 @@ if isfield(s, "maxDimension") && ~isempty(s.maxDimension)
     maxDim = round(double(s.maxDimension));
     if maxDim > 0
         curMax = max(size(img, 1), size(img, 2));
-        if curMax > maxDim
+        if curMax <= 0
+            error("源图像尺寸无效。");
+        end
+        if curMax ~= maxDim
             scale = maxDim / double(curMax);
             img = imresize(img, scale);
         end

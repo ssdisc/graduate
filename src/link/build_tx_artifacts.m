@@ -13,7 +13,7 @@ end
 waveform = resolve_waveform_cfg(runtimeCfg);
 [imgTx, imgOriginal] = load_source_image(runtimeCfg.source);
 payloadCodec = get_payload_codec(runtimeCfg.payload);
-usePayloadBitChaos = payloadCodec == "dct";
+usePayloadBitChaos = payloadCodec ~= "raw";
 packetIndependentBitChaos = false;
 
 chaosEnabled = isfield(runtimeCfg, "chaosEncrypt") && isfield(runtimeCfg.chaosEncrypt, "enable") ...

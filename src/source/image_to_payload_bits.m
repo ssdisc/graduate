@@ -5,12 +5,13 @@ function [bits, meta] = image_to_payload_bits(img, payload)
 %   img     - 输入图像（uint8）
 %   payload - 载荷配置结构体
 %             .bitsPerPixel - 每通道位深（当前链路按8处理，对应0-255）
-%             .codec        - 'raw' | 'dct'（可选，默认raw）
+%             .codec        - 'raw' | 'dct' | 'toolbox_image'
 %             .dct          - DCT压缩配置（codec='dct'时）
 %                 .blockSize - DCT分块大小（默认8）
 %                 .keepRows  - 保留低频行数（默认4）
 %                 .keepCols  - 保留低频列数（默认4）
 %                 .quantStep - 量化步长（默认16）
+%             .toolboxImage - imwrite/imread工具箱压缩配置（codec='toolbox_image'时）
 %
 % 输出:
 %   bits - 图像字节对应的比特流
@@ -22,12 +23,15 @@ rows = size(img, 1);
 cols = size(img, 2);
 ch = size(img, 3);
 
-[codec, dctCfg] = resolve_payload_codec(payload);
+[codec, codecCfg] = resolve_payload_codec(payload);
+codecMeta = struct();
 switch codec
     case "raw"
         bytes = reshape(uint8(img), [], 1);
     case "dct"
-        bytes = dct_encode_bytes(uint8(img), dctCfg);
+        bytes = dct_encode_bytes(uint8(img), codecCfg.dct);
+    case "toolbox_image"
+        [bytes, codecMeta] = toolbox_image_encode_bytes(uint8(img), codecCfg.toolboxImage);
     otherwise
         error("不支持的payload.codec: %s", codec);
 end
@@ -40,6 +44,8 @@ meta.cols = uint16(cols);
 meta.channels = uint8(ch);
 meta.bitsPerPixel = uint8(payload.bitsPerPixel);
 meta.payloadBytes = uint32(numel(bytes));
+meta.codec = codec;
+meta.codecMeta = codecMeta;
 end
 
 function bytes = dct_encode_bytes(img, cfg)

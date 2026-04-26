@@ -15,8 +15,10 @@ if ~inter.enable
     x = y(:);
     return;
 end
-mat = reshape(y, state.nRows, state.nCols);
-xPad = reshape(mat.', [], 1);%逆交织：先按列重塑为矩阵，再按行展开回序列
+if exist("matdeintrlv", "file") ~= 2
+    error("deinterleave_bits requires Communications Toolbox function matdeintrlv.");
+end
+xPad = matdeintrlv(y(:), state.nRows, state.nCols);
 if state.pad > 0
     x = xPad(1:end-state.pad);
 else

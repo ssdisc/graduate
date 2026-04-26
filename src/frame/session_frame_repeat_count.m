@@ -5,7 +5,7 @@ count = 3;
 if isfield(frameCfg, "sessionFrameRepeatCount") && ~isempty(frameCfg.sessionFrameRepeatCount)
     count = round(double(frameCfg.sessionFrameRepeatCount));
 end
-if count < 3 || count > 5
-    error("frame.sessionFrameRepeatCount must be an integer in [3, 5], got %g.", count);
+if count < 1 || count > 5
+    error("frame.sessionFrameRepeatCount must be an integer in [1, 5], got %g.", count);
 end
 end

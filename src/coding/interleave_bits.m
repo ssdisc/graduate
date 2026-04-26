@@ -24,8 +24,10 @@ nCols = ceil(n / nRows);
 pad = nRows*nCols - n;
 xPad = [x(:); zeros(pad, 1, 'like', x)];
 
-mat = reshape(xPad, nCols, nRows).';% 按行填充
-y = mat(:);% 按列读取
+if exist("matintrlv", "file") ~= 2
+    error("interleave_bits requires Communications Toolbox function matintrlv.");
+end
+y = matintrlv(xPad, nRows, nCols);
 
 state = struct("pad", pad, "nRows", nRows, "nCols", nCols);
 end

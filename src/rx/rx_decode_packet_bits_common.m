@@ -5,6 +5,10 @@ if ~(isfield(pkt, "intState") && isfield(pkt, "scrambleCfg") && isfield(pkt, "pa
     error("Packet context must provide intState, scrambleCfg, and packetDataBits.");
 end
 
+if isfield(pkt, "dsssCfg") && isstruct(pkt.dsssCfg)
+    reliabilityUse = rx_expand_reliability(reliabilityUse, numel(dataSymUse));
+    [dataSymUse, reliabilityUse] = dsss_despread(dataSymUse(:), pkt.dsssCfg, reliabilityUse(:));
+end
 soft = demodulate_to_softbits(dataSymUse, runtimeCfg.mod, runtimeCfg.fec, runtimeCfg.softMetric, reliabilityUse);
 codedBits = deinterleave_bits(soft, pkt.intState, runtimeCfg.interleaver);
 packetDataBitsScr = fec_decode(codedBits, runtimeCfg.fec);

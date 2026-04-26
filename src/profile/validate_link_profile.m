@@ -294,7 +294,7 @@ switch profile
         allowed = ["none" "clipping" "blanking" "adaptive_notch" "fft_notch" "stft_notch" ...
             "ml_blanking" "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard"];
     case "narrowband"
-        allowed = ["none" "fh_erasure"];
+        allowed = ["none" "fh_erasure" "narrowband_notch_soft"];
     case "rayleigh_multipath"
         allowed = ["none" "sc_fde_mmse"];
     otherwise

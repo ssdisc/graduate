@@ -11,7 +11,7 @@ if method == "none"
 end
 
 sampleActions = ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard"];
-symbolActions = ["adaptive_notch" "fft_notch" "fft_bandstop" "stft_notch" "fh_erasure"];
+symbolActions = ["adaptive_notch" "fft_notch" "fft_bandstop" "stft_notch" "fh_erasure" "narrowband_notch_soft"];
 
 if any(method == sampleActions)
     sampleAction = method;

@@ -15,16 +15,19 @@ function [sym, info] = modulate_bits(bits, mod, fec)
 bits = uint8(bits(:) ~= 0);
 switch upper(string(mod.type))
     case "BPSK"
-        sym = 1 - 2*double(bits); % 0->+1, 1->-1
+        if exist("pskmod", "file") ~= 2
+            error("modulate_bits requires Communications Toolbox function pskmod.");
+        end
+        sym = pskmod(bits, 2, 0, 'InputType', 'bit');
         info.bitsPerSymbol = 1;
     case "QPSK"
         if rem(numel(bits), 2) ~= 0
             error("QPSK输入比特数必须为偶数，当前为%d。", numel(bits));
         end
-        bits2 = reshape(bits, 2, []);
-        bI = double(bits2(1, :)).';
-        bQ = double(bits2(2, :)).';
-        sym = ((1 - 2*bI) + 1j*(1 - 2*bQ)) / sqrt(2);% 0->+1, 1->-1，归一化功率
+        if exist("pskmod", "file") ~= 2
+            error("modulate_bits requires Communications Toolbox function pskmod.");
+        end
+        sym = pskmod(bits, 4, pi/4, 'gray', 'InputType', 'bit');
         info.bitsPerSymbol = 2;
     case "MSK"
         % 最小频移键控（h=0.5）的离散相位实现：

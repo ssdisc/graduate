@@ -5,8 +5,10 @@ function img = payload_bits_to_image(bits, meta, payload)
 %   bits - 载荷比特流
 %   meta - 图像元数据结构体
 %          .rows, .cols, .channels
-%   payload - 载荷配置结%             .%             .codec - 'raw' | 'dct'
+%   payload - 载荷配置结构体
+%             .codec - 'raw' | 'dct' | 'toolbox_image'
 %             .dct   - DCT解压配置（codec='dct'）
+%             .toolboxImage - imwrite/imread工具箱压缩配置（codec='toolbox_image'）
 %
 % 输出:
 %   img - 恢复后的uint8图像
@@ -23,12 +25,14 @@ else
     bytes = bytes(1:declaredBytes);
 end
 
-[codec, dctCfg] = resolve_payload_codec(payload);
+[codec, codecCfg] = resolve_payload_codec(payload);
 switch codec
     case "raw"
         img = raw_decode(bytes, meta);
     case "dct"
-        img = dct_decode_bytes(bytes, meta, dctCfg);
+        img = dct_decode_bytes(bytes, meta, codecCfg.dct);
+    case "toolbox_image"
+        img = toolbox_image_decode_bytes(bytes, meta, codecCfg.toolboxImage);
     otherwise
         error("不支持的payload.codec: %s", codec);
 end

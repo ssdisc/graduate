@@ -19,13 +19,28 @@ end
 
 switch upper(string(mod.type))
     case "BPSK"
-        metric = real(r(:));
+        if exist("pskdemod", "file") ~= 2
+            error("demodulate_to_softbits requires Communications Toolbox function pskdemod.");
+        end
+        if strcmpi(fec.decisionType, "hard")
+            soft = uint8(pskdemod(r(:), 2, 0, 'OutputType', 'bit'));
+            return;
+        end
+        metric = double(pskdemod(r(:), 2, 0, ...
+            'OutputType', 'approxllr', 'NoiseVariance', 1));
+        metric = metric(:);
         bitsPerSym = 1;
     case "QPSK"
-        r = r(:);
-        metricI = real(r) * sqrt(2);
-        metricQ = imag(r) * sqrt(2);
-        metric = reshape([metricI.'; metricQ.'], [], 1); %按列展开，交错I/Q分量以匹配软比特顺序（I1,Q1,I2,Q2,...）
+        if exist("pskdemod", "file") ~= 2
+            error("demodulate_to_softbits requires Communications Toolbox function pskdemod.");
+        end
+        if strcmpi(fec.decisionType, "hard")
+            soft = uint8(pskdemod(r(:), 4, pi/4, 'gray', 'OutputType', 'bit'));
+            return;
+        end
+        metric = double(pskdemod(r(:), 4, pi/4, 'gray', ...
+            'OutputType', 'approxllr', 'NoiseVariance', 1));
+        metric = metric(:);
         bitsPerSym = 2;
     case "MSK"
         r = r(:);
