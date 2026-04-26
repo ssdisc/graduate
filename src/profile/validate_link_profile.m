@@ -88,35 +88,49 @@ end
 
 function local_validate_control_plane_local(frameCfg)
 mode = string(session_transport_mode(frameCfg));
-if mode ~= "embedded_each_frame"
-    error("Core refactored links only support frame.sessionHeaderMode='embedded_each_frame'. Got %s.", mode);
-end
 if ~(isfield(frameCfg, "phyHeaderMode") && lower(string(frameCfg.phyHeaderMode)) == "compact_fec")
     error("Core refactored links require frame.phyHeaderMode='compact_fec'.");
 end
-for fieldName = ["sessionHeaderBodyDiversity" "preambleDiversity" "phyHeaderDiversity"]
-    fieldChar = char(fieldName);
-    if isfield(frameCfg, fieldChar) && isstruct(frameCfg.(fieldChar)) ...
-            && isfield(frameCfg.(fieldChar), "enable") && logical(frameCfg.(fieldChar).enable)
-        error("Core refactored links do not allow frame.%s.enable=true.", fieldName);
-    end
+
+switch mode
+    case "session_frame_repeat"
+        session_frame_repeat_count(frameCfg);
+    case "session_frame_strong"
+        session_frame_strong_repeat(frameCfg);
+end
+
+preambleCopies = preamble_diversity_copies(frameCfg);
+sessionCopies = session_header_body_diversity_copies(frameCfg);
+phyCopies = phy_header_diversity_copies(frameCfg);
+if phyCopies > 1 && ~(isfield(frameCfg, "phyHeaderFhEnable") && logical(frameCfg.phyHeaderFhEnable))
+    error("frame.phyHeaderDiversity requires frame.phyHeaderFhEnable=true.");
+end
+if preambleCopies > 1 && ~(isfield(frameCfg, "preambleDiversity") && isstruct(frameCfg.preambleDiversity))
+    error("frame.preambleDiversity config is required.");
+end
+if sessionCopies > 1 && ~(isfield(frameCfg, "sessionHeaderBodyDiversity") && isstruct(frameCfg.sessionHeaderBodyDiversity))
+    error("frame.sessionHeaderBodyDiversity config is required.");
 end
 end
 
 function local_validate_profile_specific_local(profile, linkSpec)
 profileTx = linkSpec.profileTx.cfg;
 control = linkSpec.commonTx.control;
+preambleCopies = preamble_diversity_copies(control);
+sessionCopies = session_header_body_diversity_copies(control);
+phyCopies = phy_header_diversity_copies(control);
 switch profile
     case "impulse"
-        if logical(profileTx.fh.enable)
-            error("impulse profile does not allow FH.");
-        end
         if logical(profileTx.scFde.enable)
             error("impulse profile does not allow SC-FDE.");
         end
         if isfield(control, "phyHeaderFhEnable") && logical(control.phyHeaderFhEnable)
             error("impulse profile does not allow PHY-header FH.");
         end
+        if preambleCopies > 1 || sessionCopies > 1 || phyCopies > 1
+            error("impulse profile does not allow FH-dependent control diversity.");
+        end
+        local_validate_chaotic_fh_contract_local(profile, profileTx.fh);
     case "narrowband"
         if ~logical(profileTx.fh.enable)
             error("narrowband profile requires FH payload mapping.");
@@ -127,6 +141,7 @@ switch profile
         if ~(isfield(control, "phyHeaderFhEnable") && logical(control.phyHeaderFhEnable))
             error("narrowband profile requires PHY-header FH protection.");
         end
+        local_validate_chaotic_fh_contract_local(profile, profileTx.fh);
     case "rayleigh_multipath"
         if ~logical(profileTx.scFde.enable)
             error("rayleigh_multipath profile requires SC-FDE payload mapping.");
@@ -137,6 +152,7 @@ switch profile
         if isfield(control, "phyHeaderFhEnable") && logical(control.phyHeaderFhEnable)
             error("rayleigh_multipath profile does not allow PHY-header FH.");
         end
+        local_validate_chaotic_fh_contract_local(profile, profileTx.fh);
     otherwise
         error("Unexpected profile: %s", char(profile));
 end
@@ -160,7 +176,10 @@ end
 
 function local_validate_runtime_contract_local(profile, p)
 switch profile
+    case "impulse"
+        local_validate_runtime_chaotic_fh_local(profile, p);
     case "narrowband"
+        local_validate_runtime_chaotic_fh_local(profile, p);
         if ~(isfield(p.fh, "enable") && logical(p.fh.enable))
             error("narrowband runtime requires p.fh.enable=true.");
         end
@@ -168,6 +187,7 @@ switch profile
             error("narrowband runtime requires at least two FH frequencies.");
         end
     case "rayleigh_multipath"
+        local_validate_runtime_chaotic_fh_local(profile, p);
         if ~(isfield(p.scFde, "enable") && logical(p.scFde.enable))
             error("rayleigh_multipath runtime requires p.scFde.enable=true.");
         end
@@ -186,6 +206,15 @@ switch profile
             error("rayleigh_multipath requires SC-FDE CP >= max path delay. Got cp=%g, maxDelay=%g.", ...
                 double(p.scFde.cpLen), maxDelay);
         end
+        if isfield(p, "waveform") && isstruct(p.waveform) ...
+                && isfield(p.waveform, "enable") && logical(p.waveform.enable) ...
+                && isfield(p.waveform, "spanSymbols") && isfinite(double(p.waveform.spanSymbols))
+            effectiveMemory = maxDelay + 2 * max(0, round(double(p.waveform.spanSymbols)));
+            if double(p.scFde.cpLen) < effectiveMemory
+                error("rayleigh_multipath requires SC-FDE CP >= effective channel memory when pulse shaping is enabled. Got cp=%g, need >= %g (maxDelay=%g, span=%g).", ...
+                    double(p.scFde.cpLen), effectiveMemory, maxDelay, double(p.waveform.spanSymbols));
+            end
+        end
 end
 
 if ~(isfield(p.linkBudget, "noisePsdLin") && double(p.linkBudget.noisePsdLin) > 0)
@@ -194,32 +223,55 @@ end
 if profile ~= "narrowband" && numel(double(p.linkBudget.jsrDbList(:))) > 1
     error("Only narrowband profile supports a JSR sweep in the refactored core.");
 end
+
+preambleCopies = preamble_diversity_copies(p.frame);
+sessionCopies = session_header_body_diversity_copies(p.frame);
+phyCopies = phy_header_diversity_copies(p.frame);
+fhEnable = isfield(p.fh, "enable") && logical(p.fh.enable);
+if (preambleCopies > 1 || sessionCopies > 1 || logical(p.frame.phyHeaderFhEnable))
+    if ~fhEnable
+        error("FH-dependent control protection requires p.fh.enable=true.");
+    end
+    nFreqs = numel(double(p.fh.freqSet(:)));
+    if preambleCopies > nFreqs
+        error("frame.preambleDiversity.copies=%d exceeds available FH frequencies=%d.", preambleCopies, nFreqs);
+    end
+    if sessionCopies > nFreqs
+        error("frame.sessionHeaderBodyDiversity.copies=%d exceeds available FH frequencies=%d.", sessionCopies, nFreqs);
+    end
+    if phyCopies > nFreqs
+        error("frame.phyHeaderDiversity.copies=%d exceeds available FH frequencies=%d.", phyCopies, nFreqs);
+    end
+end
+if phyCopies > 1 && ~logical(p.frame.phyHeaderFhEnable)
+    error("frame.phyHeaderDiversity requires frame.phyHeaderFhEnable=true.");
+end
 end
 
 function activeTypes = local_active_channel_types_local(channelCfg)
 activeTypes = strings(1, 0);
 if isfield(channelCfg, "impulseWeight") && double(channelCfg.impulseWeight) > 0 ...
         && isfield(channelCfg, "impulseProb") && double(channelCfg.impulseProb) > 0
-    activeTypes(end + 1) = "impulse"; %#ok<AGROW>
+    activeTypes(end + 1) = "impulse";
 end
 if isfield(channelCfg, "singleTone") && isstruct(channelCfg.singleTone) ...
         && isfield(channelCfg.singleTone, "enable") && logical(channelCfg.singleTone.enable) ...
         && isfield(channelCfg.singleTone, "weight") && double(channelCfg.singleTone.weight) > 0
-    activeTypes(end + 1) = "singleTone"; %#ok<AGROW>
+    activeTypes(end + 1) = "singleTone";
 end
 if isfield(channelCfg, "narrowband") && isstruct(channelCfg.narrowband) ...
         && isfield(channelCfg.narrowband, "enable") && logical(channelCfg.narrowband.enable) ...
         && isfield(channelCfg.narrowband, "weight") && double(channelCfg.narrowband.weight) > 0
-    activeTypes(end + 1) = "narrowband"; %#ok<AGROW>
+    activeTypes(end + 1) = "narrowband";
 end
 if isfield(channelCfg, "sweep") && isstruct(channelCfg.sweep) ...
         && isfield(channelCfg.sweep, "enable") && logical(channelCfg.sweep.enable) ...
         && isfield(channelCfg.sweep, "weight") && double(channelCfg.sweep.weight) > 0
-    activeTypes(end + 1) = "sweep"; %#ok<AGROW>
+    activeTypes(end + 1) = "sweep";
 end
 if isfield(channelCfg, "multipath") && isstruct(channelCfg.multipath) ...
         && isfield(channelCfg.multipath, "enable") && logical(channelCfg.multipath.enable)
-    activeTypes(end + 1) = "multipath"; %#ok<AGROW>
+    activeTypes(end + 1) = "multipath";
 end
 end
 
@@ -247,6 +299,47 @@ switch profile
         allowed = ["none" "sc_fde_mmse"];
     otherwise
         error("Unexpected profile: %s", char(profile));
+end
+end
+
+function local_validate_chaotic_fh_contract_local(profile, fhCfg)
+if ~(isstruct(fhCfg) && isfield(fhCfg, "enable") && logical(fhCfg.enable))
+    error("%s profile requires profileTx.cfg.fh.enable=true.", char(profile));
+end
+if ~(isfield(fhCfg, "sequenceType") && lower(string(fhCfg.sequenceType)) == "chaos")
+    error("%s profile requires profileTx.cfg.fh.sequenceType='chaos'.", char(profile));
+end
+if ~(isfield(fhCfg, "chaosMethod") && strlength(string(fhCfg.chaosMethod)) > 0)
+    error("%s profile requires profileTx.cfg.fh.chaosMethod.", char(profile));
+end
+if ~(isfield(fhCfg, "chaosParams") && isstruct(fhCfg.chaosParams))
+    error("%s profile requires profileTx.cfg.fh.chaosParams.", char(profile));
+end
+if isfield(fhCfg, "nFreqs") && ~isempty(fhCfg.nFreqs) && double(fhCfg.nFreqs) < 2 ...
+        && ~(isfield(fhCfg, "freqSet") && numel(double(fhCfg.freqSet(:))) >= 2)
+    error("%s profile requires at least two FH payload frequencies.", char(profile));
+end
+end
+
+function local_validate_runtime_chaotic_fh_local(profile, p)
+if ~(isfield(p, "fh") && isstruct(p.fh) && isfield(p.fh, "enable") && logical(p.fh.enable))
+    error("%s runtime requires p.fh.enable=true.", char(profile));
+end
+if ~(isfield(p.fh, "sequenceType") && lower(string(p.fh.sequenceType)) == "chaos")
+    error("%s runtime requires p.fh.sequenceType='chaos'.", char(profile));
+end
+if ~(isfield(p.fh, "chaosMethod") && strlength(string(p.fh.chaosMethod)) > 0)
+    error("%s runtime requires p.fh.chaosMethod.", char(profile));
+end
+if ~(isfield(p.fh, "chaosParams") && isstruct(p.fh.chaosParams))
+    error("%s runtime requires p.fh.chaosParams.", char(profile));
+end
+if numel(double(p.fh.freqSet(:))) < 2
+    error("%s runtime requires at least two resolved FH frequencies.", char(profile));
+end
+if ~(isfield(p, "waveform") && isstruct(p.waveform) && isfield(p.waveform, "enable") && logical(p.waveform.enable) ...
+        && isfield(p.waveform, "sps") && double(p.waveform.sps) > 1)
+    error("%s runtime requires waveform.enable=true and waveform.sps>1 for multi-frequency chaotic FH.", char(profile));
 end
 end
 

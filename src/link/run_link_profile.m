@@ -28,6 +28,7 @@ rawPer = nan(nMethods, nPoints);
 per = nan(nMethods, nPoints);
 frontEndByMethod = nan(nMethods, nPoints);
 headerByMethod = nan(nMethods, nPoints);
+sessionByMethod = nan(nMethods, nPoints);
 rawPayloadSuccess = nan(nMethods, nPoints);
 payloadSuccess = nan(nMethods, nPoints);
 
@@ -40,6 +41,7 @@ for pointIdx = 1:nPoints
     framePayloadSuccess = nan(nMethods, nFrames);
     frameFrontEnd = nan(nMethods, nFrames);
     frameHeader = nan(nMethods, nFrames);
+    frameSession = nan(nMethods, nFrames);
     frameMetrics = local_init_image_metric_acc_local(nMethods, nFrames);
 
     pointChannel = local_build_point_channel_local(runtimeCfg, budget, pointIdx, waveform);
@@ -52,17 +54,33 @@ for pointIdx = 1:nPoints
         rawPacketOkByMethod = cell(nMethods, 1);
         frontPacketOkByMethod = cell(nMethods, 1);
         headerPacketOkByMethod = cell(nMethods, 1);
+        sessionCtxByMethod = cell(nMethods, 1);
         rxCursorByMethod = repmat(local_initial_packet_cursor_local(txArtifacts), nMethods, 1);
         for methodIdx = 1:nMethods
             rxPayloadByMethod{methodIdx} = repmat({uint8([])}, numel(txPackets), 1);
             rawPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
             frontPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
             headerPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
+            sessionCtxByMethod{methodIdx} = rx_build_session_context(struct(), session_transport_mode(runtimeCfg.frame), "none");
         end
 
         txBurst = txScale * txArtifacts.burstForChannel(:);
         [rxBurst, ~, chState] = channel_bg_impulsive(txBurst, noisePsdLin, pointChannel);
         captureGuardSamples = local_capture_guard_samples_local(runtimeCfg, waveform);
+
+        for methodIdx = 1:nMethods
+            sessionCfg = struct( ...
+                "runtimeCfg", runtimeCfg, ...
+                "method", methods(methodIdx), ...
+                "ebN0dB", double(budget.bob.ebN0dB(pointIdx)), ...
+                "jsrDb", double(budget.bob.jsrDb(pointIdx)), ...
+                "noisePsdLin", noisePsdLin, ...
+                "channelState", chState);
+            sessionResult = rx_decode_session_control(profileName, rxBurst, txArtifacts, sessionCfg);
+            sessionCtxByMethod{methodIdx} = sessionResult.sessionCtx;
+            frameSession(methodIdx, frameIdx) = double(~sessionResult.required || sessionResult.ok);
+            rxCursorByMethod(methodIdx) = max(double(rxCursorByMethod(methodIdx)), double(sessionResult.nextPacketCursor));
+        end
 
         for pktIdx = 1:numel(txPackets)
             txPacket = txPackets(pktIdx);
@@ -83,12 +101,17 @@ for pointIdx = 1:nPoints
                     "jsrDb", double(budget.bob.jsrDb(pointIdx)), ...
                     "noisePsdLin", noisePsdLin, ...
                     "channelState", chState, ...
+                    "sessionCtx", sessionCtxByMethod{methodIdx}, ...
                     "windowStartSample", double(rxCursor));
                 rxPacket = local_run_profile_packet_rx_local(profileName, rxWindow, txArtifacts, rxCfg);
                 rxPayloadByMethod{methodIdx}{pktIdx} = rxPacket.payloadBits;
                 rawPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.rawPacketOk);
                 frontPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.frontEndOk);
                 headerPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.headerOk);
+                if isfield(rxPacket, "sessionCtx") && isstruct(rxPacket.sessionCtx) ...
+                        && isfield(rxPacket.sessionCtx, "known") && logical(rxPacket.sessionCtx.known)
+                    sessionCtxByMethod{methodIdx} = rxPacket.sessionCtx;
+                end
                 rxCursorByMethod(methodIdx) = local_advance_packet_cursor_local( ...
                     rxCursor, pktLenSamples, rxPacket, numel(rxBurst));
             end
@@ -122,6 +145,7 @@ for pointIdx = 1:nPoints
     per(:, pointIdx) = max(min(1 - payloadSuccess(:, pointIdx), 1), 0);
     frontEndByMethod(:, pointIdx) = local_mean_omit_nan_local(frameFrontEnd, 2);
     headerByMethod(:, pointIdx) = local_mean_omit_nan_local(frameHeader, 2);
+    sessionByMethod(:, pointIdx) = local_mean_omit_nan_local(frameSession, 2);
     metricAcc = local_merge_point_image_metrics_local(metricAcc, frameMetrics, pointIdx);
 end
 
@@ -147,8 +171,10 @@ results.packetDiagnostics = struct();
 results.packetDiagnostics.bob = struct( ...
     "frontEndSuccessRate", max(frontEndByMethod, [], 1), ...
     "headerSuccessRate", max(headerByMethod, [], 1), ...
+    "sessionSuccessRate", max(sessionByMethod, [], 1), ...
     "frontEndSuccessRateByMethod", frontEndByMethod, ...
     "headerSuccessRateByMethod", headerByMethod, ...
+    "sessionSuccessRateByMethod", sessionByMethod, ...
     "rawPayloadSuccessRate", rawPayloadSuccess, ...
     "payloadSuccessRate", payloadSuccess);
 results.imageMetrics = local_finalize_image_metrics_local(metricAcc);
@@ -435,7 +461,8 @@ for idx = 1:nMethods
         "per", results.per(idx, :));
     rxResults(idx).commonDiagnostics = struct( ...
         "frontEndSuccessRate", results.packetDiagnostics.bob.frontEndSuccessRateByMethod(idx, :), ...
-        "headerSuccessRate", results.packetDiagnostics.bob.headerSuccessRateByMethod(idx, :));
+        "headerSuccessRate", results.packetDiagnostics.bob.headerSuccessRateByMethod(idx, :), ...
+        "sessionSuccessRate", results.packetDiagnostics.bob.sessionSuccessRateByMethod(idx, :));
     rxResults(idx).profileDiagnostics = struct( ...
         "profileName", string(results.linkSpec.linkProfile.name), ...
         "receiver", string(results.linkSpec.linkProfile.rxChain), ...

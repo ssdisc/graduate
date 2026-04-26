@@ -77,12 +77,28 @@ end
 
 function freqSet = local_spread_copy_freq_set(freqSetIn, copies)
 freqSetIn = double(freqSetIn(:).');
+freqSetIn = local_remove_center_tone_if_possible(freqSetIn, copies);
 idx = round(linspace(1, numel(freqSetIn), copies));
 idx = max(1, min(numel(freqSetIn), idx));
 if numel(unique(idx, "stable")) ~= copies
     error("Could not choose %d distinct PHY-header diversity frequencies.", copies);
 end
 freqSet = freqSetIn(idx);
+end
+
+function freqSetOut = local_remove_center_tone_if_possible(freqSetIn, copies)
+freqSetOut = double(freqSetIn(:).');
+if numel(freqSetOut) <= copies
+    return;
+end
+nearZero = abs(freqSetOut) <= 1e-12;
+if ~any(nearZero)
+    return;
+end
+keep = ~nearZero;
+if nnz(keep) >= copies
+    freqSetOut = freqSetOut(keep);
+end
 end
 
 function fhCfg = local_disable_payload_diversity_local(fhCfg)

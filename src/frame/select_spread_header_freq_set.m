@@ -28,6 +28,7 @@ if nBase < nUse
 end
 
 freqCandidates = local_edge_guard_candidates(freqSetBase, nUse);
+freqCandidates = local_remove_center_candidate_if_possible(freqCandidates, nUse);
 
 idx = round(linspace(1, numel(freqCandidates), nUse));
 idx = max(1, min(numel(freqCandidates), idx));
@@ -43,5 +44,33 @@ function freqCandidates = local_edge_guard_candidates(freqSetBase, nUse)
 freqCandidates = freqSetBase;
 if numel(freqSetBase) >= nUse + 2
     freqCandidates = freqSetBase(2:end-1);
+end
+end
+
+function freqCandidates = local_remove_center_candidate_if_possible(freqCandidatesIn, nUse)
+freqCandidates = double(freqCandidatesIn(:).');
+if numel(freqCandidates) <= nUse
+    return;
+end
+
+nearZero = abs(freqCandidates) <= 1e-12;
+if ~any(nearZero)
+    return;
+end
+
+keep = ~nearZero;
+if nnz(keep) >= nUse
+    freqCandidates = freqCandidates(keep);
+    return;
+end
+
+[~, sortIdx] = sort(abs(freqCandidates), "ascend");
+for idx = 1:numel(sortIdx)
+    testKeep = true(size(freqCandidates));
+    testKeep(sortIdx(idx)) = false;
+    if nnz(testKeep) >= nUse
+        freqCandidates = freqCandidates(testKeep);
+        return;
+    end
 end
 end
