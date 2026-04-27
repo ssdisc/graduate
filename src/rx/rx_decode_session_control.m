@@ -185,7 +185,7 @@ eqCfg.method = "mmse";
 eqCfg.frequencyOffsets = 0;
 eq = multipath_equalizer_from_preamble( ...
     sessionFrame.syncSym(:), rFullEq(1:numel(sessionFrame.syncSym)), ...
-    eqCfg, double(rxCfg.noisePsdLin), numel(rxCfg.channelState.multipathTaps));
+    eqCfg, double(rxCfg.noisePsdLin), rx_effective_multipath_channel_len_symbols(runtimeCfg, rxCfg));
     rFullEq = local_apply_frequency_aware_equalizer_block_local(rFullEq, eq, zeros(numel(rFullEq), 1));
 end
 

@@ -77,6 +77,7 @@ addParameter(p, 'MaxElapsedSec', 60, @(x) isscalar(x) && isnumeric(x) && isfinit
 addParameter(p, 'RunConfidence', false, @(x) islogical(x) || isnumeric(x));
 addParameter(p, 'RunResearchChecks', false, @(x) islogical(x) || isnumeric(x));
 addParameter(p, 'SaveFigures', false, @(x) islogical(x) || isnumeric(x));
+addParameter(p, 'SaveFullResults', false, @(x) islogical(x) || isnumeric(x));
 addParameter(p, 'ResultsRoot', fullfile(pwd, 'results'), @(x) ischar(x) || isstring(x));
 addParameter(p, 'Tag', string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')), @(x) ischar(x) || isstring(x));
 parse(p, varargin{:});
@@ -84,6 +85,10 @@ opts = p.Results;
 opts.Profiles = unique(string(opts.Profiles(:).'), 'stable');
 opts.ResultsRoot = string(opts.ResultsRoot);
 opts.Tag = string(opts.Tag);
+opts.RunConfidence = logical(opts.RunConfidence);
+opts.RunResearchChecks = logical(opts.RunResearchChecks);
+opts.SaveFigures = logical(opts.SaveFigures);
+opts.SaveFullResults = logical(opts.SaveFullResults);
 end
 
 function [tbl, summary] = local_run_impulse_coverage(opts, outRoot)
@@ -389,7 +394,7 @@ try
     row.sessionSuccess = m.sessionSuccess;
     row.payloadSuccess = m.payloadSuccess;
     row.pass = local_primary_pass(row, opts);
-    save(fullfile(cfg.sim.resultsDir, 'results.mat'), 'results');
+    local_save_primary_artifact(cfg.sim.resultsDir, results, row, cfg, opts);
     fprintf('[ACPT] %-18s %-12s %-28s elapsed=%6.2fs burst=%6.2fs rawPER=%7.4f PER=%7.4f pass=%d\n', ...
         char(profileName), char(suiteName), char(caseName), row.elapsedSec, row.burstSec, row.rawPer, row.per, row.pass);
 catch ME
@@ -421,7 +426,7 @@ try
     row.primaryPer = m1.per;
     row.secondaryPer = m2.per;
     row.improvement = local_improvement_ratio(m1.rawPer, m2.rawPer);
-    save(fullfile(cfg.sim.resultsDir, 'results.mat'), 'results');
+    local_save_compare_artifact(cfg.sim.resultsDir, results, row, cfg, opts);
     fprintf('[ACPT] %-18s %-12s %-28s compare %s->%s rawPER %.4f -> %.4f improve=%.3f\n', ...
         char(profileName), char(suiteName), char(caseName), char(primaryMethod), char(secondaryMethod), ...
         row.primaryRawPer, row.secondaryRawPer, row.improvement);
@@ -456,8 +461,8 @@ try
     row.primaryPer = mPrimary.per;
     row.secondaryPer = mSecondary.per;
     row.improvement = local_improvement_ratio(mPrimary.rawPer, mSecondary.rawPer);
-    save(fullfile(cfgPrimary.sim.resultsDir, 'results.mat'), 'resPrimary');
-    save(fullfile(cfgSecondary.sim.resultsDir, 'results.mat'), 'resSecondary');
+    local_save_dual_compare_artifact(cfgPrimary.sim.resultsDir, resPrimary, row, cfgPrimary, opts, string(primaryLabel));
+    local_save_dual_compare_artifact(cfgSecondary.sim.resultsDir, resSecondary, row, cfgSecondary, opts, string(secondaryLabel));
     fprintf('[ACPT] %-18s %-12s %-28s compare %s->%s rawPER %.4f -> %.4f improve=%.3f\n', ...
         char(profileName), char(suiteName), char(caseName), char(primaryLabel), char(secondaryLabel), ...
         row.primaryRawPer, row.secondaryRawPer, row.improvement);
@@ -465,6 +470,84 @@ catch ME
     row.errorMessage = string(ME.message);
     fprintf('[ACPT] %-18s %-12s %-28s FAILED: %s\n', ...
         char(profileName), char(suiteName), char(caseName), ME.message);
+end
+end
+
+function local_save_primary_artifact(runDir, results, row, cfg, opts)
+if logical(opts.SaveFullResults)
+    save(fullfile(runDir, 'results.mat'), 'results', 'row', 'cfg', '-v7.3');
+    return;
+end
+
+caseResult = local_compact_case_result(results, row, cfg, "primary");
+save(fullfile(runDir, 'case_result.mat'), 'caseResult');
+end
+
+function local_save_compare_artifact(runDir, results, row, cfg, opts)
+if logical(opts.SaveFullResults)
+    save(fullfile(runDir, 'results.mat'), 'results', 'row', 'cfg', '-v7.3');
+    return;
+end
+
+caseResult = local_compact_case_result(results, row, cfg, "compare");
+save(fullfile(runDir, 'case_result.mat'), 'caseResult');
+end
+
+function local_save_dual_compare_artifact(runDir, results, row, cfg, opts, variantLabel)
+if logical(opts.SaveFullResults)
+    save(fullfile(runDir, 'results.mat'), 'results', 'row', 'cfg', 'variantLabel', '-v7.3');
+    return;
+end
+
+caseResult = local_compact_case_result(results, row, cfg, variantLabel);
+save(fullfile(runDir, 'case_result.mat'), 'caseResult');
+end
+
+function caseResult = local_compact_case_result(results, row, cfg, variantLabel)
+caseResult = struct();
+caseResult.generatedAt = string(datetime("now", "Format", "yyyy-MM-dd HH:mm:ss"));
+caseResult.variantLabel = string(variantLabel);
+caseResult.row = row;
+caseResult.cfgSummary = local_cfg_summary(cfg);
+caseResult.methods = string(results.methods(:).');
+caseResult.ebN0dB = double(results.ebN0dB(:).');
+caseResult.jsrDb = double(results.jsrDb(:).');
+caseResult.ber = double(results.ber);
+caseResult.rawPer = double(results.rawPer);
+caseResult.per = double(results.per);
+caseResult.burstDurationSec = double(results.tx.burstDurationSec);
+caseResult.packetDiagnostics = local_packet_diag_summary(results);
+end
+
+function cfgSummary = local_cfg_summary(cfg)
+cfgSummary = struct();
+cfgSummary.linkProfileName = string(cfg.linkProfileName);
+cfgSummary.ebN0dBList = double(cfg.linkBudget.ebN0dBList);
+cfgSummary.jsrDbList = double(cfg.linkBudget.jsrDbList);
+cfgSummary.nFramesPerPoint = double(cfg.sim.nFramesPerPoint);
+cfgSummary.methods = string(cfg.profileRx.cfg.methods(:).');
+cfgSummary.channel = cfg.channel;
+if isfield(cfg, 'profileTx') && isfield(cfg.profileTx, 'cfg')
+    cfgSummary.profileTxCfg = cfg.profileTx.cfg;
+end
+if isfield(cfg, 'profileRx') && isfield(cfg.profileRx, 'cfg')
+    cfgSummary.profileRxCfg = cfg.profileRx.cfg;
+end
+end
+
+function diagSummary = local_packet_diag_summary(results)
+diagSummary = struct();
+if ~(isfield(results, 'packetDiagnostics') && isfield(results.packetDiagnostics, 'bob'))
+    return;
+end
+bob = results.packetDiagnostics.bob;
+fields = ["frontEndSuccessRateByMethod" "headerSuccessRateByMethod" ...
+    "sessionSuccessRateByMethod" "payloadSuccessRate"];
+for idx = 1:numel(fields)
+    name = char(fields(idx));
+    if isfield(bob, name)
+        diagSummary.(name) = double(bob.(name));
+    end
 end
 end
 

@@ -7,6 +7,7 @@ arguments
     opts.NFramesPerPoint (1,1) double {mustBeInteger, mustBePositive} = 1
     opts.BurstThresholdSec (1,1) double {mustBePositive} = 60
     opts.ElapsedThresholdSec (1,1) double {mustBePositive} = 120
+    opts.SaveFullResults (1,1) logical = false
     opts.Cases (1,:) string = ["impulse_narrowband" "impulse_rayleigh" "narrowband_rayleigh" "all_three"]
     opts.Variants (1,:) string = ["baseline" "mixed_soft"]
     opts.Tag (1,1) string = "robust_unified_mixed_6db"
@@ -74,7 +75,7 @@ for caseIdx = 1:numel(cases)
             row.pass = row.per == 0 ...
                 && row.burstSec < double(opts.BurstThresholdSec) ...
                 && row.elapsedSec < double(opts.ElapsedThresholdSec);
-            save(fullfile(runDir, "results.mat"), "results", "spec", "elapsedSec");
+            local_save_case_artifact_local(runDir, row, spec, results, elapsedSec, opts);
         catch ME
             row.runOk = false;
             row.errorMessage = string(ME.message);
@@ -118,7 +119,7 @@ spec.channel.impulseToBgRatio = 0.0;
 spec.channel.narrowband.enable = false;
 spec.channel.narrowband.weight = 0.0;
 spec.channel.narrowband.centerFreqPoints = 0;
-spec.channel.narrowband.bandwidthFreqPoints = 1;
+spec.channel.narrowband.bandwidthFreqPoints = local_robust_unified_narrowband_bandwidth_local(spec);
 spec.channel.multipath.enable = false;
 spec.channel.multipath.pathDelaysSymbols = [0 2 4];
 spec.channel.multipath.pathGainsDb = [0 -6 -10];
@@ -152,7 +153,7 @@ function spec = local_enable_narrowband_local(spec)
 spec.channel.narrowband.enable = true;
 spec.channel.narrowband.weight = 1.0;
 spec.channel.narrowband.centerFreqPoints = 0;
-spec.channel.narrowband.bandwidthFreqPoints = 1;
+spec.channel.narrowband.bandwidthFreqPoints = local_robust_unified_narrowband_bandwidth_local(spec);
 end
 
 function spec = local_enable_rayleigh_local(spec)
@@ -160,6 +161,24 @@ spec.channel.multipath.enable = true;
 spec.channel.multipath.pathDelaysSymbols = [0 2 4];
 spec.channel.multipath.pathGainsDb = [0 -6 -10];
 spec.channel.multipath.rayleigh = true;
+end
+
+function bw = local_robust_unified_narrowband_bandwidth_local(spec)
+runtimeCfg = compile_runtime_config(spec);
+bw = narrowband_prespread_fh_bandwidth_points(runtimeCfg.fh, runtimeCfg.waveform, runtimeCfg.dsss);
+end
+
+function local_save_case_artifact_local(runDir, row, spec, results, elapsedSec, opts)
+if logical(opts.SaveFullResults)
+    save(fullfile(runDir, "results.mat"), "results", "spec", "elapsedSec", "-v7.3");
+    return;
+end
+caseResult = row;
+caseResult.savedFullResults = false;
+caseResult.methods = string(results.methods(:).');
+caseResult.txSummary = struct("burstDurationSec", double(results.tx.burstDurationSec));
+caseResult.elapsedSec = elapsedSec;
+save(fullfile(runDir, "case_result.mat"), "caseResult", "spec");
 end
 
 function row = local_empty_row_local()

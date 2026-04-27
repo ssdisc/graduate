@@ -1,0 +1,6 @@
+function tmp_validate_robust_unified_single_rayleigh()
+addpath(genpath("src"));
+validate_robust_unified_single_sweeps( ...
+    "Suites", "rayleigh_multipath", ...
+    "Tag", "robust_unified_single_rayleigh_full_6db");
+end

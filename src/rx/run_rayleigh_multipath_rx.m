@@ -162,7 +162,7 @@ if local_sc_fde_mmse_active_local(ctx.method)
         ctx.pkt.syncSym(:), ySymRawFull(1:numel(ctx.pkt.syncSym)), ...
         local_header_equalizer_cfg_local(ctx.runtimeCfg, ctx.pkt), ...
         double(ctx.rxCfg.noisePsdLin), ...
-        numel(ctx.rxCfg.channelState.multipathTaps));
+        rx_effective_multipath_channel_len_symbols(ctx.runtimeCfg, ctx.rxCfg));
     ySymUse = local_apply_frequency_aware_equalizer_block_local(ySymRawFull, eq, freqBySymbol);
     diagOut.headerEqualizer = eq.method;
     diagOut.payloadEqualizer = eq;
@@ -506,10 +506,15 @@ if ~local_channel_narrowband_active_local(ctx)
     method = "none";
     return;
 end
-if logical(cfg.enableFhSubbandExcision)
-    method = "narrowband_subband_excision_soft";
-else
-    method = "fh_erasure";
+switch string(cfg.narrowbandFrontend)
+    case "dsss_only"
+        method = "none";
+    case "fh_erasure"
+        method = "fh_erasure";
+    case "subband_excision"
+        method = "narrowband_subband_excision_soft";
+    otherwise
+        error("Unsupported robustMixed.narrowbandFrontend: %s.", char(string(cfg.narrowbandFrontend)));
 end
 end
 
@@ -540,6 +545,10 @@ end
 cfg = local_required_robust_mixed_cfg_local(ctx);
 infoOut.enabled = true;
 if ~logical(cfg.enableScFdeNbiCancel)
+    return;
+end
+if local_channel_narrowband_active_local(ctx) && logical(cfg.enableFhSubbandExcision)
+    infoOut.disabledByFhSubbandExcision = true;
     return;
 end
 
@@ -579,7 +588,7 @@ if ~(isstruct(ctx) && isfield(ctx, "runtimeCfg") && isstruct(ctx.runtimeCfg) ...
     error("robust_unified requires runtimeCfg.mitigation.robustMixed.");
 end
 cfg = ctx.runtimeCfg.mitigation.robustMixed;
-requiredFields = ["enableFhSubbandExcision" "enableScFdeNbiCancel" ...
+requiredFields = ["narrowbandFrontend" "enableFhSubbandExcision" "enableScFdeNbiCancel" ...
     "enableFhReliabilityFloorWithMultipath" "fhReliabilityFloorWithMultipath" ...
     "minReliability" "scFdeNbiCancel"];
 for idx = 1:numel(requiredFields)
@@ -603,6 +612,10 @@ end
 cfg.enableFhSubbandExcision = logical(cfg.enableFhSubbandExcision);
 cfg.enableScFdeNbiCancel = logical(cfg.enableScFdeNbiCancel);
 cfg.enableFhReliabilityFloorWithMultipath = logical(cfg.enableFhReliabilityFloorWithMultipath);
+cfg.narrowbandFrontend = string(cfg.narrowbandFrontend);
+if ~isscalar(cfg.narrowbandFrontend) || ~any(cfg.narrowbandFrontend == ["dsss_only" "fh_erasure" "subband_excision"])
+    error("mitigation.robustMixed.narrowbandFrontend must be dsss_only, fh_erasure, or subband_excision.");
+end
 cfg.fhReliabilityFloorWithMultipath = local_probability_scalar_local( ...
     cfg.fhReliabilityFloorWithMultipath, "mitigation.robustMixed.fhReliabilityFloorWithMultipath");
 cfg.minReliability = local_probability_scalar_local(cfg.minReliability, "mitigation.robustMixed.minReliability");
@@ -794,11 +807,13 @@ elseif isfield(eq, "hEst") && ~isempty(eq.hEst)
     return;
 elseif isfield(ctx.rxCfg, "channelState") && isstruct(ctx.rxCfg.channelState) ...
         && isfield(ctx.rxCfg.channelState, "multipathTaps") && ~isempty(ctx.rxCfg.channelState.multipathTaps)
-    hBase = ctx.rxCfg.channelState.multipathTaps(:);
+    hBaseSample = ctx.rxCfg.channelState.multipathTaps(:);
     if ~(isfield(ctx.waveform, "sps") && isfinite(double(ctx.waveform.sps)) && double(ctx.waveform.sps) >= 1)
         error("SC-FDE payload decode requires waveform.sps when using channelState.multipathTaps.");
     end
-    sampleDelays = (0:numel(hBase)-1).' / double(ctx.waveform.sps);
+    sps = max(1, round(double(ctx.waveform.sps)));
+    hBase = hBaseSample(1:sps:end);
+    sampleDelays = (0:numel(hBase)-1).';
     for hopIdx = 1:nHops
         hBank{hopIdx} = hBase .* exp(-1j * 2 * pi * double(hopFreqs(hopIdx)) * sampleDelays);
     end

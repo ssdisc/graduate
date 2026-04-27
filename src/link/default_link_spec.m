@@ -250,7 +250,8 @@ end
 function [commonTx, channel, profileTxCfg, profileRxCfg] = local_apply_profile_defaults_local(commonTx, channel, profileName)
 profileTxCfg = struct( ...
     "dsss", struct("enable", false, "spreadFactor", 1, "sequenceType", 'pn', ...
-        "pnPolynomial", [1 0 0 0 0 0 0 0 0 1 0 1], "pnInit", [0 0 0 0 0 0 0 0 0 1 1]), ...
+        "pnPolynomial", [1 0 0 0 0 0 0 0 0 1 0 1], "pnInit", [0 0 0 0 0 0 0 0 0 1 1], ...
+        "chipInterleaveMode", "none"), ...
     "fh", struct( ...
         "enable", false, ...
         "mode", 'slow', ...
@@ -434,8 +435,8 @@ switch profileName
 
     case "robust_unified"
         commonTx.waveform.enable = true;
-        commonTx.waveform.sampleRateHz = 240e3;
-        commonTx.waveform.sps = 4;
+        commonTx.waveform.sampleRateHz = 2400e3;
+        commonTx.waveform.sps = 12;
         commonTx.waveform.rolloff = 0.25;
         commonTx.waveform.spanSymbols = 6;
         commonTx.control.sessionHeaderMode = "embedded_each_frame";
@@ -444,8 +445,8 @@ switch profileName
         commonTx.control.packetSyncLength = 63;
         commonTx.control.resyncIntervalPackets = 1;
         commonTx.control.phyHeaderFhEnable = true;
-        commonTx.control.phyHeaderRepeatCompact = 2;
-        commonTx.control.phyHeaderSpreadFactor = 2;
+        commonTx.control.phyHeaderRepeatCompact = 3;
+        commonTx.control.phyHeaderSpreadFactor = 4;
         commonTx.control.preambleDiversity.enable = true;
         commonTx.control.preambleDiversity.copies = 2;
         commonTx.control.preambleDiversity.freqSet = [];
@@ -470,7 +471,6 @@ switch profileName
         channel.narrowband.enable = false;
         channel.narrowband.weight = 0.0;
         channel.narrowband.centerFreqPoints = 0;
-        channel.narrowband.bandwidthFreqPoints = 1;
         channel.multipath.enable = false;
         channel.multipath.pathDelaysSymbols = [0 2 4];
         channel.multipath.pathGainsDb = [0 -6 -10];
@@ -478,7 +478,7 @@ switch profileName
 
         profileTxCfg.fh.enable = true;
         profileTxCfg.fh.nFreqs = 8;
-        profileTxCfg.fh.freqSet = [-1.875 -1.375 -0.875 -0.375 0 0.625 1.125 1.625];
+        profileTxCfg.fh.freqSet = [-5.2 -3.9 -2.6 -1.3 1.3 2.6 3.9 5.2];
         profileTxCfg.fh.sequenceType = 'chaos';
         profileTxCfg.fh.balanceMode = "permutation_block";
         profileTxCfg.fh.symbolsPerHop = 96;
@@ -487,11 +487,14 @@ switch profileName
         profileTxCfg.fh.payloadDiversity.indexOffset = 3;
         profileTxCfg.dsss.enable = true;
         profileTxCfg.dsss.spreadFactor = 4;
+        profileTxCfg.dsss.chipInterleaveMode = "chip_round_robin";
         profileTxCfg.scFde.enable = true;
         profileTxCfg.scFde.cpLenSymbols = 16;
         profileTxCfg.scFde.pilotLength = 8;
         profileTxCfg.scFde.lambdaFactor = 1.0;
         profileTxCfg.scFde.pilotMseReference = 0.35;
+        channel.narrowband.bandwidthFreqPoints = narrowband_prespread_fh_bandwidth_points( ...
+            profileTxCfg.fh, commonTx.waveform, profileTxCfg.dsss);
 
         profileRxCfg.methods = "robust_combo";
         profileRxCfg.allowedMethods = "robust_combo";
@@ -502,8 +505,9 @@ switch profileName
         profileRxCfg.sync.multipathEq.compareMethods = "robust_combo";
         profileRxCfg.mitigation.headerBandstop.enable = true;
         profileRxCfg.mitigation.headerDecodeDiversity.enable = true;
-        profileRxCfg.mitigation.robustMixed.enableFhSubbandExcision = true;
-        profileRxCfg.mitigation.robustMixed.enableScFdeNbiCancel = true;
+        profileRxCfg.mitigation.robustMixed.narrowbandFrontend = "dsss_only";
+        profileRxCfg.mitigation.robustMixed.enableFhSubbandExcision = false;
+        profileRxCfg.mitigation.robustMixed.enableScFdeNbiCancel = false;
         profileRxCfg.mitigation.robustMixed.enableSampleNbiCancel = false;
         profileRxCfg.mitigation.robustMixed.enableFhReliabilityFloorWithMultipath = false;
         profileRxCfg.rxDiversity.enable = true;
@@ -614,6 +618,7 @@ mitigation.narrowbandNotchSoft = struct( ...
         "minFreqAbs", 0.005, ...
         "suppressToFloor", true));
 mitigation.robustMixed = struct( ...
+    "narrowbandFrontend", "dsss_only", ...
     "enableFhSubbandExcision", false, ...
     "enableSampleNbiCancel", false, ...
     "enableScFdeNbiCancel", false, ...

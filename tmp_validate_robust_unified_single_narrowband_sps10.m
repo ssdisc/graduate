@@ -1,0 +1,6 @@
+function tmp_validate_robust_unified_single_narrowband_sps10()
+addpath(genpath("src"));
+validate_robust_unified_single_sweeps( ...
+    "Suites", "narrowband", ...
+    "Tag", "robust_unified_single_narrowband_sps10_sr2400k_bw_prespread_6db");
+end

@@ -7,6 +7,7 @@ arguments
     opts.NFramesPerPoint (1,1) double {mustBeInteger, mustBePositive} = 1
     opts.BurstThresholdSec (1,1) double {mustBePositive} = 60
     opts.ElapsedThresholdSec (1,1) double {mustBePositive} = 60
+    opts.SaveFullResults (1,1) logical = false
     opts.Tag (1,1) string = "robust_unified_6db"
     opts.ResultsRoot (1,1) string = fullfile("results", "validate_robust_unified")
 end
@@ -68,7 +69,7 @@ for caseIdx = 1:numel(caseNames)
         row.pass = row.per == 0 ...
             && row.burstSec < double(opts.BurstThresholdSec) ...
             && row.elapsedSec < double(opts.ElapsedThresholdSec);
-        save(fullfile(runDir, "results.mat"), "results", "spec", "elapsedSec");
+        local_save_case_artifact_local(runDir, row, spec, results, elapsedSec, opts);
     catch ME
         row.runOk = false;
         row.errorMessage = string(ME.message);
@@ -106,7 +107,7 @@ switch caseName
         spec.channel.narrowband.enable = true;
         spec.channel.narrowband.weight = 1.0;
         spec.channel.narrowband.centerFreqPoints = 0;
-        spec.channel.narrowband.bandwidthFreqPoints = 1;
+        spec.channel.narrowband.bandwidthFreqPoints = local_robust_unified_narrowband_bandwidth_local(spec);
     case "rayleigh_multipath"
         spec.channel.multipath.enable = true;
         spec.channel.multipath.pathDelaysSymbols = [0 2 4];
@@ -115,6 +116,24 @@ switch caseName
     otherwise
         error("Unknown robust_unified validation case: %s.", char(caseName));
 end
+end
+
+function bw = local_robust_unified_narrowband_bandwidth_local(spec)
+runtimeCfg = compile_runtime_config(spec);
+bw = narrowband_prespread_fh_bandwidth_points(runtimeCfg.fh, runtimeCfg.waveform, runtimeCfg.dsss);
+end
+
+function local_save_case_artifact_local(runDir, row, spec, results, elapsedSec, opts)
+if logical(opts.SaveFullResults)
+    save(fullfile(runDir, "results.mat"), "results", "spec", "elapsedSec", "-v7.3");
+    return;
+end
+caseResult = row;
+caseResult.savedFullResults = false;
+caseResult.methods = string(results.methods(:).');
+caseResult.txSummary = struct("burstDurationSec", double(results.tx.burstDurationSec));
+caseResult.elapsedSec = elapsedSec;
+save(fullfile(runDir, "case_result.mat"), "caseResult", "spec");
 end
 
 function row = local_empty_row_local()

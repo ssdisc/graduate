@@ -12,7 +12,8 @@ info = struct( ...
     "enable", spreadFactor > 1, ...
     "spreadFactor", spreadFactor, ...
     "nBaseSym", numel(baseSym), ...
-    "nChipSym", numel(baseSym) * spreadFactor);
+    "nChipSym", numel(baseSym) * spreadFactor, ...
+    "chipInterleaveMode", "none");
 
 if spreadFactor == 1
     chipSym = baseSym;
@@ -22,4 +23,7 @@ end
 nChipSym = numel(baseSym) * spreadFactor;
 chips = dsss_generate_chips(nChipSym, dsssCfg);
 chipSym = repelem(baseSym, spreadFactor) .* chips;
+[perm, chipInterleaveMode] = dsss_chip_interleave_permutation(nChipSym, dsssCfg);
+chipSym = chipSym(perm);
+info.chipInterleaveMode = chipInterleaveMode;
 end
