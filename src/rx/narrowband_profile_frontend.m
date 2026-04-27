@@ -30,6 +30,12 @@ switch method
     case "narrowband_notch_soft"
         [dataSymOut, reliabilitySym, diagOut] = local_narrowband_notch_soft_local(dataSym, pkt, runtimeCfg);
 
+    case "narrowband_subband_excision_soft"
+        [dataSymOut, reliabilitySym, diagOut] = local_narrowband_subband_excision_soft_local(dataSym, pkt, runtimeCfg);
+
+    case "narrowband_cnn_residual_soft"
+        [dataSymOut, reliabilitySym, diagOut] = local_narrowband_cnn_residual_soft_local(dataSym, pkt, runtimeCfg);
+
     otherwise
         error("Unsupported narrowband profile method: %s.", char(method));
 end
@@ -136,6 +142,113 @@ diagOut = struct( ...
     "freqObservationSymbols", freqObservationSymbols);
 end
 
+function [dataSymOut, reliabilitySym, diagOut] = local_narrowband_subband_excision_soft_local(dataSym, pkt, runtimeCfg)
+cfg = local_required_narrowband_notch_soft_cfg_local(runtimeCfg.mitigation);
+[hopLen, nHops, freqIdx, nFreqs] = local_validate_hop_layout_local(pkt.hopInfo, numel(dataSym));
+
+dataSymOut = dataSym(:);
+hopApplied = false(nHops, 1);
+hopMaskFraction = zeros(nHops, 1);
+freqApplied = false(nFreqs, 1);
+freqBounds = cell(nFreqs, 1);
+freqObservationSymbols = zeros(nFreqs, 1);
+
+detectCfg = local_build_bandstop_cfg_local(runtimeCfg.mitigation, cfg);
+
+for freqNow = 1:nFreqs
+    hopList = find(freqIdx == freqNow);
+    if isempty(hopList)
+        continue;
+    end
+
+    idxDetect = local_frequency_symbol_indices_local(dataSymOut, hopList, hopLen, cfg.edgeGuardSymbols);
+    freqObservationSymbols(freqNow) = numel(idxDetect);
+    if numel(idxDetect) < cfg.minObservationSymbolsPerFreq
+        continue;
+    end
+
+    [~, probeInfo] = fft_bandstop_filter(dataSymOut(idxDetect), detectCfg);
+    if ~(isstruct(probeInfo) && isfield(probeInfo, "applied") && logical(probeInfo.applied) ...
+            && isfield(probeInfo, "selectedFreqBounds") && ~isempty(probeInfo.selectedFreqBounds))
+        continue;
+    end
+
+    idxApply = local_frequency_symbol_indices_local(dataSymOut, hopList, hopLen, 0);
+    if isempty(idxApply)
+        continue;
+    end
+
+    applyCfg = detectCfg;
+    applyCfg.forcedFreqBounds = double(probeInfo.selectedFreqBounds);
+    [obsOut, applyInfo] = fft_bandstop_filter(dataSymOut(idxApply), applyCfg);
+    dataSymOut(idxApply) = obsOut;
+
+    freqApplied(freqNow) = true;
+    freqBounds{freqNow} = double(probeInfo.selectedFreqBounds);
+    hopApplied(hopList) = true;
+    if isstruct(applyInfo) && isfield(applyInfo, "maskFraction") && isfinite(double(applyInfo.maskFraction))
+        hopMaskFraction(hopList) = max(hopMaskFraction(hopList), double(applyInfo.maskFraction));
+    end
+end
+
+hopPowerPre = local_hop_power_local(dataSym, hopLen, cfg.edgeGuardSymbols);
+hopPowerPost = local_hop_power_local(dataSymOut, hopLen, cfg.edgeGuardSymbols);
+hopRelPre = local_rule_reliability_local(dataSym, pkt, runtimeCfg);
+hopRelPost = local_rule_reliability_local(dataSymOut, pkt, runtimeCfg);
+
+removedPowerFraction = zeros(nHops, 1);
+validPower = isfinite(hopPowerPre) & hopPowerPre > 0 & isfinite(hopPowerPost) & hopPowerPost >= 0;
+removedPowerFraction(validPower) = max(0, 1 - hopPowerPost(validPower) ./ hopPowerPre(validPower));
+
+hopPenalty = ones(nHops, 1);
+active = hopApplied;
+hopPenalty(active) = 1 ...
+    - double(cfg.maskFractionPenaltySlope) * hopMaskFraction(active) ...
+    - double(cfg.powerRemovalPenaltySlope) * removedPowerFraction(active);
+hopPenalty = max(double(cfg.minReliability), min(1, hopPenalty));
+
+hopReliability = max(double(cfg.minReliability), min(1, hopRelPost .* hopPenalty));
+reliabilitySym = repelem(hopReliability, hopLen, 1);
+reliabilitySym = rx_expand_reliability(reliabilitySym, numel(dataSymOut));
+
+if logical(cfg.attenuateSymbols)
+    dataSymOut = reliabilitySym .* dataSymOut;
+end
+
+freqReliability = ones(nFreqs, 1);
+for freqNow = 1:nFreqs
+    use = freqIdx == freqNow;
+    if any(use)
+        freqReliability(freqNow) = median(hopReliability(use));
+    end
+end
+
+diagOut = struct( ...
+    "frontEndMethod", "narrowband_subband_excision_soft", ...
+    "ok", true, ...
+    "hopReliability", hopReliability, ...
+    "hopReliabilityPre", hopRelPre, ...
+    "hopReliabilityPost", hopRelPost, ...
+    "freqReliability", freqReliability, ...
+    "hopApplied", hopApplied, ...
+    "hopMaskFraction", hopMaskFraction, ...
+    "hopPowerPre", hopPowerPre, ...
+    "hopPowerPost", hopPowerPost, ...
+    "removedPowerFraction", removedPowerFraction, ...
+    "freqApplied", freqApplied, ...
+    "freqBounds", {freqBounds}, ...
+    "freqObservationSymbols", freqObservationSymbols);
+end
+
+function [dataSymOut, reliabilitySym, diagOut] = local_narrowband_cnn_residual_soft_local(dataSym, pkt, runtimeCfg)
+[dataSymExcised, reliabilitySym, baseDiag] = local_narrowband_subband_excision_soft_local(dataSym, pkt, runtimeCfg);
+model = local_required_narrowband_residual_model_local(runtimeCfg.mitigation);
+[dataSymOut, cnnDiag] = ml_narrowband_residual_predict(dataSymExcised, model);
+diagOut = baseDiag;
+diagOut.frontEndMethod = "narrowband_cnn_residual_soft";
+diagOut.residualCnn = cnnDiag;
+end
+
 function [reliabilitySym, infoOut] = local_narrowband_hop_reliability_local(dataSym, pkt, runtimeCfg)
 featureNames = ml_fh_erasure_feature_names();
 ruleIdx = find(featureNames == "ruleReliability", 1, "first");
@@ -209,6 +322,14 @@ cfg.powerRemovalPenaltySlope = local_nonnegative_scalar_local(cfg.powerRemovalPe
 cfg.attenuateSymbols = logical(cfg.attenuateSymbols);
 end
 
+function model = local_required_narrowband_residual_model_local(mitigation)
+if ~(isstruct(mitigation) && isfield(mitigation, "mlNarrowbandResidual") ...
+        && isstruct(mitigation.mlNarrowbandResidual))
+    error("mitigation.mlNarrowbandResidual is required for narrowband_cnn_residual_soft.");
+end
+model = mitigation.mlNarrowbandResidual;
+end
+
 function detectCfg = local_build_bandstop_cfg_local(mitigation, cfg)
 detectCfg = struct();
 if isfield(mitigation, "fftBandstop") && isstruct(mitigation.fftBandstop)
@@ -272,6 +393,20 @@ for idx = 1:numel(hopList)
     usedHops(end + 1, 1) = hopNow; %#ok<AGROW>
     if numel(obs) >= targetSymbols
         break;
+    end
+end
+end
+
+function idxAll = local_frequency_symbol_indices_local(dataSym, hopList, hopLen, edgeGuardSymbols)
+idxAll = zeros(0, 1);
+for idx = 1:numel(hopList)
+    hopNow = hopList(idx);
+    idxHop = local_hop_symbol_indices_local(hopNow, hopLen, numel(dataSym), edgeGuardSymbols);
+    if isempty(idxHop)
+        idxHop = local_hop_symbol_indices_local(hopNow, hopLen, numel(dataSym), 0);
+    end
+    if ~isempty(idxHop)
+        idxAll = [idxAll; idxHop(:)]; %#ok<AGROW>
     end
 end
 end

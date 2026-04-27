@@ -184,6 +184,9 @@ end
 if isfield(preloaded, "narrowbandAction")
     p.mitigation.mlNarrowband = preloaded.narrowbandAction;
 end
+if isfield(preloaded, "narrowbandResidual")
+    p.mitigation.mlNarrowbandResidual = preloaded.narrowbandResidual;
+end
 if isfield(preloaded, "fhErasure")
     p.mitigation.mlFhErasure = preloaded.fhErasure;
 end

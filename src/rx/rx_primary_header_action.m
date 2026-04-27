@@ -3,7 +3,7 @@ function action = rx_primary_header_action(method)
 
 method = lower(string(method));
 symbolActions = ["adaptive_notch" "fft_notch" "fft_bandstop" "stft_notch"];
-if method == "narrowband_notch_soft"
+if any(method == ["narrowband_notch_soft" "narrowband_subband_excision_soft" "narrowband_cnn_residual_soft"])
     action = "fft_bandstop";
     return;
 end

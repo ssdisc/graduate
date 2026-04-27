@@ -29,7 +29,7 @@ for idx = 1:numel(centers)
     row.centerFreqPoints = center;
     row.bandwidthFreqPoints = double(opts.Bandwidth);
     row.runDir = string(runDir);
-    row.method = "narrowband_notch_soft";
+    row.method = string(opts.Method);
 
     cfg = default_params( ...
         "linkProfileName", "narrowband", ...
@@ -42,7 +42,20 @@ for idx = 1:numel(centers)
     cfg.sim.useParallel = false;
     cfg.sim.saveFigures = false;
     cfg.sim.resultsDir = string(runDir);
-    cfg.profileRx.cfg.methods = "narrowband_notch_soft";
+    cfg.profileRx.cfg.methods = string(opts.Method);
+    if strlength(opts.ResidualModelPath) > 0
+        s = load(char(opts.ResidualModelPath), 'model');
+        if ~(isfield(s, 'model') && isstruct(s.model))
+            error("ResidualModelPath must contain a struct variable named model.");
+        end
+        if ~isnan(opts.ResidualApplyGain)
+            s.model.applyGain = double(opts.ResidualApplyGain);
+        end
+        if ~isnan(opts.ResidualMaxResidualNorm)
+            s.model.maxResidualNorm = double(opts.ResidualMaxResidualNorm);
+        end
+        cfg.extensions.ml.preloaded.narrowbandResidual = s.model;
+    end
     cfg.channel.narrowband.centerFreqPoints = center;
     cfg.channel.narrowband.bandwidthFreqPoints = double(opts.Bandwidth);
 
@@ -98,12 +111,24 @@ addParameter(p, 'NFrames', 1, @(x) isscalar(x) && isnumeric(x) && isfinite(x) &&
 addParameter(p, 'MaxPer', 0, @(x) isscalar(x) && isnumeric(x) && isfinite(x) && x >= 0);
 addParameter(p, 'MaxBurstSec', 60, @(x) isscalar(x) && isnumeric(x) && isfinite(x) && x > 0);
 addParameter(p, 'MaxElapsedSec', 60, @(x) isscalar(x) && isnumeric(x) && isfinite(x) && x > 0);
+addParameter(p, 'Method', "fh_erasure", @(x) ischar(x) || isstring(x));
+addParameter(p, 'ResidualModelPath', "", @(x) ischar(x) || isstring(x));
+addParameter(p, 'ResidualApplyGain', NaN, @(x) isscalar(x) && isnumeric(x) && (isnan(x) || (isfinite(x) && x >= 0 && x <= 1)));
+addParameter(p, 'ResidualMaxResidualNorm', NaN, @(x) isscalar(x) && isnumeric(x) && (isnan(x) || (isfinite(x) && x > 0)));
 addParameter(p, 'ResultsRoot', fullfile(pwd, 'results'), @(x) ischar(x) || isstring(x));
 addParameter(p, 'Tag', string(datetime('now', 'Format', 'yyyyMMdd_HHmmss')), @(x) ischar(x) || isstring(x));
 parse(p, varargin{:});
 opts = p.Results;
 opts.ResultsRoot = string(opts.ResultsRoot);
 opts.Tag = string(opts.Tag);
+opts.Method = string(opts.Method);
+if ~isscalar(opts.Method) || strlength(opts.Method) == 0
+    error("scan_narrowband_dsss_fh_centers: Method must be a non-empty scalar string.");
+end
+opts.ResidualModelPath = string(opts.ResidualModelPath);
+if ~isscalar(opts.ResidualModelPath)
+    error("scan_narrowband_dsss_fh_centers: ResidualModelPath must be a scalar string.");
+end
 end
 
 function local_validate_center_support_local(cfg)
