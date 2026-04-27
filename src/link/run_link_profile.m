@@ -225,6 +225,8 @@ switch profileName
         rxPacket = run_narrowband_rx(rxSamples, txArtifacts, rxCfg);
     case "rayleigh_multipath"
         rxPacket = run_rayleigh_multipath_rx(rxSamples, txArtifacts, rxCfg);
+    case "robust_unified"
+        rxPacket = run_rayleigh_multipath_rx(rxSamples, txArtifacts, rxCfg);
     otherwise
         error("Unsupported profileName: %s", char(profileName));
 end
@@ -238,6 +240,11 @@ switch string(profileName)
         tf = isfield(channelCfg, "narrowband") && isstruct(channelCfg.narrowband) ...
             && isfield(channelCfg.narrowband, "enable") && logical(channelCfg.narrowband.enable) ...
             && isfield(channelCfg.narrowband, "weight") && double(channelCfg.narrowband.weight) > 0;
+    case "robust_unified"
+        tf = local_impulse_power_budget_active_local(channelCfg) ...
+            || (isfield(channelCfg, "narrowband") && isstruct(channelCfg.narrowband) ...
+            && isfield(channelCfg.narrowband, "enable") && logical(channelCfg.narrowband.enable) ...
+            && isfield(channelCfg.narrowband, "weight") && double(channelCfg.narrowband.weight) > 0);
     otherwise
         tf = false;
 end

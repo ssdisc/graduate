@@ -56,6 +56,8 @@ required = numel(sessionFrames) > 0;
 sampleAction = "none";
 if any(lower(string(rxCfg.method)) == ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard"])
     sampleAction = lower(string(rxCfg.method));
+elseif string(profileName) == "robust_unified" && lower(string(rxCfg.method)) == "robust_combo"
+    sampleAction = "blanking";
 end
 
 frameFrontOk = false(numel(sessionFrames), 1);
@@ -84,7 +86,7 @@ for frameIdx = 1:numel(sessionFrames)
 
     frameStop(frameIdx) = double(rxCursor) + double(capture.packetStopSample) - 1;
     rFull = rx_fit_complex_length(capture.rFull, totalLen);
-    if profileName == "rayleigh_multipath"
+    if profileName == "rayleigh_multipath" || profileName == "robust_unified"
         rFull = local_equalize_session_block_local(rFull, sessionFrame, runtimeCfg, rxCfg);
     end
     rData = rFull(numel(sessionFrame.syncSym) + 1:end);

@@ -10,6 +10,12 @@ if method == "none"
     return;
 end
 
+if profileName == "robust_unified" && method == "robust_combo"
+    sampleAction = "blanking";
+    symbolAction = "robust_combo";
+    return;
+end
+
 sampleActions = ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard"];
 symbolActions = ["adaptive_notch" "fft_notch" "fft_bandstop" "stft_notch" "fh_erasure" ...
     "narrowband_notch_soft" "narrowband_subband_excision_soft" "narrowband_cnn_residual_soft"];

@@ -39,7 +39,7 @@ p.eve = linkSpec.extensions.eve;
 p.covert = linkSpec.extensions.warden;
 p.linkProfile = struct( ...
     "name", profileName, ...
-    "supportedProfiles", ["impulse" "narrowband" "rayleigh_multipath"]);
+    "supportedProfiles", ["impulse" "narrowband" "rayleigh_multipath" "robust_unified"]);
 
 if isfield(linkSpec.extensions, "ml") && isstruct(linkSpec.extensions.ml)
     if isfield(linkSpec.extensions.ml, "strictModelLoad")

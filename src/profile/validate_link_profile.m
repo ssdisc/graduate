@@ -153,6 +153,20 @@ switch profile
             error("rayleigh_multipath profile does not allow PHY-header FH.");
         end
         local_validate_chaotic_fh_contract_local(profile, profileTx.fh);
+    case "robust_unified"
+        if ~logical(profileTx.fh.enable)
+            error("robust_unified profile requires FH payload mapping.");
+        end
+        if ~logical(profileTx.dsss.enable)
+            error("robust_unified profile requires DSSS payload spreading.");
+        end
+        if ~logical(profileTx.scFde.enable)
+            error("robust_unified profile requires SC-FDE payload mapping.");
+        end
+        if ~(isfield(control, "phyHeaderFhEnable") && logical(control.phyHeaderFhEnable))
+            error("robust_unified profile requires PHY-header FH protection.");
+        end
+        local_validate_chaotic_fh_contract_local(profile, profileTx.fh);
     otherwise
         error("Unexpected profile: %s", char(profile));
 end
@@ -168,7 +182,7 @@ if isempty(activeTypes)
     return;
 end
 expected = local_expected_channel_type_local(profile);
-if activeTypes(1) ~= expected
+if ~isempty(expected) && activeTypes(1) ~= expected
     error("Profile %s only supports the %s channel in the refactored core, got %s.", ...
         char(profile), char(expected), char(activeTypes(1)));
 end
@@ -212,7 +226,38 @@ switch profile
             effectiveMemory = maxDelay + 2 * max(0, round(double(p.waveform.spanSymbols)));
             if double(p.scFde.cpLen) < effectiveMemory
                 error("rayleigh_multipath requires SC-FDE CP >= effective channel memory when pulse shaping is enabled. Got cp=%g, need >= %g (maxDelay=%g, span=%g).", ...
-                    double(p.scFde.cpLen), effectiveMemory, maxDelay, double(p.waveform.spanSymbols));
+                double(p.scFde.cpLen), effectiveMemory, maxDelay, double(p.waveform.spanSymbols));
+            end
+        end
+    case "robust_unified"
+        local_validate_runtime_chaotic_fh_local(profile, p);
+        if ~(isfield(p.dsss, "enable") && logical(p.dsss.enable))
+            error("robust_unified runtime requires p.dsss.enable=true.");
+        end
+        if ~(isfield(p.scFde, "enable") && logical(p.scFde.enable))
+            error("robust_unified runtime requires p.scFde.enable=true.");
+        end
+        if isfield(p.channel, "multipath") && isstruct(p.channel.multipath) && logical(p.channel.multipath.enable)
+            delays = double(p.channel.multipath.pathDelaysSymbols(:));
+            if isempty(delays)
+                delays = 0;
+            end
+            maxDelay = max(delays);
+            if ~(isfield(p.scFde, "cpLen") && isfinite(double(p.scFde.cpLen)))
+                error("robust_unified runtime requires resolved p.scFde.cpLen.");
+            end
+            if maxDelay > double(p.scFde.cpLen)
+                error("robust_unified requires SC-FDE CP >= max path delay. Got cp=%g, maxDelay=%g.", ...
+                    double(p.scFde.cpLen), maxDelay);
+            end
+            if isfield(p, "waveform") && isstruct(p.waveform) ...
+                    && isfield(p.waveform, "enable") && logical(p.waveform.enable) ...
+                    && isfield(p.waveform, "spanSymbols") && isfinite(double(p.waveform.spanSymbols))
+                effectiveMemory = maxDelay + 2 * max(0, round(double(p.waveform.spanSymbols)));
+                if double(p.scFde.cpLen) < effectiveMemory
+                    error("robust_unified requires SC-FDE CP >= effective channel memory when pulse shaping is enabled. Got cp=%g, need >= %g (maxDelay=%g, span=%g).", ...
+                        double(p.scFde.cpLen), effectiveMemory, maxDelay, double(p.waveform.spanSymbols));
+                end
             end
         end
 end
@@ -221,8 +266,8 @@ if ~(isfield(p.linkBudget, "noisePsdLin") && double(p.linkBudget.noisePsdLin) > 
     error("linkBudget.noisePsdLin must be positive.");
 end
 jsrCount = numel(double(p.linkBudget.jsrDbList(:)));
-if ~(profile == "impulse" || profile == "narrowband") && jsrCount > 1
-    error("Only impulse and narrowband profiles support a JSR sweep in the refactored core.");
+if ~(profile == "impulse" || profile == "narrowband" || profile == "robust_unified") && jsrCount > 1
+    error("Only impulse, narrowband, and robust_unified profiles support a JSR sweep in the refactored core.");
 end
 if profile == "impulse"
     if ~(isfield(p.channel, "impulseToBgRatio") && isfinite(double(p.channel.impulseToBgRatio)))
@@ -298,6 +343,8 @@ switch profile
         expected = "narrowband";
     case "rayleigh_multipath"
         expected = "multipath";
+    case "robust_unified"
+        expected = strings(1, 0);
     otherwise
         error("Unexpected profile: %s", char(profile));
 end
@@ -313,6 +360,8 @@ switch profile
             "narrowband_subband_excision_soft" "narrowband_cnn_residual_soft"];
     case "rayleigh_multipath"
         allowed = ["none" "sc_fde_mmse"];
+    case "robust_unified"
+        allowed = "robust_combo";
     otherwise
         error("Unexpected profile: %s", char(profile));
 end

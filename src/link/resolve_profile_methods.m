@@ -22,7 +22,7 @@ if numel(activeTypes) > 1
         strjoin(cellstr(activeTypes), ", "));
 end
 expectedType = local_expected_channel_type_local(profileName);
-if ~isempty(activeTypes) && activeTypes(1) ~= expectedType
+if ~isempty(activeTypes) && ~isempty(expectedType) && activeTypes(1) ~= expectedType
     error("Profile %s expects channel type %s, got %s.", ...
         char(profileName), char(expectedType), char(activeTypes(1)));
 end
@@ -65,6 +65,8 @@ switch profile
         expected = "narrowband";
     case "rayleigh_multipath"
         expected = "multipath";
+    case "robust_unified"
+        expected = strings(1, 0);
     otherwise
         error("Unexpected profile: %s", char(profile));
 end
@@ -80,6 +82,8 @@ switch profile
             "narrowband_subband_excision_soft" "narrowband_cnn_residual_soft"];
     case "rayleigh_multipath"
         allowed = ["none" "sc_fde_mmse"];
+    case "robust_unified"
+        allowed = "robust_combo";
     otherwise
         error("Unexpected profile: %s", char(profile));
 end

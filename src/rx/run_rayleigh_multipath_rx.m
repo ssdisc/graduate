@@ -7,7 +7,14 @@ arguments
     rxCfg (1,1) struct
 end
 
-ctx = rx_prepare_packet_context("rayleigh_multipath", rxSamples, txArtifacts, rxCfg);
+ctxProfileName = "rayleigh_multipath";
+if isfield(rxCfg, "runtimeCfg") && isstruct(rxCfg.runtimeCfg) ...
+        && isfield(rxCfg.runtimeCfg, "linkProfile") && isstruct(rxCfg.runtimeCfg.linkProfile) ...
+        && isfield(rxCfg.runtimeCfg.linkProfile, "name") ...
+        && string(rxCfg.runtimeCfg.linkProfile.name) == "robust_unified"
+    ctxProfileName = "robust_unified";
+end
+ctx = rx_prepare_packet_context(ctxProfileName, rxSamples, txArtifacts, rxCfg);
 captureStage = rx_run_capture_stage(ctx);
 
 if captureStage.frontEndOk
@@ -73,7 +80,7 @@ end
 [hopFreqs, hBank, bankMode] = local_sc_fde_payload_channel_bank_local(ctx, frontEndDiag, nHops);
 
 lambda = double(ctx.runtimeCfg.scFde.lambdaFactor) * double(ctx.rxCfg.noisePsdLin);
-if ctx.method ~= "sc_fde_mmse"
+if ~local_sc_fde_mmse_active_local(ctx.method)
     lambda = inf;
 end
 
@@ -134,7 +141,7 @@ symbolReliabilityFull = rx_expand_reliability(symbolReliabilityFull, ctx.expecte
 
 ySymUse = ySymRawFull;
 diagOut = struct("ok", true, "headerEqualizer", "none");
-if ctx.method == "sc_fde_mmse"
+if local_sc_fde_mmse_active_local(ctx.method)
     freqBySymbol = local_packet_frequency_offsets_local(ctx.pkt, numel(ySymRawFull));
     eq = multipath_equalizer_from_preamble( ...
         ctx.pkt.syncSym(:), ySymRawFull(1:numel(ctx.pkt.syncSym)), ...
@@ -148,11 +155,17 @@ end
 
 headerSym = ySymUse(headerStart:headerStop);
 dataSym = ySymRawFull(dataStart:end);
+symbolReliability = rx_expand_reliability(symbolReliabilityFull(dataStart:end), numel(dataSym));
+if local_robust_unified_active_local(ctx)
+    [dataSym, nbReliability, nbDiag] = narrowband_profile_frontend(dataSym(:), ctx.pkt, ctx.runtimeCfg, "fh_erasure");
+    symbolReliability = min(symbolReliability, rx_expand_reliability(nbReliability, numel(dataSym)));
+    diagOut.narrowbandFrontEnd = nbDiag;
+end
 if ~(isfield(ctx, "fhCaptureCfg") && isstruct(ctx.fhCaptureCfg) ...
         && isfield(ctx.fhCaptureCfg, "enable") && logical(ctx.fhCaptureCfg.enable))
     dataSym = rx_dehop_payload_symbols(dataSym, ctx.pkt);
 end
-symbolReliability = rx_expand_reliability(symbolReliabilityFull(dataStart:end), numel(dataSym));
+symbolReliability = rx_expand_reliability(symbolReliability, numel(dataSym));
 diagOut.headerReliability = rx_expand_reliability(symbolReliabilityFull(headerStart:headerStop), numel(headerSym));
 diagOut.payloadInputLength = numel(dataSym);
 end
@@ -244,7 +257,7 @@ nHops = round(double(plan.nHops));
 branchScoreBase = local_normalize_branch_weights_local(double(payloadBranchState.branchPowerWeights(:)));
 
 lambda = double(ctx.runtimeCfg.scFde.lambdaFactor) * double(ctx.rxCfg.noisePsdLin);
-if ctx.method ~= "sc_fde_mmse"
+if ~local_sc_fde_mmse_active_local(ctx.method)
     lambda = inf;
 end
 
@@ -762,6 +775,15 @@ for idx = 1:numel(freqBySymbol)
         error("Equalizer bank does not contain normalized frequency %.12g.", freqBySymbol(idx));
     end
 end
+end
+
+function tf = local_sc_fde_mmse_active_local(method)
+method = lower(string(method));
+tf = any(method == ["sc_fde_mmse" "robust_combo"]);
+end
+
+function tf = local_robust_unified_active_local(ctx)
+tf = isstruct(ctx) && isfield(ctx, "profileName") && string(ctx.profileName) == "robust_unified";
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_failed_frontend_placeholder_local(pkt)

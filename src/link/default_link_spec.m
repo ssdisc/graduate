@@ -34,7 +34,7 @@ linkSpec = struct();
 linkSpec.apiVersion = "linkSpec.v1";
 linkSpec.linkProfile = struct( ...
     "name", profileName, ...
-    "supportedProfiles", ["impulse" "narrowband" "rayleigh_multipath"], ...
+    "supportedProfiles", ["impulse" "narrowband" "rayleigh_multipath" "robust_unified"], ...
     "txMapper", local_tx_mapper_name_local(profileName), ...
     "rxChain", local_rx_chain_name_local(profileName));
 linkSpec.runtime = runtime;
@@ -431,6 +431,74 @@ switch profileName
         profileRxCfg.rxDiversity.nRx = 2;
         profileRxCfg.rxDiversity.combineMethod = "mrc";
 
+    case "robust_unified"
+        commonTx.waveform.enable = true;
+        commonTx.waveform.sampleRateHz = 240e3;
+        commonTx.waveform.sps = 4;
+        commonTx.waveform.rolloff = 0.25;
+        commonTx.waveform.spanSymbols = 6;
+        commonTx.control.sessionHeaderMode = "embedded_each_frame";
+        commonTx.control.sessionFrameRepeatCount = 2;
+        commonTx.control.preambleLength = 127;
+        commonTx.control.packetSyncLength = 63;
+        commonTx.control.resyncIntervalPackets = 1;
+        commonTx.control.phyHeaderFhEnable = true;
+        commonTx.control.phyHeaderRepeatCompact = 2;
+        commonTx.control.phyHeaderSpreadFactor = 2;
+        commonTx.control.preambleDiversity.enable = true;
+        commonTx.control.preambleDiversity.copies = 2;
+        commonTx.control.preambleDiversity.freqSet = [];
+        commonTx.control.sessionHeaderBodyDiversity.enable = true;
+        commonTx.control.sessionHeaderBodyDiversity.copies = 2;
+        commonTx.control.sessionHeaderBodyDiversity.freqSet = [];
+        commonTx.control.phyHeaderDiversity.enable = true;
+        commonTx.control.phyHeaderDiversity.copies = 2;
+        commonTx.control.phyHeaderFhFreqSet = [];
+        commonTx.packet.payloadBitsPerPacket = 8192;
+        commonTx.outerRs.dataPacketsPerBlock = 4;
+        commonTx.outerRs.parityPacketsPerBlock = 6;
+
+        channel.impulseProb = 0.0;
+        channel.impulseWeight = 0.0;
+        channel.narrowband.enable = false;
+        channel.narrowband.weight = 0.0;
+        channel.narrowband.centerFreqPoints = 0;
+        channel.narrowband.bandwidthFreqPoints = 1;
+        channel.multipath.enable = false;
+        channel.multipath.pathDelaysSymbols = [0 2 4];
+        channel.multipath.pathGainsDb = [0 -6 -10];
+        channel.multipath.rayleigh = true;
+
+        profileTxCfg.fh.enable = true;
+        profileTxCfg.fh.nFreqs = 3;
+        profileTxCfg.fh.freqSet = [];
+        profileTxCfg.fh.sequenceType = 'chaos';
+        profileTxCfg.fh.balanceMode = "permutation_block";
+        profileTxCfg.fh.symbolsPerHop = 96;
+        profileTxCfg.fh.payloadDiversity.enable = false;
+        profileTxCfg.fh.payloadDiversity.copies = 1;
+        profileTxCfg.fh.payloadDiversity.indexOffset = 3;
+        profileTxCfg.dsss.enable = true;
+        profileTxCfg.dsss.spreadFactor = 4;
+        profileTxCfg.scFde.enable = true;
+        profileTxCfg.scFde.cpLenSymbols = 16;
+        profileTxCfg.scFde.pilotLength = 8;
+        profileTxCfg.scFde.lambdaFactor = 1.0;
+        profileTxCfg.scFde.pilotMseReference = 0.35;
+
+        profileRxCfg.methods = "robust_combo";
+        profileRxCfg.allowedMethods = "robust_combo";
+        profileRxCfg.sync.compensateCarrier = false;
+        profileRxCfg.sync.multipathEq.enable = true;
+        profileRxCfg.sync.multipathEq.nTaps = 9;
+        profileRxCfg.sync.multipathEq.lambdaFactor = 1.0;
+        profileRxCfg.sync.multipathEq.compareMethods = "robust_combo";
+        profileRxCfg.mitigation.headerBandstop.enable = true;
+        profileRxCfg.mitigation.headerDecodeDiversity.enable = true;
+        profileRxCfg.rxDiversity.enable = true;
+        profileRxCfg.rxDiversity.nRx = 2;
+        profileRxCfg.rxDiversity.combineMethod = "mrc";
+
     otherwise
         error("Unexpected profile name: %s", char(profileName));
 end
@@ -562,6 +630,8 @@ switch profileName
         pipeline = ["guarded_control_mapper" "chaos_fh_payload_mapper"];
     case "rayleigh_multipath"
         pipeline = ["guarded_control_mapper" "sc_fde_mapper" "chaos_fh_payload_mapper"];
+    case "robust_unified"
+        pipeline = ["guarded_control_mapper" "dsss_mapper" "sc_fde_mapper" "chaos_fh_payload_mapper"];
     otherwise
         error("Unexpected profile name: %s", char(profileName));
 end
@@ -597,6 +667,16 @@ switch profileName
             "sc_fde_payload_equalization", ...
             "demod_fec", ...
             "outer_rs"];
+    case "robust_unified"
+        pipeline = [ ...
+            "session_layer", ...
+            "capture_sync", ...
+            "impulse_blanking", ...
+            "protected_control_acquisition", ...
+            "fh_narrowband_erasure", ...
+            "sc_fde_payload_equalization", ...
+            "dsss_despread_demod_fec", ...
+            "outer_rs"];
     otherwise
         error("Unexpected profile name: %s", char(profileName));
 end
@@ -610,6 +690,8 @@ switch profileName
         mapperName = "narrowband_fh_mapper";
     case "rayleigh_multipath"
         mapperName = "rayleigh_sc_fde_mapper";
+    case "robust_unified"
+        mapperName = "robust_fh_dsss_scfde_mapper";
     otherwise
         error("Unexpected profile name: %s", char(profileName));
 end
@@ -622,6 +704,8 @@ switch profileName
     case "narrowband"
         chainName = "run_narrowband_rx";
     case "rayleigh_multipath"
+        chainName = "run_rayleigh_multipath_rx";
+    case "robust_unified"
         chainName = "run_rayleigh_multipath_rx";
     otherwise
         error("Unexpected profile name: %s", char(profileName));
@@ -636,6 +720,8 @@ switch profileName
         capabilities = struct("fh", true, "dsss", true, "scFde", false);
     case "rayleigh_multipath"
         capabilities = struct("fh", true, "dsss", false, "scFde", true);
+    case "robust_unified"
+        capabilities = struct("fh", true, "dsss", true, "scFde", true);
     otherwise
         error("Unexpected profile name: %s", char(profileName));
 end
@@ -649,6 +735,8 @@ switch profileName
         layerNames = ["energyOptUncertain" "cyclostationaryOpt"];
     case "rayleigh_multipath"
         layerNames = ["energyOptUncertain" "cyclostationaryOpt"];
+    case "robust_unified"
+        layerNames = ["energyNp" "energyOptUncertain"];
     otherwise
         error("Unexpected profile name: %s", char(profileName));
 end
@@ -661,6 +749,8 @@ switch profileName
     case "narrowband"
         layerName = "energyOptUncertain";
     case "rayleigh_multipath"
+        layerName = "energyOptUncertain";
+    case "robust_unified"
         layerName = "energyOptUncertain";
     otherwise
         error("Unexpected profile name: %s", char(profileName));

@@ -13,8 +13,10 @@ switch profileName
         profileName = "narrowband";
     case {"rayleigh_multipath", "rayleigh", "multipath"}
         profileName = "rayleigh_multipath";
+    case {"robust_unified", "robust", "unified"}
+        profileName = "robust_unified";
     otherwise
-        error("Unsupported link profile: %s. Supported profiles: impulse, narrowband, rayleigh_multipath.", ...
+        error("Unsupported link profile: %s. Supported profiles: impulse, narrowband, rayleigh_multipath, robust_unified.", ...
             char(rawName));
 end
 end
