@@ -385,21 +385,22 @@ switch profileName
         channel.multipath.rayleigh = true;
 
         profileTxCfg.fh.enable = true;
-        profileTxCfg.fh.nFreqs = 4;
+        profileTxCfg.fh.nFreqs = 3;
         profileTxCfg.fh.freqSet = [];
         profileTxCfg.fh.sequenceType = 'chaos';
         profileTxCfg.fh.symbolsPerHop = 96;
         profileTxCfg.scFde.enable = true;
         profileTxCfg.scFde.cpLenSymbols = 16;
         profileTxCfg.scFde.pilotLength = 8;
-        profileTxCfg.scFde.lambdaFactor = 0.05;
+        profileTxCfg.scFde.lambdaFactor = 1.0;
+        profileTxCfg.scFde.pilotMseReference = 0.35;
 
         profileRxCfg.methods = "sc_fde_mmse";
         profileRxCfg.allowedMethods = ["none" "sc_fde_mmse"];
         profileRxCfg.sync.compensateCarrier = false;
         profileRxCfg.sync.multipathEq.enable = true;
         profileRxCfg.sync.multipathEq.nTaps = 9;
-        profileRxCfg.sync.multipathEq.lambdaFactor = 0.05;
+        profileRxCfg.sync.multipathEq.lambdaFactor = 1.0;
         profileRxCfg.sync.multipathEq.compareMethods = "sc_fde_mmse";
         profileRxCfg.rxDiversity.enable = true;
         profileRxCfg.rxDiversity.nRx = 2;
