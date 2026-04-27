@@ -226,7 +226,7 @@ switch profileName
     case "rayleigh_multipath"
         rxPacket = run_rayleigh_multipath_rx(rxSamples, txArtifacts, rxCfg);
     case "robust_unified"
-        rxPacket = run_rayleigh_multipath_rx(rxSamples, txArtifacts, rxCfg);
+        rxPacket = run_robust_unified_rx(rxSamples, txArtifacts, rxCfg);
     otherwise
         error("Unsupported profileName: %s", char(profileName));
 end
@@ -255,21 +255,73 @@ pointChannel = adapt_channel_for_sps(runtimeCfg.channel, waveform, runtimeCfg.fh
 jsrLin = 10^(double(budget.bob.jsrDb(pointIdx)) / 10);
 txPowerLin = double(budget.bob.txPowerLin(pointIdx));
 noisePsdLin = double(budget.bob.noisePsdLin(pointIdx));
+jsrShare = local_interference_jsr_share_local(runtimeCfg);
 if local_impulse_power_budget_active_local(runtimeCfg.channel)
     impulseProbSample = local_required_impulse_probability_local(pointChannel);
-    targetImpulsePower = txPowerLin * jsrLin;
+    targetImpulsePower = txPowerLin * jsrLin * double(jsrShare.impulse);
     pointChannel.impulseToBgRatio = targetImpulsePower / max(impulseProbSample * noisePsdLin, eps);
 else
     pointChannel.impulseToBgRatio = 0;
 end
 if isfield(pointChannel, "singleTone") && isstruct(pointChannel.singleTone) && logical(pointChannel.singleTone.enable)
-    pointChannel.singleTone.power = txPowerLin * jsrLin;
+    pointChannel.singleTone.power = txPowerLin * jsrLin * double(jsrShare.singleTone);
 end
 if isfield(pointChannel, "narrowband") && isstruct(pointChannel.narrowband) && logical(pointChannel.narrowband.enable)
-    pointChannel.narrowband.power = txPowerLin * jsrLin;
+    pointChannel.narrowband.power = txPowerLin * jsrLin * double(jsrShare.narrowband);
 end
 if isfield(pointChannel, "sweep") && isstruct(pointChannel.sweep) && logical(pointChannel.sweep.enable)
-    pointChannel.sweep.power = txPowerLin * jsrLin;
+    pointChannel.sweep.power = txPowerLin * jsrLin * double(jsrShare.sweep);
+end
+if double(jsrShare.multipathAttenuationDb) > 0 ...
+        && isfield(pointChannel, "multipath") && isstruct(pointChannel.multipath) ...
+        && isfield(pointChannel.multipath, "enable") && logical(pointChannel.multipath.enable) ...
+        && isfield(pointChannel.multipath, "pathGainsDb") && numel(pointChannel.multipath.pathGainsDb) > 1
+    pathGainsDb = double(pointChannel.multipath.pathGainsDb(:)).';
+    pathGainsDb(2:end) = pathGainsDb(2:end) - double(jsrShare.multipathAttenuationDb);
+    pointChannel.multipath.pathGainsDb = pathGainsDb;
+end
+end
+
+function jsrShare = local_interference_jsr_share_local(runtimeCfg)
+jsrShare = struct( ...
+    "impulse", 1, ...
+    "singleTone", 1, ...
+    "narrowband", 1, ...
+    "sweep", 1, ...
+    "multipathAttenuationDb", 0);
+if ~(isfield(runtimeCfg, "linkProfile") && isstruct(runtimeCfg.linkProfile) ...
+        && isfield(runtimeCfg.linkProfile, "name") ...
+        && string(runtimeCfg.linkProfile.name) == "robust_unified")
+    return;
+end
+
+activeNames = strings(1, 0);
+if local_impulse_power_budget_active_local(runtimeCfg.channel)
+    activeNames(end + 1) = "impulse"; %#ok<AGROW>
+end
+if isfield(runtimeCfg.channel, "narrowband") && isstruct(runtimeCfg.channel.narrowband) ...
+        && isfield(runtimeCfg.channel.narrowband, "enable") && logical(runtimeCfg.channel.narrowband.enable) ...
+        && isfield(runtimeCfg.channel.narrowband, "weight") && double(runtimeCfg.channel.narrowband.weight) > 0
+    activeNames(end + 1) = "narrowband"; %#ok<AGROW>
+end
+if isfield(runtimeCfg.channel, "multipath") && isstruct(runtimeCfg.channel.multipath) ...
+        && isfield(runtimeCfg.channel.multipath, "enable") && logical(runtimeCfg.channel.multipath.enable)
+    activeNames(end + 1) = "multipath"; %#ok<AGROW>
+end
+
+nActive = numel(activeNames);
+if nActive <= 1
+    return;
+end
+share = 1 / double(nActive);
+if any(activeNames == "impulse")
+    jsrShare.impulse = share;
+end
+if any(activeNames == "narrowband")
+    jsrShare.narrowband = share;
+end
+if any(activeNames == "multipath")
+    jsrShare.multipathAttenuationDb = 10 * log10(double(nActive));
 end
 end
 

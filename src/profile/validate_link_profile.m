@@ -174,7 +174,13 @@ end
 
 function local_validate_channel_contract_local(profile, p)
 activeTypes = local_active_channel_types_local(p.channel);
-if numel(activeTypes) > 1
+if profile == "robust_unified"
+    invalidTypes = activeTypes(~ismember(activeTypes, ["impulse" "narrowband" "multipath"]));
+    if ~isempty(invalidTypes)
+        error("robust_unified only supports impulse/narrowband/multipath channels, got: %s.", ...
+            strjoin(cellstr(invalidTypes), ", "));
+    end
+elseif numel(activeTypes) > 1
     error("Mixed interference is not part of the refactored core links. Active channel types: %s.", ...
         strjoin(cellstr(activeTypes), ", "));
 end

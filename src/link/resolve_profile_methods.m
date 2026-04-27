@@ -17,7 +17,13 @@ if ~isempty(invalid)
 end
 
 activeTypes = local_active_channel_types_local(linkSpec.channel);
-if numel(activeTypes) > 1
+if profileName == "robust_unified"
+    invalidTypes = activeTypes(~ismember(activeTypes, ["impulse" "narrowband" "multipath"]));
+    if ~isempty(invalidTypes)
+        error("robust_unified only supports impulse/narrowband/multipath channels, got: %s.", ...
+            strjoin(cellstr(invalidTypes), ", "));
+    end
+elseif numel(activeTypes) > 1
     error("Mixed interference is not supported by the refactored core. Active types: %s.", ...
         strjoin(cellstr(activeTypes), ", "));
 end

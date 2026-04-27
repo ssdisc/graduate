@@ -80,6 +80,25 @@ switch lower(string(method))
         % 削波样本的可靠性与削波程度成比例降低
         reliability(over) = scale(over);
 
+    case "robust_mixed_sample"
+        rOut = r;
+        mask = abs(rOut) > T;
+        rOut(mask) = 0;
+        reliability(mask) = 0;
+        if ~(isfield(mit, "robustMixed") && isstruct(mit.robustMixed))
+            error("robust_mixed_sample requires mitigation.robustMixed.");
+        end
+        robustCfg = mit.robustMixed;
+        if ~(isfield(robustCfg, "enableSampleNbiCancel") && isfield(robustCfg, "sampleNbiCancel"))
+            error("robust_mixed_sample requires mitigation.robustMixed.enableSampleNbiCancel and sampleNbiCancel.");
+        end
+        if logical(robustCfg.enableSampleNbiCancel)
+            if ~isstruct(robustCfg.sampleNbiCancel)
+                error("mitigation.robustMixed.sampleNbiCancel must be a struct.");
+            end
+            [rOut, ~] = fft_bandstop_filter(rOut, robustCfg.sampleNbiCancel);
+        end
+
     case "ml_blanking"
         % 传统逻辑回归置零
         if isfield(mit, "ml") && ~isempty(mit.ml)

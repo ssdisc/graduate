@@ -88,6 +88,9 @@ blocks = reshape(dataSymIn(1:nHops * hopLen), hopLen, nHops);
 dataMat = complex(zeros(dataPerHop, nHops));
 reliabilityHop = ones(nHops, 1);
 pilotMse = nan(nHops, 1);
+robustNbiApplied = false(nHops, 1);
+robustNbiMaskFraction = zeros(nHops, 1);
+robustNbiReliability = ones(nHops, 1);
 
 for hopIdx = 1:nHops
     block = blocks(:, hopIdx);
@@ -103,6 +106,14 @@ for hopIdx = 1:nHops
     if numel(h) > coreLen
         error("SC-FDE core length %d is shorter than channel length %d.", coreLen, numel(h));
     end
+    [core, nbiReliability, nbiInfo] = local_robust_scfde_nbi_cancel_local(core, ctx);
+    robustNbiReliability(hopIdx) = nbiReliability;
+    if isstruct(nbiInfo) && isfield(nbiInfo, "applied") && logical(nbiInfo.applied)
+        robustNbiApplied(hopIdx) = true;
+        if isfield(nbiInfo, "maskFraction") && isfinite(double(nbiInfo.maskFraction))
+            robustNbiMaskFraction(hopIdx) = double(nbiInfo.maskFraction);
+        end
+    end
     xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, coreLen);
 
     pilotTx = sc_fde_payload_pilot_symbols(ctx.runtimeCfg.scFde, double(ctx.pkt.packetIndex), hopIdx);
@@ -115,6 +126,7 @@ for hopIdx = 1:nHops
     pilotMse(hopIdx) = mean(abs(xCore(1:pilotLength) - pilotTx).^2);
     reliabilityHop(hopIdx) = 1 / (1 + pilotMse(hopIdx) / max(double(ctx.runtimeCfg.scFde.pilotMseReference), eps));
     reliabilityHop(hopIdx) = max(double(ctx.runtimeCfg.scFde.minReliability), min(1, reliabilityHop(hopIdx)));
+    reliabilityHop(hopIdx) = min(reliabilityHop(hopIdx), nbiReliability);
     dataMat(:, hopIdx) = xCore(pilotLength + 1:end);
 end
 
@@ -128,7 +140,10 @@ diagOut = struct( ...
     "channelBankMode", string(bankMode), ...
     "hopFrequencies", hopFreqs, ...
     "pilotMse", pilotMse, ...
-    "hopReliability", reliabilityHop);
+    "hopReliability", reliabilityHop, ...
+    "robustNbiCancelApplied", robustNbiApplied, ...
+    "robustNbiCancelMaskFraction", robustNbiMaskFraction, ...
+    "robustNbiCancelReliability", robustNbiReliability);
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_rayleigh_single_branch_stage_local(ctx, ySymRawFull, symbolReliabilityFull)
@@ -157,7 +172,9 @@ headerSym = ySymUse(headerStart:headerStop);
 dataSym = ySymRawFull(dataStart:end);
 symbolReliability = rx_expand_reliability(symbolReliabilityFull(dataStart:end), numel(dataSym));
 if local_robust_unified_active_local(ctx)
-    [dataSym, nbReliability, nbDiag] = narrowband_profile_frontend(dataSym(:), ctx.pkt, ctx.runtimeCfg, "fh_erasure");
+    nbMethod = local_robust_fh_frontend_method_local(ctx);
+    [dataSym, nbReliability, nbDiag] = narrowband_profile_frontend(dataSym(:), ctx.pkt, ctx.runtimeCfg, nbMethod);
+    nbReliability = local_robust_adjust_fh_reliability_local(nbReliability, ctx);
     symbolReliability = min(symbolReliability, rx_expand_reliability(nbReliability, numel(dataSym)));
     diagOut.narrowbandFrontEnd = nbDiag;
 end
@@ -266,6 +283,9 @@ bankModes = strings(nBranches, 1);
 perBranchPilotMse = nan(nHops, nBranches);
 hopBranchScores = zeros(nHops, nBranches);
 hopFreqs = zeros(nHops, 1);
+robustNbiApplied = false(nHops, nBranches);
+robustNbiMaskFraction = zeros(nHops, nBranches);
+robustNbiReliability = ones(nHops, nBranches);
 for branchIdx = 1:nBranches
     branchDataSymbols{branchIdx} = rx_fit_complex_length(branchDataSymbols{branchIdx}, nHops * hopLen);
     branchDataReliability{branchIdx} = rx_expand_reliability(branchDataReliability{branchIdx}, nHops * hopLen);
@@ -292,6 +312,15 @@ for hopIdx = 1:nHops
     for branchIdx = 1:nBranches
         [core, relCore] = local_sc_fde_core_from_physical_hop_local( ...
             branchDataSymbols{branchIdx}, branchDataReliability{branchIdx}, hopIdx, plan);
+        [core, nbiReliability, nbiInfo] = local_robust_scfde_nbi_cancel_local(core, ctx);
+        robustNbiReliability(hopIdx, branchIdx) = nbiReliability;
+        if isstruct(nbiInfo) && isfield(nbiInfo, "applied") && logical(nbiInfo.applied)
+            robustNbiApplied(hopIdx, branchIdx) = true;
+            if isfield(nbiInfo, "maskFraction") && isfinite(double(nbiInfo.maskFraction))
+                robustNbiMaskFraction(hopIdx, branchIdx) = double(nbiInfo.maskFraction);
+            end
+        end
+        relCore = min(relCore, nbiReliability);
         h = hBankList{branchIdx}{hopIdx};
         if numel(h) > cpLen + 1
             error("SC-FDE diversity requires channel length <= cpLen+1. Channel length=%d, cpLen=%d.", ...
@@ -334,6 +363,9 @@ diagOut = struct( ...
     "perBranchPilotMse", perBranchPilotMse, ...
     "combinedPilotMse", pilotMseCombined, ...
     "hopReliability", hopReliabilityCombined, ...
+    "robustNbiCancelApplied", robustNbiApplied, ...
+    "robustNbiCancelMaskFraction", robustNbiMaskFraction, ...
+    "robustNbiCancelReliability", robustNbiReliability, ...
     "combinedReliabilityMean", mean(symbolReliabilityData));
 end
 
@@ -466,6 +498,150 @@ end
 
 scoreOut = zeros(size(scoreIn));
 scoreOut(keepMask) = scoreIn(keepMask);
+end
+
+function method = local_robust_fh_frontend_method_local(ctx)
+cfg = local_required_robust_mixed_cfg_local(ctx);
+if ~local_channel_narrowband_active_local(ctx)
+    method = "none";
+    return;
+end
+if logical(cfg.enableFhSubbandExcision)
+    method = "narrowband_subband_excision_soft";
+else
+    method = "fh_erasure";
+end
+end
+
+function reliabilityOut = local_robust_adjust_fh_reliability_local(reliabilityIn, ctx)
+reliabilityOut = reliabilityIn(:);
+if ~local_robust_unified_active_local(ctx)
+    return;
+end
+cfg = local_required_robust_mixed_cfg_local(ctx);
+if ~(logical(cfg.enableFhReliabilityFloorWithMultipath) && local_channel_multipath_active_local(ctx))
+    return;
+end
+reliabilityOut = max(reliabilityOut, double(cfg.fhReliabilityFloorWithMultipath));
+end
+
+function [coreOut, reliability, infoOut] = local_robust_scfde_nbi_cancel_local(core, ctx)
+coreOut = core(:);
+reliability = 1;
+infoOut = struct( ...
+    "enabled", false, ...
+    "applied", false, ...
+    "maskFraction", 0, ...
+    "selectedFreqBounds", zeros(0, 2));
+if ~local_robust_unified_active_local(ctx)
+    return;
+end
+
+cfg = local_required_robust_mixed_cfg_local(ctx);
+infoOut.enabled = true;
+if ~logical(cfg.enableScFdeNbiCancel)
+    return;
+end
+
+bandstopCfg = cfg.scFdeNbiCancel;
+[candidate, filterInfo] = fft_bandstop_filter(coreOut, bandstopCfg);
+if ~(isstruct(filterInfo) && isfield(filterInfo, "applied") && logical(filterInfo.applied))
+    return;
+end
+
+maskFraction = 0;
+if isfield(filterInfo, "maskFraction") && isfinite(double(filterInfo.maskFraction))
+    maskFraction = double(filterInfo.maskFraction);
+end
+if maskFraction <= 0 || maskFraction > double(bandstopCfg.maxMaskFraction)
+    return;
+end
+
+coreOut = candidate(:);
+reliability = 1 - double(bandstopCfg.reliabilityPenaltySlope) * maskFraction;
+reliability = max(double(cfg.minReliability), min(1, reliability));
+infoOut.applied = true;
+infoOut.maskFraction = maskFraction;
+if isfield(filterInfo, "selectedFreqBounds")
+    infoOut.selectedFreqBounds = filterInfo.selectedFreqBounds;
+end
+end
+
+function cfg = local_required_robust_mixed_cfg_local(ctx)
+if ~local_robust_unified_active_local(ctx)
+    cfg = struct();
+    return;
+end
+if ~(isstruct(ctx) && isfield(ctx, "runtimeCfg") && isstruct(ctx.runtimeCfg) ...
+        && isfield(ctx.runtimeCfg, "mitigation") && isstruct(ctx.runtimeCfg.mitigation) ...
+        && isfield(ctx.runtimeCfg.mitigation, "robustMixed") ...
+        && isstruct(ctx.runtimeCfg.mitigation.robustMixed))
+    error("robust_unified requires runtimeCfg.mitigation.robustMixed.");
+end
+cfg = ctx.runtimeCfg.mitigation.robustMixed;
+requiredFields = ["enableFhSubbandExcision" "enableScFdeNbiCancel" ...
+    "enableFhReliabilityFloorWithMultipath" "fhReliabilityFloorWithMultipath" ...
+    "minReliability" "scFdeNbiCancel"];
+for idx = 1:numel(requiredFields)
+    fieldName = requiredFields(idx);
+    if ~isfield(cfg, fieldName)
+        error("mitigation.robustMixed.%s is required.", char(fieldName));
+    end
+end
+if ~isstruct(cfg.scFdeNbiCancel)
+    error("mitigation.robustMixed.scFdeNbiCancel must be a struct.");
+end
+requiredBandstopFields = ["peakRatio" "edgeRatio" "maxBands" "mergeGapBins" "padBins" ...
+    "minBandBins" "smoothSpanBins" "fftOversample" "maxBandwidthFrac" "minFreqAbs" ...
+    "suppressToFloor" "maxMaskFraction" "reliabilityPenaltySlope"];
+for idx = 1:numel(requiredBandstopFields)
+    fieldName = requiredBandstopFields(idx);
+    if ~isfield(cfg.scFdeNbiCancel, fieldName)
+        error("mitigation.robustMixed.scFdeNbiCancel.%s is required.", char(fieldName));
+    end
+end
+cfg.enableFhSubbandExcision = logical(cfg.enableFhSubbandExcision);
+cfg.enableScFdeNbiCancel = logical(cfg.enableScFdeNbiCancel);
+cfg.enableFhReliabilityFloorWithMultipath = logical(cfg.enableFhReliabilityFloorWithMultipath);
+cfg.fhReliabilityFloorWithMultipath = local_probability_scalar_local( ...
+    cfg.fhReliabilityFloorWithMultipath, "mitigation.robustMixed.fhReliabilityFloorWithMultipath");
+cfg.minReliability = local_probability_scalar_local(cfg.minReliability, "mitigation.robustMixed.minReliability");
+cfg.scFdeNbiCancel.maxMaskFraction = local_probability_scalar_local( ...
+    cfg.scFdeNbiCancel.maxMaskFraction, "mitigation.robustMixed.scFdeNbiCancel.maxMaskFraction");
+cfg.scFdeNbiCancel.reliabilityPenaltySlope = local_nonnegative_scalar_local( ...
+    cfg.scFdeNbiCancel.reliabilityPenaltySlope, "mitigation.robustMixed.scFdeNbiCancel.reliabilityPenaltySlope");
+end
+
+function tf = local_channel_multipath_active_local(ctx)
+tf = isstruct(ctx) && isfield(ctx, "runtimeCfg") && isstruct(ctx.runtimeCfg) ...
+    && isfield(ctx.runtimeCfg, "channel") && isstruct(ctx.runtimeCfg.channel) ...
+    && isfield(ctx.runtimeCfg.channel, "multipath") && isstruct(ctx.runtimeCfg.channel.multipath) ...
+    && isfield(ctx.runtimeCfg.channel.multipath, "enable") ...
+    && logical(ctx.runtimeCfg.channel.multipath.enable);
+end
+
+function tf = local_channel_narrowband_active_local(ctx)
+tf = isstruct(ctx) && isfield(ctx, "runtimeCfg") && isstruct(ctx.runtimeCfg) ...
+    && isfield(ctx.runtimeCfg, "channel") && isstruct(ctx.runtimeCfg.channel) ...
+    && isfield(ctx.runtimeCfg.channel, "narrowband") && isstruct(ctx.runtimeCfg.channel.narrowband) ...
+    && isfield(ctx.runtimeCfg.channel.narrowband, "enable") ...
+    && logical(ctx.runtimeCfg.channel.narrowband.enable) ...
+    && isfield(ctx.runtimeCfg.channel.narrowband, "weight") ...
+    && double(ctx.runtimeCfg.channel.narrowband.weight) > 0;
+end
+
+function value = local_probability_scalar_local(rawValue, ownerName)
+value = double(rawValue);
+if ~(isscalar(value) && isfinite(value) && value >= 0 && value <= 1)
+    error("%s must be a scalar in [0, 1], got %g.", ownerName, value);
+end
+end
+
+function value = local_nonnegative_scalar_local(rawValue, ownerName)
+value = double(rawValue);
+if ~(isscalar(value) && isfinite(value) && value >= 0)
+    error("%s must be a nonnegative finite scalar, got %g.", ownerName, value);
+end
 end
 
 function xCore = local_apply_sc_fde_mmse_core_local(core, h, lambda, coreLen)

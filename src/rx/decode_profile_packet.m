@@ -15,6 +15,8 @@ switch string(profileName)
         rxResult = run_narrowband_rx(rxSamples, txArtifacts, rxCfg);
     case "rayleigh_multipath"
         rxResult = run_rayleigh_multipath_rx(rxSamples, txArtifacts, rxCfg);
+    case "robust_unified"
+        rxResult = run_robust_unified_rx(rxSamples, txArtifacts, rxCfg);
     otherwise
         error("Unsupported profileName: %s", char(profileName));
 end
