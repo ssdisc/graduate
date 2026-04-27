@@ -124,6 +124,8 @@ for pointIdx = 1:nPoints
                 runtimeCfg.outerRs);
 
             payloadBitsOut = fit_bits_length(payloadBitsOut, numel(txArtifacts.payloadAssist.payloadBitsPlain));
+            payloadBitsOut = local_apply_payload_security_postprocess_local( ...
+                payloadBitsOut, txArtifacts, runtimeCfg, "known", 0);
             payloadLast{methodIdx, pointIdx} = payloadBitsOut;
             frameBer(methodIdx, frameIdx) = mean(double(payloadBitsOut ~= txArtifacts.payloadAssist.payloadBitsPlain));
             frameRawSuccess(methodIdx, frameIdx) = double(rsInfo.rawDataPacketSuccessRate);
@@ -178,10 +180,7 @@ results.imageMetrics = local_finalize_image_metrics_local(metricAcc);
 results.sourceImages = struct( ...
     "original", txArtifacts.commonMeta.sourceImageOriginal, ...
     "resized", txArtifacts.commonMeta.sourceImage);
-results.kl = struct( ...
-    "signalVsNoise", nan(1, nPoints), ...
-    "noiseVsSignal", nan(1, nPoints), ...
-    "symmetric", nan(1, nPoints));
+results.kl = local_build_kl_report_local(budget, txArtifacts);
 results.spectrum = local_build_spectrum_report_local(runtimeCfg, txArtifacts);
 results.example = local_build_example_outputs_local(results, payloadLast, txArtifacts, runtimeCfg);
 results.rxResults = struct();
@@ -195,6 +194,7 @@ results.profileDiagnostics = struct( ...
     "txMapper", string(linkSpec.linkProfile.txMapper), ...
     "rxChain", string(linkSpec.linkProfile.rxChain), ...
     "runtimeBackend", "continuous_burst_v2");
+results = local_apply_extension_layer_local(results, linkSpec, runtimeCfg, txArtifacts, budget, waveform, profileName, methods);
 results.summary = make_summary(results);
 
 if isfield(runtimeCfg.sim, "saveFigures") && logical(runtimeCfg.sim.saveFigures) ...
@@ -202,7 +202,7 @@ if isfield(runtimeCfg.sim, "saveFigures") && logical(runtimeCfg.sim.saveFigures)
     if ~exist(char(runtimeCfg.sim.resultsDir), "dir")
         mkdir(char(runtimeCfg.sim.resultsDir));
     end
-    save_figures(results);
+    save_figures(runtimeCfg.sim.resultsDir, results);
 end
 end
 
@@ -333,6 +333,7 @@ end
 
 function scan = local_build_scan_struct_local(budget)
 scan = struct( ...
+    "type", string(budget.scanType), ...
     "nSnr", double(budget.nSnr), ...
     "nJsr", double(budget.nJsr), ...
     "ebN0dBList", double(budget.snrDbList(:)), ...
@@ -361,22 +362,53 @@ end
 
 function spectrum = local_build_spectrum_report_local(~, txArtifacts)
 waveform = txArtifacts.commonMeta.waveform;
-rolloff = 0;
-if isfield(waveform, "rolloff")
-    rolloff = double(waveform.rolloff);
+try
+    [psd, freqHz, bw99Hz, eta, info] = estimate_spectrum( ...
+        txArtifacts.burstForChannel(:), ...
+        txArtifacts.commonMeta.modInfo, ...
+        waveform, ...
+        struct("payloadBits", numel(txArtifacts.payloadAssist.payloadBitsPlain)));
+catch
+    psd = NaN;
+    freqHz = NaN;
+    rolloff = 0;
+    if isfield(waveform, "rolloff")
+        rolloff = double(waveform.rolloff);
+    end
+    bw99Hz = double(waveform.symbolRateHz) * (1 + rolloff);
+    if ~isfinite(bw99Hz) || bw99Hz <= 0
+        bw99Hz = double(waveform.sampleRateHz);
+    end
+    eta = numel(txArtifacts.payloadAssist.payloadBitsPlain) / max(double(txArtifacts.commonMeta.burstReport.burstDurationSec), eps) / max(bw99Hz, eps);
+    info = struct();
 end
-bw99Hz = double(waveform.symbolRateHz) * (1 + rolloff);
-if ~isfinite(bw99Hz) || bw99Hz <= 0
-    bw99Hz = double(waveform.sampleRateHz);
-end
-eta = numel(txArtifacts.payloadAssist.payloadBitsPlain) / max(double(txArtifacts.commonMeta.burstReport.burstDurationSec), eps) / max(bw99Hz, eps);
 spectrum = struct( ...
+    "freqHz", freqHz, ...
+    "psd", psd, ...
     "bw99Hz", bw99Hz, ...
     "etaBpsHz", eta, ...
     "burstBw99Hz", bw99Hz, ...
     "burstEtaBpsHz", eta, ...
     "basebandBw99Hz", bw99Hz, ...
-    "basebandEtaBpsHz", eta);
+    "basebandEtaBpsHz", eta, ...
+    "info", info);
+end
+
+function kl = local_build_kl_report_local(budget, txArtifacts)
+nPoints = double(budget.nPoints);
+signalVsNoise = nan(1, nPoints);
+noiseVsSignal = nan(1, nPoints);
+symmetric = nan(1, nPoints);
+baseBurst = txArtifacts.burstForChannel(:);
+for pointIdx = 1:nPoints
+    txBurst = double(budget.txAmplitudeScaleList(pointIdx)) * baseBurst;
+    [signalVsNoise(pointIdx), noiseVsSignal(pointIdx), symmetric(pointIdx)] = ...
+        signal_noise_kl(txBurst, double(budget.bob.noisePsdLin(pointIdx)), 128);
+end
+kl = struct( ...
+    "signalVsNoise", signalVsNoise, ...
+    "noiseVsSignal", noiseVsSignal, ...
+    "symmetric", symmetric);
 end
 
 function metricAcc = local_init_image_metric_acc_local(nMethods, nPoints)
@@ -504,6 +536,394 @@ for idx = 1:nMethods
         "receiver", string(results.linkSpec.linkProfile.rxChain), ...
         "backend", "continuous_burst_v2", ...
         "role", "bob");
+end
+end
+
+function results = local_apply_extension_layer_local(results, linkSpec, runtimeCfg, txArtifacts, budget, waveform, profileName, methods)
+if local_eve_extension_enabled_local(runtimeCfg)
+    [eveResults, eveBudget] = local_run_eve_extension_local( ...
+        linkSpec, runtimeCfg, txArtifacts, budget, waveform, profileName, methods);
+    results.eve = eveResults;
+    results.linkBudget.eve = eveBudget;
+end
+
+if local_warden_extension_enabled_local(runtimeCfg)
+    [wardenResults, wardenBudget] = local_run_warden_extension_local( ...
+        runtimeCfg, txArtifacts, budget, waveform, profileName);
+    results.covert = struct("warden", wardenResults);
+    results.linkBudget.warden = wardenBudget;
+end
+end
+
+function tf = local_eve_extension_enabled_local(runtimeCfg)
+tf = isfield(runtimeCfg, "eve") && isstruct(runtimeCfg.eve) ...
+    && isfield(runtimeCfg.eve, "enable") && logical(runtimeCfg.eve.enable);
+end
+
+function tf = local_warden_extension_enabled_local(runtimeCfg)
+tf = isfield(runtimeCfg, "covert") && isstruct(runtimeCfg.covert) ...
+    && isfield(runtimeCfg.covert, "enable") && logical(runtimeCfg.covert.enable) ...
+    && isfield(runtimeCfg.covert, "warden") && isstruct(runtimeCfg.covert.warden) ...
+    && isfield(runtimeCfg.covert.warden, "enable") && logical(runtimeCfg.covert.warden.enable);
+end
+
+function [eveResults, eveBudget] = local_run_eve_extension_local(linkSpec, runtimeCfg, txArtifacts, budget, waveform, profileName, methods)
+eveCfg = runtimeCfg.eve;
+local_validate_eve_extension_cfg_local(eveCfg);
+eveBudget = local_offset_budget_from_bob_local(budget.bob, double(eveCfg.linkGainOffsetDb));
+rxDiversityCfg = eveCfg.rxDiversity;
+
+[roleMetrics, payloadLast] = local_decode_role_metrics_local( ...
+    "eve", linkSpec, runtimeCfg, txArtifacts, budget, eveBudget, waveform, profileName, methods, rxDiversityCfg, eveCfg.assumptions, 200000);
+
+eveResults = struct();
+eveResults.methods = methods;
+eveResults.ebN0dB = double(eveBudget.ebN0dB(:).');
+eveResults.jsrDb = double(budget.bob.jsrDb(:).');
+eveResults.scan = local_build_scan_struct_local(budget);
+eveResults.ber = roleMetrics.ber;
+eveResults.rawPer = roleMetrics.rawPer;
+eveResults.per = roleMetrics.per;
+eveResults.packetDiagnostics = struct( ...
+    "frontEndSuccessRate", max(roleMetrics.frontEndByMethod, [], 1), ...
+    "headerSuccessRate", max(roleMetrics.headerByMethod, [], 1), ...
+    "sessionSuccessRate", max(roleMetrics.sessionByMethod, [], 1), ...
+    "frontEndSuccessRateByMethod", roleMetrics.frontEndByMethod, ...
+    "headerSuccessRateByMethod", roleMetrics.headerByMethod, ...
+    "sessionSuccessRateByMethod", roleMetrics.sessionByMethod, ...
+    "rawPayloadSuccessRate", roleMetrics.rawPayloadSuccess, ...
+    "payloadSuccessRate", roleMetrics.payloadSuccess);
+eveResults.imageMetrics = local_finalize_image_metrics_local(roleMetrics.imageMetricAcc);
+eveResults.assumptions = eveCfg.assumptions;
+eveResults.receiver = struct( ...
+    "rxDiversity", rxDiversityCfg, ...
+    "methods", methods, ...
+    "profileName", profileName);
+eveResults.example = local_build_example_outputs_local( ...
+    local_make_role_result_for_examples_local(eveResults, linkSpec), payloadLast, txArtifacts, runtimeCfg);
+eveResults.rxResults = local_build_role_standardized_rx_results_local(eveResults, payloadLast, linkSpec, "eve");
+end
+
+function local_validate_eve_extension_cfg_local(eveCfg)
+required = ["linkGainOffsetDb" "assumptions" "rxDiversity"];
+for idx = 1:numel(required)
+    if ~isfield(eveCfg, required(idx))
+        error("extensions.eve.%s is required when Eve is enabled.", required(idx));
+    end
+end
+if ~(isscalar(double(eveCfg.linkGainOffsetDb)) && isfinite(double(eveCfg.linkGainOffsetDb)))
+    error("extensions.eve.linkGainOffsetDb must be a finite scalar.");
+end
+assumptions = eveCfg.assumptions;
+requiredAssumptions = ["protocol" "fh" "scramble" "chaos" "chaosApproxDelta"];
+for idx = 1:numel(requiredAssumptions)
+    if ~isfield(assumptions, requiredAssumptions(idx))
+        error("extensions.eve.assumptions.%s is required.", requiredAssumptions(idx));
+    end
+end
+if string(assumptions.protocol) ~= "protocol_aware"
+    error("Only extensions.eve.assumptions.protocol='protocol_aware' is implemented in the refactored extension layer.");
+end
+if string(assumptions.fh) ~= "known" || string(assumptions.scramble) ~= "known"
+    error("The refactored Eve extension currently supports only known FH and scramble assumptions.");
+end
+chaosAssumption = string(assumptions.chaos);
+if ~any(chaosAssumption == ["known" "wrong_key" "approximate"])
+    error("extensions.eve.assumptions.chaos must be one of: known, wrong_key, approximate.");
+end
+if chaosAssumption == "approximate"
+    approxDelta = double(assumptions.chaosApproxDelta);
+    if ~(isscalar(approxDelta) && isfinite(approxDelta) && approxDelta > 0)
+        error("extensions.eve.assumptions.chaosApproxDelta must be a positive finite scalar when chaos='approximate'.");
+    end
+end
+rx_validate_diversity_cfg(eveCfg.rxDiversity, "extensions.eve.rxDiversity");
+end
+
+function [roleMetrics, payloadLast] = local_decode_role_metrics_local( ...
+    roleName, ~, runtimeCfg, txArtifacts, budget, roleBudget, waveform, profileName, methods, rxDiversityCfg, roleAssumptions, seedOffset)
+txPackets = txArtifacts.packetAssist.txPackets;
+nMethods = numel(methods);
+nPoints = budget.nPoints;
+nFrames = max(1, round(double(runtimeCfg.sim.nFramesPerPoint)));
+
+roleMetrics = struct();
+roleMetrics.ber = nan(nMethods, nPoints);
+roleMetrics.rawPer = nan(nMethods, nPoints);
+roleMetrics.per = nan(nMethods, nPoints);
+roleMetrics.frontEndByMethod = nan(nMethods, nPoints);
+roleMetrics.headerByMethod = nan(nMethods, nPoints);
+roleMetrics.sessionByMethod = nan(nMethods, nPoints);
+roleMetrics.rawPayloadSuccess = nan(nMethods, nPoints);
+roleMetrics.payloadSuccess = nan(nMethods, nPoints);
+roleMetrics.imageMetricAcc = local_init_image_metric_acc_local(nMethods, nPoints);
+payloadLast = cell(nMethods, nPoints);
+
+for pointIdx = 1:nPoints
+    frameBer = nan(nMethods, nFrames);
+    frameRawSuccess = nan(nMethods, nFrames);
+    framePayloadSuccess = nan(nMethods, nFrames);
+    frameFrontEnd = nan(nMethods, nFrames);
+    frameHeader = nan(nMethods, nFrames);
+    frameSession = nan(nMethods, nFrames);
+    frameMetrics = local_init_image_metric_acc_local(nMethods, nFrames);
+
+    pointChannel = local_build_point_channel_local(runtimeCfg, budget, pointIdx, waveform);
+    rxScale = double(roleBudget.rxAmplitudeScale(pointIdx));
+    noisePsdLin = double(roleBudget.noisePsdLin(pointIdx));
+
+    for frameIdx = 1:nFrames
+        rng(double(runtimeCfg.rngSeed) + double(seedOffset) + pointIdx * 1000 + frameIdx, "twister");
+        rxPayloadByMethod = cell(nMethods, 1);
+        rawPacketOkByMethod = cell(nMethods, 1);
+        frontPacketOkByMethod = cell(nMethods, 1);
+        headerPacketOkByMethod = cell(nMethods, 1);
+        sessionCtxByMethod = cell(nMethods, 1);
+        rxCursorByMethod = repmat(local_initial_packet_cursor_local(txArtifacts), nMethods, 1);
+        for methodIdx = 1:nMethods
+            rxPayloadByMethod{methodIdx} = repmat({uint8([])}, numel(txPackets), 1);
+            rawPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
+            frontPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
+            headerPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
+            sessionCtxByMethod{methodIdx} = rx_build_session_context(struct(), session_transport_mode(runtimeCfg.frame), "none");
+        end
+
+        txBurst = rxScale * txArtifacts.burstForChannel(:);
+        [rxBurst, chState] = local_capture_frame_waveform_local(txBurst, noisePsdLin, pointChannel, rxDiversityCfg);
+        captureGuardSamples = local_capture_guard_samples_local(runtimeCfg, waveform);
+        totalRxSamples = rx_capture_total_samples(rxBurst);
+
+        for methodIdx = 1:nMethods
+            sessionCfg = struct( ...
+                "runtimeCfg", runtimeCfg, ...
+                "method", methods(methodIdx), ...
+                "ebN0dB", double(roleBudget.ebN0dB(pointIdx)), ...
+                "jsrDb", double(budget.bob.jsrDb(pointIdx)), ...
+                "noisePsdLin", noisePsdLin, ...
+                "channelState", chState);
+            sessionResult = rx_decode_session_control(profileName, rxBurst, txArtifacts, sessionCfg);
+            sessionCtxByMethod{methodIdx} = sessionResult.sessionCtx;
+            frameSession(methodIdx, frameIdx) = double(~sessionResult.required || sessionResult.ok);
+            rxCursorByMethod(methodIdx) = max(double(rxCursorByMethod(methodIdx)), double(sessionResult.nextPacketCursor));
+        end
+
+        for pktIdx = 1:numel(txPackets)
+            txPacket = txPackets(pktIdx);
+            pktLenSamples = numel(txPacket.txSymForChannel);
+            for methodIdx = 1:nMethods
+                rxCursor = max(1, round(double(rxCursorByMethod(methodIdx))));
+                rxStop = min(totalRxSamples, rxCursor + pktLenSamples + captureGuardSamples - 1);
+                rxWindow = rx_slice_capture_window(rxBurst, rxCursor, rxStop);
+                rxCfg = struct( ...
+                    "packetIndex", pktIdx, ...
+                    "runtimeCfg", runtimeCfg, ...
+                    "method", methods(methodIdx), ...
+                    "ebN0dB", double(roleBudget.ebN0dB(pointIdx)), ...
+                    "jsrDb", double(budget.bob.jsrDb(pointIdx)), ...
+                    "noisePsdLin", noisePsdLin, ...
+                    "channelState", chState, ...
+                    "sessionCtx", sessionCtxByMethod{methodIdx}, ...
+                    "windowStartSample", double(rxCursor), ...
+                    "receiverRole", string(roleName));
+                rxPacket = local_run_profile_packet_rx_local(profileName, rxWindow, txArtifacts, rxCfg);
+                rxPayloadByMethod{methodIdx}{pktIdx} = rxPacket.payloadBits;
+                rawPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.rawPacketOk);
+                frontPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.frontEndOk);
+                headerPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.headerOk);
+                if isfield(rxPacket, "sessionCtx") && isstruct(rxPacket.sessionCtx) ...
+                        && isfield(rxPacket.sessionCtx, "known") && logical(rxPacket.sessionCtx.known)
+                    sessionCtxByMethod{methodIdx} = rxPacket.sessionCtx;
+                end
+                rxCursorByMethod(methodIdx) = local_advance_packet_cursor_local( ...
+                    rxCursor, pktLenSamples, rxPacket, totalRxSamples);
+            end
+        end
+
+        for methodIdx = 1:nMethods
+            [payloadBitsOut, ~, rsInfo] = outer_rs_recover_payload( ...
+                rxPayloadByMethod{methodIdx}, ...
+                rawPacketOkByMethod{methodIdx}, ...
+                txPackets, ...
+                numel(txArtifacts.payloadAssist.payloadBitsPlain), ...
+                double(runtimeCfg.packet.payloadBitsPerPacket), ...
+                runtimeCfg.outerRs);
+            payloadBitsOut = fit_bits_length(payloadBitsOut, numel(txArtifacts.payloadAssist.payloadBitsPlain));
+            payloadBitsOut = local_apply_payload_security_postprocess_local( ...
+                payloadBitsOut, txArtifacts, runtimeCfg, ...
+                string(roleAssumptions.chaos), double(roleAssumptions.chaosApproxDelta));
+            payloadLast{methodIdx, pointIdx} = payloadBitsOut;
+            frameBer(methodIdx, frameIdx) = mean(double(payloadBitsOut ~= txArtifacts.payloadAssist.payloadBitsPlain));
+            frameRawSuccess(methodIdx, frameIdx) = double(rsInfo.rawDataPacketSuccessRate);
+            framePayloadSuccess(methodIdx, frameIdx) = double(rsInfo.effectiveDataPacketSuccessRate);
+            frameFrontEnd(methodIdx, frameIdx) = mean(double(frontPacketOkByMethod{methodIdx}));
+            frameHeader(methodIdx, frameIdx) = mean(double(headerPacketOkByMethod{methodIdx}));
+            frameMetrics = local_store_frame_image_metrics_local(frameMetrics, methodIdx, frameIdx, ...
+                payloadBitsOut, txArtifacts, runtimeCfg);
+        end
+    end
+
+    roleMetrics.ber(:, pointIdx) = local_mean_omit_nan_local(frameBer, 2);
+    roleMetrics.rawPayloadSuccess(:, pointIdx) = local_mean_omit_nan_local(frameRawSuccess, 2);
+    roleMetrics.payloadSuccess(:, pointIdx) = local_mean_omit_nan_local(framePayloadSuccess, 2);
+    roleMetrics.rawPer(:, pointIdx) = max(min(1 - roleMetrics.rawPayloadSuccess(:, pointIdx), 1), 0);
+    roleMetrics.per(:, pointIdx) = max(min(1 - roleMetrics.payloadSuccess(:, pointIdx), 1), 0);
+    roleMetrics.frontEndByMethod(:, pointIdx) = local_mean_omit_nan_local(frameFrontEnd, 2);
+    roleMetrics.headerByMethod(:, pointIdx) = local_mean_omit_nan_local(frameHeader, 2);
+    roleMetrics.sessionByMethod(:, pointIdx) = local_mean_omit_nan_local(frameSession, 2);
+    roleMetrics.imageMetricAcc = local_merge_point_image_metrics_local(roleMetrics.imageMetricAcc, frameMetrics, pointIdx);
+end
+end
+
+function [wardenResults, wardenBudget] = local_run_warden_extension_local(runtimeCfg, txArtifacts, budget, waveform, profileName)
+wardenCfg = runtimeCfg.covert.warden;
+local_validate_warden_extension_cfg_local(wardenCfg);
+wardenBudget = local_offset_budget_from_bob_local(budget.bob, double(wardenCfg.linkGainOffsetDb));
+
+nPoints = budget.nPoints;
+detCells = cell(1, nPoints);
+for pointIdx = 1:nPoints
+    pointChannel = local_build_point_channel_local(runtimeCfg, budget, pointIdx, waveform);
+    detCfg = wardenCfg;
+    detCfg.referenceLink = string(wardenCfg.referenceLink);
+    detCfg.fhNarrowband.nFreqs = double(runtimeCfg.fh.nFreqs);
+    detCfg.cyclostationary.sps = double(waveform.sps);
+    txBurst = double(wardenBudget.rxAmplitudeScale(pointIdx)) * txArtifacts.burstForChannel(:);
+    delayMax = local_capture_guard_samples_local(runtimeCfg, waveform);
+    rng(double(runtimeCfg.rngSeed) + 300000 + pointIdx, "twister");
+    detCells{pointIdx} = warden_energy_detector( ...
+        txBurst, double(wardenBudget.noisePsdLin(pointIdx)), pointChannel, delayMax, detCfg);
+end
+
+wardenResults = local_pack_warden_extension_results_local( ...
+    detCells, double(budget.bob.ebN0dB(:).'), double(wardenBudget.ebN0dB(:).'), ...
+    double(budget.bob.jsrDb(:).'), string(wardenCfg.referenceLink), ...
+    local_build_scan_struct_local(budget), string(wardenCfg.enabledLayers), ...
+    string(wardenCfg.primaryLayer), string(profileName));
+end
+
+function local_validate_warden_extension_cfg_local(wardenCfg)
+required = ["enable" "pfaTarget" "nObs" "nTrials" "useParallel" "nWorkers" ...
+    "referenceLink" "linkGainOffsetDb" "primaryLayer" "noiseUncertaintyDb" ...
+    "extraDelaySamples" "fhNarrowband" "cyclostationary" "enabledLayers"];
+for idx = 1:numel(required)
+    if ~isfield(wardenCfg, required(idx))
+        error("extensions.warden.warden.%s is required when Warden is enabled.", required(idx));
+    end
+end
+if string(wardenCfg.referenceLink) ~= "independent"
+    error("The refactored Warden extension currently supports referenceLink='independent'.");
+end
+if ~(isscalar(double(wardenCfg.linkGainOffsetDb)) && isfinite(double(wardenCfg.linkGainOffsetDb)))
+    error("extensions.warden.warden.linkGainOffsetDb must be finite.");
+end
+allowedLayers = ["energyNp" "energyOpt" "energyOptUncertain" "energyFhNarrow" "cyclostationaryOpt"];
+enabledLayers = unique(string(wardenCfg.enabledLayers(:).'), "stable");
+if isempty(enabledLayers)
+    error("extensions.warden.warden.enabledLayers must not be empty.");
+end
+if any(~ismember(enabledLayers, allowedLayers))
+    error("extensions.warden.warden.enabledLayers contains unsupported layer names.");
+end
+if ~ismember(string(wardenCfg.primaryLayer), enabledLayers)
+    error("extensions.warden.warden.primaryLayer must be included in enabledLayers.");
+end
+end
+
+function budgetOut = local_offset_budget_from_bob_local(bobBudget, linkGainOffsetDb)
+gainDb = double(linkGainOffsetDb);
+gainLin = 10^(gainDb / 10);
+budgetOut = bobBudget;
+budgetOut.linkGainDb = double(bobBudget.linkGainDb) + gainDb;
+budgetOut.linkGainLin = double(bobBudget.linkGainLin) * gainLin;
+budgetOut.rxAmplitudeScale = double(bobBudget.rxAmplitudeScale) * sqrt(gainLin);
+budgetOut.rxPowerLin = double(bobBudget.rxPowerLin) * gainLin;
+budgetOut.ebN0Lin = double(bobBudget.ebN0Lin) * gainLin;
+budgetOut.ebN0dB = double(bobBudget.ebN0dB) + gainDb;
+budgetOut.txPowerDb = double(bobBudget.txPowerDb);
+budgetOut.txPowerLin = double(bobBudget.txPowerLin);
+budgetOut.noisePsdLin = double(bobBudget.noisePsdLin);
+end
+
+function w = local_pack_warden_extension_results_local(detCells, bobEbN0dBList, wardenEbN0dBList, jsrDbList, referenceLink, scan, enabledLayers, primaryLayer, profileName)
+layerNames = unique(string(enabledLayers(:).'), "stable");
+w = struct();
+w.primaryLayer = string(primaryLayer);
+w.enabledLayers = layerNames;
+w.profileName = string(profileName);
+w.referenceLink = string(referenceLink);
+w.bobEbN0dB = double(bobEbN0dBList(:).');
+w.wardenEbN0dB = double(wardenEbN0dBList(:).');
+w.jsrDb = double(jsrDbList(:).');
+w.scan = scan;
+w.layers = struct();
+for idx = 1:numel(layerNames)
+    w.layers.(char(layerNames(idx))) = local_collect_warden_extension_layer_local(detCells, layerNames(idx));
+end
+end
+
+function layer = local_collect_warden_extension_layer_local(detCells, layerName)
+nPoints = numel(detCells);
+template = ["threshold" "pfa" "pd" "pmd" "xi" "pe"];
+layer = struct();
+for fieldName = template
+    layer.(char(fieldName)) = nan(1, nPoints);
+end
+for pointIdx = 1:nPoints
+    det = detCells{pointIdx};
+    if ~(isstruct(det) && isfield(det, "layers") && isfield(det.layers, char(layerName)))
+        error("Warden detector output for point %d lacks layer %s.", pointIdx, layerName);
+    end
+    src = det.layers.(char(layerName));
+    for fieldName = template
+        if isfield(src, fieldName)
+            layer.(char(fieldName))(pointIdx) = double(src.(char(fieldName)));
+        end
+    end
+end
+end
+
+function exampleResults = local_make_role_result_for_examples_local(roleResults, linkSpec)
+exampleResults = struct();
+exampleResults.methods = roleResults.methods;
+exampleResults.ebN0dB = roleResults.ebN0dB;
+exampleResults.jsrDb = roleResults.jsrDb;
+exampleResults.ber = roleResults.ber;
+exampleResults.rawPer = roleResults.rawPer;
+exampleResults.per = roleResults.per;
+exampleResults.packetDiagnostics = struct("bob", roleResults.packetDiagnostics);
+exampleResults.linkSpec = linkSpec;
+end
+
+function rxResults = local_build_role_standardized_rx_results_local(roleResults, payloadLast, linkSpec, roleName)
+tmp = local_make_role_result_for_examples_local(roleResults, linkSpec);
+rxResults = local_build_standardized_rx_results_local(tmp, payloadLast);
+for idx = 1:numel(rxResults)
+    rxResults(idx).profileDiagnostics.role = string(roleName);
+end
+end
+
+function payloadBitsOut = local_apply_payload_security_postprocess_local(payloadBitsIn, txArtifacts, runtimeCfg, chaosAssumption, chaosApproxDelta)
+payloadBitsOut = uint8(payloadBitsIn(:) ~= 0);
+if ~(isfield(runtimeCfg, "chaosEncrypt") && isstruct(runtimeCfg.chaosEncrypt) ...
+        && isfield(runtimeCfg.chaosEncrypt, "enable") && logical(runtimeCfg.chaosEncrypt.enable))
+    return;
+end
+if ~(isfield(txArtifacts, "payloadAssist") && isstruct(txArtifacts.payloadAssist) ...
+        && isfield(txArtifacts.payloadAssist, "packetIndependentBitChaos"))
+    error("txArtifacts.payloadAssist.packetIndependentBitChaos is required when chaosEncrypt is enabled.");
+end
+if ~logical(txArtifacts.payloadAssist.packetIndependentBitChaos)
+    error("Refactored payload security postprocess requires packetIndependentBitChaos=true.");
+end
+payloadBitsOut = decrypt_payload_packets( ...
+    payloadBitsOut, local_data_packet_mask_local(txArtifacts.packetAssist.txPackets), ...
+    txArtifacts.packetAssist.txPackets, string(chaosAssumption), double(chaosApproxDelta));
+end
+
+function packetMask = local_data_packet_mask_local(txPackets)
+packetMask = false(numel(txPackets), 1);
+for pktIdx = 1:numel(txPackets)
+    packetMask(pktIdx) = isfield(txPackets(pktIdx), "isDataPacket") && logical(txPackets(pktIdx).isDataPacket);
 end
 end
 
