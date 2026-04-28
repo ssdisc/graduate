@@ -12,7 +12,8 @@ if ~isempty(symbolReliabilityData)
 end
 
 frontEndOk = logical(captureStage.frontEndOk) && logical(frontEndDiag.ok);
-headerOk = frontEndOk && logical(headerResult.ok);
+phyHeaderOk = logical(headerResult.ok);
+headerOk = frontEndOk && phyHeaderOk;
 packetDataBitsRx = uint8(packetDataBitsRx(:));
 
 sessionMode = session_transport_mode(ctx.runtimeCfg.frame);
@@ -22,6 +23,7 @@ payloadBits = uint8([]);
 crcOk = false;
 sessionHeaderOk = false;
 sessionMetaUpdated = false;
+packetSessionRequired = sessionMode ~= "preshared";
 
 if headerOk && ~isempty(packetDataBitsRx)
     packetDataBitsRx = fit_bits_length(packetDataBitsRx, numel(ctx.pkt.packetDataBits));
@@ -62,7 +64,10 @@ end
 rxResult = struct();
 rxResult.method = string(ctx.method);
 rxResult.frontEndOk = logical(frontEndOk);
+rxResult.phyHeaderOk = logical(phyHeaderOk);
 rxResult.headerOk = logical(headerOk);
+rxResult.packetSessionRequired = logical(packetSessionRequired);
+rxResult.packetSessionOk = logical(sessionHeaderOk);
 rxResult.packetOk = logical(rawPacketOk);
 rxResult.rawPacketOk = logical(rawPacketOk);
 rxResult.payloadBits = uint8(payloadBits(:));
@@ -71,7 +76,9 @@ rxResult.metrics = struct( ...
     "ebN0dB", double(ctx.rxCfg.ebN0dB), ...
     "jsrDb", double(ctx.rxCfg.jsrDb), ...
     "packetIndex", double(ctx.pkt.packetIndex), ...
+    "phyHeaderOk", logical(phyHeaderOk), ...
     "headerCrcOk", logical(crcOk), ...
+    "packetSessionRequired", logical(packetSessionRequired), ...
     "sessionHeaderOk", logical(sessionHeaderOk), ...
     "sessionKnown", logical(sessionCtxOut.known), ...
     "packetStartSample", double(captureStage.front.packetStartSample), ...

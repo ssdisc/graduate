@@ -846,11 +846,11 @@ end
 function eqCfg = local_header_equalizer_cfg_local(runtimeCfg, pkt)
 eqCfg = runtimeCfg.rxSync.multipathEq;
 eqCfg.method = "mmse";
-if isfield(pkt, "hopInfo") && isstruct(pkt.hopInfo) && isfield(pkt.hopInfo, "freqOffsets") && ~isempty(pkt.hopInfo.freqOffsets)
-    eqCfg.frequencyOffsets = unique([0, double(pkt.hopInfo.freqOffsets(:).')], "stable");
-else
-    eqCfg.frequencyOffsets = 0;
-end
+freqOffsets = 0;
+freqOffsets = [freqOffsets, local_enabled_hop_freqs_local(pkt, "preambleHopInfo")]; %#ok<AGROW>
+freqOffsets = [freqOffsets, local_enabled_hop_freqs_local(pkt, "phyHeaderHopInfo")]; %#ok<AGROW>
+freqOffsets = [freqOffsets, local_enabled_hop_freqs_local(pkt, "hopInfo")]; %#ok<AGROW>
+eqCfg.frequencyOffsets = unique(double(freqOffsets(:).'), "stable");
 end
 
 function freqBySymbol = local_packet_frequency_offsets_local(pkt, nSym)
@@ -911,6 +911,21 @@ if numel(freqOffsets) < nHops
 end
 freqBySymbol = repelem(freqOffsets(1:nHops), hopLen, 1);
 freqBySymbol = freqBySymbol(1:nSym);
+end
+
+function freqOffsets = local_enabled_hop_freqs_local(s, fieldName)
+freqOffsets = zeros(1, 0);
+if ~(isstruct(s) && isfield(s, fieldName))
+    return;
+end
+hopInfo = s.(fieldName);
+if ~(isstruct(hopInfo) && isfield(hopInfo, "enable") && logical(hopInfo.enable))
+    return;
+end
+if ~(isfield(hopInfo, "freqOffsets") && ~isempty(hopInfo.freqOffsets))
+    error("%s.freqOffsets is required when FH is enabled.", string(fieldName));
+end
+freqOffsets = double(hopInfo.freqOffsets(:).');
 end
 
 function yEq = local_apply_frequency_aware_equalizer_block_local(y, eq, freqBySymbol)

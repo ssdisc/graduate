@@ -144,7 +144,9 @@ end
 if ~(isfield(p, "frame") && isstruct(p.frame))
     error("p.frame is required.");
 end
-p.frame.phyHeaderFhFreqSet = p.fh.freqSet;
+if ~(isfield(p.frame, "phyHeaderFhFreqSet") && ~isempty(p.frame.phyHeaderFhFreqSet))
+    p.frame.phyHeaderFhFreqSet = p.fh.freqSet;
+end
 p.frame.phyHeaderFhSymbolsPerHop = phy_header_nondiverse_min_symbols_per_hop(p.frame, p.fh, p.fec);
 
 if isfield(p, "rxSync") && isstruct(p.rxSync) && isfield(p.rxSync, "multipathEq") && isstruct(p.rxSync.multipathEq)

@@ -338,7 +338,7 @@ switch profileName
         commonTx.control.preambleLength = 63;
         commonTx.control.packetSyncLength = 63;
         commonTx.control.resyncIntervalPackets = 1;
-        commonTx.control.sessionHeaderMode = "embedded_each_frame";
+        commonTx.control.sessionHeaderMode = "session_frame_repeat";
         commonTx.control.sessionFrameRepeatCount = 2;
         commonTx.control.phyHeaderFhEnable = true;
         commonTx.control.phyHeaderRepeatCompact = 2;
@@ -439,7 +439,17 @@ switch profileName
         commonTx.waveform.sps = 12;
         commonTx.waveform.rolloff = 0.25;
         commonTx.waveform.spanSymbols = 6;
-        commonTx.control.sessionHeaderMode = "embedded_each_frame";
+        profileTxCfg.fh.enable = true;
+        profileTxCfg.fh.nFreqs = 8;
+        profileTxCfg.fh.freqSet = [-5.2 -3.9 -2.6 -1.3 1.3 2.6 3.9 5.2];
+        profileTxCfg.fh.sequenceType = 'chaos';
+        profileTxCfg.fh.balanceMode = "permutation_block";
+        profileTxCfg.fh.symbolsPerHop = 96;
+        profileTxCfg.fh.payloadDiversity.enable = false;
+        profileTxCfg.fh.payloadDiversity.copies = 1;
+        profileTxCfg.fh.payloadDiversity.indexOffset = 3;
+        controlPlan = guarded_control_freq_plan(profileTxCfg.fh.freqSet);
+        commonTx.control.sessionHeaderMode = "session_frame_repeat";
         commonTx.control.sessionFrameRepeatCount = 2;
         commonTx.control.preambleLength = 127;
         commonTx.control.packetSyncLength = 63;
@@ -449,13 +459,13 @@ switch profileName
         commonTx.control.phyHeaderSpreadFactor = 4;
         commonTx.control.preambleDiversity.enable = true;
         commonTx.control.preambleDiversity.copies = 2;
-        commonTx.control.preambleDiversity.freqSet = [];
+        commonTx.control.preambleDiversity.freqSet = controlPlan.preamblePair;
         commonTx.control.sessionHeaderBodyDiversity.enable = true;
         commonTx.control.sessionHeaderBodyDiversity.copies = 2;
-        commonTx.control.sessionHeaderBodyDiversity.freqSet = [];
+        commonTx.control.sessionHeaderBodyDiversity.freqSet = controlPlan.sessionPair;
         commonTx.control.phyHeaderDiversity.enable = true;
         commonTx.control.phyHeaderDiversity.copies = 2;
-        commonTx.control.phyHeaderFhFreqSet = [];
+        commonTx.control.phyHeaderFhFreqSet = controlPlan.phyHeaderPair;
         commonTx.innerCode.kind = "ldpc";
         commonTx.innerCode.ldpc.rate = "1/2";
         commonTx.innerCode.ldpc.frameType = "short";
@@ -465,6 +475,14 @@ switch profileName
         commonTx.packet.payloadBitsPerPacket = 6912;
         commonTx.outerRs.dataPacketsPerBlock = 4;
         commonTx.outerRs.parityPacketsPerBlock = 4;
+        profileTxCfg.dsss.enable = true;
+        profileTxCfg.dsss.spreadFactor = 4;
+        profileTxCfg.dsss.chipInterleaveMode = "chip_round_robin";
+        profileTxCfg.scFde.enable = true;
+        profileTxCfg.scFde.cpLenSymbols = 16;
+        profileTxCfg.scFde.pilotLength = 8;
+        profileTxCfg.scFde.lambdaFactor = 1.0;
+        profileTxCfg.scFde.pilotMseReference = 0.35;
 
         channel.impulseProb = 0.0;
         channel.impulseWeight = 0.0;
@@ -475,24 +493,6 @@ switch profileName
         channel.multipath.pathDelaysSymbols = [0 2 4];
         channel.multipath.pathGainsDb = [0 -6 -10];
         channel.multipath.rayleigh = true;
-
-        profileTxCfg.fh.enable = true;
-        profileTxCfg.fh.nFreqs = 8;
-        profileTxCfg.fh.freqSet = [-5.2 -3.9 -2.6 -1.3 1.3 2.6 3.9 5.2];
-        profileTxCfg.fh.sequenceType = 'chaos';
-        profileTxCfg.fh.balanceMode = "permutation_block";
-        profileTxCfg.fh.symbolsPerHop = 96;
-        profileTxCfg.fh.payloadDiversity.enable = false;
-        profileTxCfg.fh.payloadDiversity.copies = 1;
-        profileTxCfg.fh.payloadDiversity.indexOffset = 3;
-        profileTxCfg.dsss.enable = true;
-        profileTxCfg.dsss.spreadFactor = 4;
-        profileTxCfg.dsss.chipInterleaveMode = "chip_round_robin";
-        profileTxCfg.scFde.enable = true;
-        profileTxCfg.scFde.cpLenSymbols = 16;
-        profileTxCfg.scFde.pilotLength = 8;
-        profileTxCfg.scFde.lambdaFactor = 1.0;
-        profileTxCfg.scFde.pilotMseReference = 0.35;
         channel.narrowband.bandwidthFreqPoints = narrowband_prespread_fh_bandwidth_points( ...
             profileTxCfg.fh, commonTx.waveform, profileTxCfg.dsss);
 
@@ -505,7 +505,7 @@ switch profileName
         profileRxCfg.sync.multipathEq.compareMethods = "robust_combo";
         profileRxCfg.mitigation.headerBandstop.enable = true;
         profileRxCfg.mitigation.headerDecodeDiversity.enable = true;
-        profileRxCfg.mitigation.robustMixed.narrowbandFrontend = "dsss_only";
+        profileRxCfg.mitigation.robustMixed.narrowbandFrontend = "fh_erasure";
         profileRxCfg.mitigation.robustMixed.enableFhSubbandExcision = false;
         profileRxCfg.mitigation.robustMixed.enableScFdeNbiCancel = false;
         profileRxCfg.mitigation.robustMixed.enableSampleNbiCancel = false;

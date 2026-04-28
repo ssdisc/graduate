@@ -182,11 +182,12 @@ if ~(isfield(rxCfg, "channelState") && isstruct(rxCfg.channelState) ...
 end
 eqCfg = runtimeCfg.rxSync.multipathEq;
 eqCfg.method = "mmse";
-eqCfg.frequencyOffsets = 0;
+freqBySymbol = local_session_frequency_offsets_local(sessionFrame, numel(rFullEq));
+eqCfg.frequencyOffsets = unique([0; freqBySymbol(:)].', "stable");
 eq = multipath_equalizer_from_preamble( ...
     sessionFrame.syncSym(:), rFullEq(1:numel(sessionFrame.syncSym)), ...
     eqCfg, double(rxCfg.noisePsdLin), rx_effective_multipath_channel_len_symbols(runtimeCfg, rxCfg));
-    rFullEq = local_apply_frequency_aware_equalizer_block_local(rFullEq, eq, zeros(numel(rFullEq), 1));
+rFullEq = local_apply_frequency_aware_equalizer_block_local(rFullEq, eq, freqBySymbol);
 end
 
 function [metaSession, ok] = local_try_decode_session_frame_local(rData, sessionFrame, runtimeCfg, primaryAction)
@@ -396,4 +397,56 @@ for idx = 1:numel(freqBySymbol)
         error("Equalizer bank does not contain normalized frequency %.12g.", freqBySymbol(idx));
     end
 end
+end
+
+function freqBySymbol = local_session_frequency_offsets_local(sessionFrame, nSym)
+nSym = round(double(nSym));
+freqBySymbol = zeros(nSym, 1);
+if nSym <= 0
+    return;
+end
+
+nSync = numel(sessionFrame.syncSym);
+nData = round(double(sessionFrame.nDataSym));
+dataStart = nSync + 1;
+
+if isfield(sessionFrame, "preambleHopInfo") && isstruct(sessionFrame.preambleHopInfo) ...
+        && isfield(sessionFrame.preambleHopInfo, "enable") && logical(sessionFrame.preambleHopInfo.enable)
+    preLen = min(nSym, nSync);
+    if preLen > 0
+        freqBySymbol(1:preLen) = local_expand_hop_frequency_offsets_local(sessionFrame.preambleHopInfo, preLen);
+    end
+end
+
+if isfield(sessionFrame, "hopInfo") && isstruct(sessionFrame.hopInfo) ...
+        && isfield(sessionFrame.hopInfo, "enable") && logical(sessionFrame.hopInfo.enable) ...
+        && dataStart <= nSym
+    dataLen = min(nData, nSym - dataStart + 1);
+    if dataLen > 0
+        freqBySymbol(dataStart:dataStart + dataLen - 1) = ...
+            local_expand_hop_frequency_offsets_local(sessionFrame.hopInfo, dataLen);
+    end
+end
+end
+
+function freqBySymbol = local_expand_hop_frequency_offsets_local(hopInfo, nSym)
+nSym = round(double(nSym));
+if ~(isstruct(hopInfo) && isfield(hopInfo, "enable") && logical(hopInfo.enable))
+    freqBySymbol = zeros(nSym, 1);
+    return;
+end
+if ~(isfield(hopInfo, "hopLen") && isfinite(double(hopInfo.hopLen)) && double(hopInfo.hopLen) >= 1)
+    error("Session FH equalizer expansion requires hopInfo.hopLen.");
+end
+if ~(isfield(hopInfo, "freqOffsets") && ~isempty(hopInfo.freqOffsets))
+    error("Session FH equalizer expansion requires hopInfo.freqOffsets.");
+end
+hopLen = round(double(hopInfo.hopLen));
+freqOffsets = double(hopInfo.freqOffsets(:));
+nHops = ceil(double(nSym) / double(hopLen));
+if numel(freqOffsets) < nHops
+    error("Session FH equalizer expansion needs %d hop frequencies, got %d.", nHops, numel(freqOffsets));
+end
+freqBySymbol = repelem(freqOffsets(1:nHops), hopLen, 1);
+freqBySymbol = freqBySymbol(1:nSym);
 end
