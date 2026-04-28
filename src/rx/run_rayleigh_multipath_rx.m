@@ -502,10 +502,6 @@ end
 
 function method = local_robust_fh_frontend_method_local(ctx)
 cfg = local_required_robust_mixed_cfg_local(ctx);
-if ~local_channel_narrowband_active_local(ctx)
-    method = "none";
-    return;
-end
 switch string(cfg.narrowbandFrontend)
     case "dsss_only"
         method = "none";
