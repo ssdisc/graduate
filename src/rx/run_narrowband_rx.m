@@ -19,13 +19,14 @@ end
 headerResult = rx_decode_common_phy_header(ctx, headerSym);
 packetDataBitsRx = uint8([]);
 symbolReliabilityData = zeros(0, 1);
+decodeDiag = struct();
 profileDiag = struct();
 if frontEndDiag.ok && headerResult.ok
-    [packetDataBitsRx, symbolReliabilityData, profileDiag] = local_decode_narrowband_payload_local(ctx, dataSym, symbolReliability);
+    [packetDataBitsRx, symbolReliabilityData, profileDiag, decodeDiag] = local_decode_narrowband_payload_local(ctx, dataSym, symbolReliability);
 end
 
 rxResult = rx_finalize_packet_result( ...
-    ctx, captureStage, frontEndDiag, headerResult, packetDataBitsRx, symbolReliabilityData, profileDiag);
+    ctx, captureStage, frontEndDiag, headerResult, packetDataBitsRx, symbolReliabilityData, profileDiag, decodeDiag);
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_narrowband_control_stage_local(ctx, captureStage)
@@ -40,7 +41,7 @@ symbolReliability = symbolReliabilityFull(dataStart:end);
 diagOut = struct("ok", true, "frontEndMethod", "protected_control");
 end
 
-function [packetDataBitsRx, symbolReliabilityData, profileDiag] = local_decode_narrowband_payload_local(ctx, dataSym, symbolReliability)
+function [packetDataBitsRx, symbolReliabilityData, profileDiag, decodeDiag] = local_decode_narrowband_payload_local(ctx, dataSym, symbolReliability)
 symbolReliabilityData = rx_expand_reliability(symbolReliability, numel(dataSym));
 [dataSymPrep, reliabilityNow, profileDiag] = narrowband_profile_frontend(dataSym(:), ctx.pkt, ctx.runtimeCfg, ctx.method);
 symbolReliabilityData = min(symbolReliabilityData, rx_expand_reliability(reliabilityNow, numel(dataSymPrep)));
@@ -51,7 +52,7 @@ profileDiag.payloadDiversityEnabled = isfield(ctx.pkt, "payloadDiversityInfo") .
     && isfield(ctx.pkt.payloadDiversityInfo, "enable") ...
     && logical(ctx.pkt.payloadDiversityInfo.enable);
 
-packetDataBitsRx = rx_decode_packet_bits_common(dataSymUse, symbolReliabilityData, ctx.pkt, ctx.runtimeCfg);
+[packetDataBitsRx, decodeDiag] = rx_decode_packet_bits_common(dataSymUse, symbolReliabilityData, ctx.pkt, ctx.runtimeCfg);
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_failed_frontend_placeholder_local(pkt)

@@ -26,13 +26,14 @@ end
 headerResult = rx_decode_common_phy_header(ctx, headerSym);
 packetDataBitsRx = uint8([]);
 symbolReliabilityData = zeros(0, 1);
+decodeDiag = struct();
 profileDiag = struct();
 if frontEndDiag.ok && headerResult.ok
-    [packetDataBitsRx, symbolReliabilityData, profileDiag] = local_decode_rayleigh_payload_local(ctx, dataSym, symbolReliability, frontEndDiag);
+    [packetDataBitsRx, symbolReliabilityData, profileDiag, decodeDiag] = local_decode_rayleigh_payload_local(ctx, dataSym, symbolReliability, frontEndDiag);
 end
 
 rxResult = rx_finalize_packet_result( ...
-    ctx, captureStage, frontEndDiag, headerResult, packetDataBitsRx, symbolReliabilityData, profileDiag);
+    ctx, captureStage, frontEndDiag, headerResult, packetDataBitsRx, symbolReliabilityData, profileDiag, decodeDiag);
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_rayleigh_channel_stage_local(ctx, captureStage)
@@ -44,7 +45,7 @@ end
     ctx, captureStage.ySymRaw, captureStage.symbolReliabilityFront);
 end
 
-function [packetDataBitsRx, symbolReliabilityData, profileDiag] = local_decode_rayleigh_payload_local(ctx, dataSym, symbolReliability, frontEndDiag)
+function [packetDataBitsRx, symbolReliabilityData, profileDiag, decodeDiag] = local_decode_rayleigh_payload_local(ctx, dataSym, symbolReliability, frontEndDiag)
 if isfield(frontEndDiag, "payloadBranchState") && isstruct(frontEndDiag.payloadBranchState) ...
         && isfield(frontEndDiag.payloadBranchState, "enable") && logical(frontEndDiag.payloadBranchState.enable)
     [dataSymUse, symbolReliabilityData, scFdeDiag] = local_decode_rayleigh_payload_diversity_local( ...
@@ -54,7 +55,7 @@ else
     symbolReliabilityData = min(rx_expand_reliability(symbolReliability, numel(dataSymUse)), ...
         rx_expand_reliability(reliabilityNow, numel(dataSymUse)));
 end
-packetDataBitsRx = rx_decode_packet_bits_common(dataSymUse, symbolReliabilityData, ctx.pkt, ctx.runtimeCfg);
+[packetDataBitsRx, decodeDiag] = rx_decode_packet_bits_common(dataSymUse, symbolReliabilityData, ctx.pkt, ctx.runtimeCfg);
 profileDiag = struct("scFde", scFdeDiag);
 end
 

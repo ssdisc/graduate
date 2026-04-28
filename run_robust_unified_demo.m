@@ -243,8 +243,9 @@ try
         close(progress);
     end
 
-    local_append_status(ui, sprintf('Run finished. BER=%.4g, PER=%.4g, rawPER=%.4g, elapsed=%.3fs', ...
-        report.ber, report.per, report.rawPer, report.elapsedSec));
+    local_append_status(ui, sprintf( ...
+        'Run finished. BER=%.4g, rawPER=%.4g, PER=%.4g, PER_exact=%.4g, bitPerfect=%d, elapsed=%.3fs', ...
+        report.ber, report.rawPer, report.per, report.perExact, report.endToEndBitPerfect, report.elapsedSec));
     local_append_status(ui, "Saved RX image: " + string(report.savedImages.rxDisplay));
     local_show_comparison_figure(report);
     local_append_status(ui, "Saved comparison figure: " + string(report.savedImages.comparisonFigure));
@@ -252,6 +253,11 @@ try
         local_append_status(ui, sprintf([ ...
             'Warning: current PER is packet-level after RS, but BER=%.4g is still nonzero, ' ...
             'so image quality can remain poor.'], report.ber));
+    end
+    if ~report.endToEndBitPerfect
+        local_append_status(ui, sprintf( ...
+            'Exact payload still failed: PER_exact=%.4g. Use BER/PER_exact, not only PER, to judge image quality.', ...
+            report.perExact));
     end
 
 catch ME
@@ -434,20 +440,18 @@ if ~(isfield(results, "example") && numel(results.example) >= 1 ...
     error("Missing example image for method %s.", methodField);
 end
 
-payloadBits = uint8(results.rxResults.bob(1).payloadBits);
-payloadMeta = results.txArtifacts.payloadAssist.payloadMeta;
-payloadCfg = results.params.payload;
 txImgOriginal = results.sourceImages.original;
 txImgResized = results.sourceImages.resized;
-if isempty(payloadBits)
-    rxImgResized = zeros(size(txImgResized), "uint8");
-else
-    rxImgResized = payload_bits_to_image(payloadBits, payloadMeta, payloadCfg);
+exampleEntry = results.example(1).methods.(methodField);
+requiredExampleFields = ["imgRxResized" "imgRx"];
+for idx = 1:numel(requiredExampleFields)
+    fieldName = requiredExampleFields(idx);
+    if ~isfield(exampleEntry, fieldName)
+        error("Example entry for method %s is missing field %s.", methodField, fieldName);
+    end
 end
-rxImgDisplay = rxImgResized;
-if ~isequal(size(rxImgDisplay), size(txImgOriginal))
-    rxImgDisplay = imresize(rxImgResized, [size(txImgOriginal, 1), size(txImgOriginal, 2)]);
-end
+rxImgResized = local_require_uint8_image(exampleEntry.imgRxResized, "example imgRxResized");
+rxImgDisplay = local_require_uint8_image(exampleEntry.imgRx, "example imgRx");
 
 savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgResized, rxImgDisplay);
 report = local_build_demo_report(results, cfg, runtimeCfg, runDir, savedImages, ...
@@ -520,6 +524,11 @@ report.burstSec = double(results.tx.burstDurationSec);
 report.ber = double(results.ber(methodIdx, pointIdx));
 report.rawPer = double(results.rawPer(methodIdx, pointIdx));
 report.per = double(results.per(methodIdx, pointIdx));
+if isfield(results, "perExact") && ~isempty(results.perExact)
+    report.perExact = double(results.perExact(methodIdx, pointIdx));
+else
+    report.perExact = double(report.ber > 1e-12);
+end
 report.endToEndBitPerfect = logical(report.ber <= 1e-12);
 report.frontEndSuccess = double(results.packetDiagnostics.bob.frontEndSuccessRateByMethod(methodIdx, pointIdx));
 report.phyHeaderSuccess = double(results.packetDiagnostics.bob.phyHeaderSuccessRateByMethod(methodIdx, pointIdx));
@@ -578,10 +587,10 @@ title(sprintf('Display RX (%dx%d)', size(report.rxImageDisplay, 2), size(report.
 
 sgtitle(t, sprintf([ ...
     'robust_unified | %s | Eb/N0 %.2f dB | JSR %.2f dB | BER %.3g | rawPER %.3g | ' ...
-    'PER %.3g | burst %.3fs | elapsed %.3fs'], ...
+    'PER %.3g | PER_exact %.3g | bitPerfect %d | burst %.3fs | elapsed %.3fs'], ...
     strjoin(cellstr(report.activeInterferences), " + "), ...
-    report.ebN0dB, report.jsrDb, report.ber, report.rawPer, report.per, ...
-    report.burstSec, report.elapsedSec));
+    report.ebN0dB, report.jsrDb, report.ber, report.rawPer, report.per, report.perExact, ...
+    report.endToEndBitPerfect, report.burstSec, report.elapsedSec));
 
 exportgraphics(fig, char(report.savedImages.comparisonFigure), "Resolution", 160);
 end

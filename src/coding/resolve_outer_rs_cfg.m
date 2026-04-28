@@ -15,6 +15,8 @@ cfg = struct();
 cfg.enable = local_get_logical_local(cfgIn, "enable", false);
 cfg.dataPacketsPerBlock = local_get_integer_local(cfgIn, "dataPacketsPerBlock", 12);
 cfg.parityPacketsPerBlock = local_get_integer_local(cfgIn, "parityPacketsPerBlock", 4);
+cfg.rewriteDecodedDataPackets = local_get_logical_local(cfgIn, "rewriteDecodedDataPackets", true);
+cfg.reliabilityDrivenErasure = local_get_logical_local(cfgIn, "reliabilityDrivenErasure", true);
 cfg.symbolBits = 8;
 
 if cfg.dataPacketsPerBlock < 1

@@ -39,7 +39,8 @@ if useCompactPhy && ~packetEnable
     error("packet.enable=false requires frame.phyHeaderMode='legacy_repeat'; compact_fec omits packetDataBytes so the receiver cannot infer the protected payload length.");
 end
 
-[outerRsPlan] = build_outer_rs_packet_plan(payloadBits, pktBitsPerPacket, rsCfg);
+payloadSegmentPlan = build_payload_data_segments(payloadBits, meta, pktBitsPerPacket);
+[outerRsPlan] = build_outer_rs_packet_plan(payloadSegmentPlan, pktBitsPerPacket, rsCfg);
 nPackets = outerRsPlan.totalTxPacketCount;
 nDataPackets = outerRsPlan.dataPacketCount;
 if nPackets > 65535
@@ -179,11 +180,9 @@ for pktIdx = 1:nPackets
     end
     modInfoRef = modInfo;
 
-    dataFast = false;
     if fhEnabled
         fhCfgPkt = derive_packet_fh_cfg(p.fh, pktIdx, offsetsPkt.fhOffsetHops, numel(dataSymForFh));
-        dataFast = fh_is_fast(fhCfgPkt);
-        if dataFast
+        if fh_is_fast(fhCfgPkt)
             [dataSymHop, hopInfo] = fh_fast_symbol_expand(dataSymForFh, fhCfgPkt);
         else
             dataSymHop = dataSymForFh;
@@ -223,6 +222,13 @@ for pktIdx = 1:nPackets
     txPackets(pktIdx).syncSym = syncSymPkt;
     txPackets(pktIdx).startBit = startBit;
     txPackets(pktIdx).endBit = endBit;
+    txPackets(pktIdx).segmentBytes = double(packetSpec.segmentBytes);
+    txPackets(pktIdx).tileIndex = double(packetSpec.tileIndex);
+    txPackets(pktIdx).tileSegmentIndex = double(packetSpec.tileSegmentIndex);
+    txPackets(pktIdx).tileOffsetBytes = double(packetSpec.tileOffsetBytes);
+    txPackets(pktIdx).tileBytesTotal = double(packetSpec.tileBytesTotal);
+    txPackets(pktIdx).isTileStart = logical(packetSpec.isTileStart);
+    txPackets(pktIdx).isTileEnd = logical(packetSpec.isTileEnd);
     txPackets(pktIdx).hasSessionHeader = hasSessionHeader;
     txPackets(pktIdx).sessionHeader = sessionHeader;
     txPackets(pktIdx).sessionHeaderBits = ternary_bits_local(hasSessionHeader, sessionHeaderBits, uint8([]));
@@ -287,6 +293,7 @@ plan.packetChaosEnable = packetChaosEnable;
 plan.waveform = waveform;
 plan.modInfo = modInfoRef;
 plan.outerRs = outerRsPlan;
+plan.payloadSegmentPlan = payloadSegmentPlan;
 plan.sessionMeta = sessionMeta;
 plan.sessionFrames = sessionFrames;
 plan.sessionFramePlan = sessionFramePlan;

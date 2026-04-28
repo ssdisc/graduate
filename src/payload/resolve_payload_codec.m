@@ -2,7 +2,7 @@ function [codec, cfg] = resolve_payload_codec(payload)
 %RESOLVE_PAYLOAD_CODEC  Parse and normalize payload codec configuration.
 %
 % 输出:
-%   codec - "raw" | "dct" | "toolbox_image"
+%   codec - "raw" | "dct" | "toolbox_image" | "tile_jp2"
 %   cfg   - 归一化后的 codec 配置结构体
 
 codec = "raw";
@@ -15,6 +15,8 @@ switch codec
         codec = "raw";
     case {"dct", "dct8", "dct_lossy"}
         codec = "dct";
+    case {"tile_jp2", "tiled_jp2", "jp2_tiles"}
+        codec = "tile_jp2";
     case {"toolbox_image", "jpeg2000", "jp2", "jpeg", "jpg", "png"}
         codec = "toolbox_image";
     otherwise
@@ -23,6 +25,7 @@ end
 
 cfg = struct();
 cfg.dct = local_resolve_dct_cfg_local(payload);
+cfg.tileJp2 = local_resolve_tile_jp2_cfg_local(payload);
 cfg.toolboxImage = local_resolve_toolbox_image_cfg_local(payload, codec);
 end
 
@@ -42,6 +45,38 @@ dctCfg.keepCols = max(1, round(double(dctCfg.keepCols)));
 dctCfg.quantStep = max(eps, double(dctCfg.quantStep));
 dctCfg.keepRows = min(dctCfg.keepRows, dctCfg.blockSize);
 dctCfg.keepCols = min(dctCfg.keepCols, dctCfg.blockSize);
+end
+
+function tileCfg = local_resolve_tile_jp2_cfg_local(payload)
+tileCfg = struct();
+if isfield(payload, "tileJp2") && isstruct(payload.tileJp2)
+    tileCfg = payload.tileJp2;
+end
+
+if ~isfield(tileCfg, "tileRows"); tileCfg.tileRows = 128; end
+if ~isfield(tileCfg, "tileCols"); tileCfg.tileCols = 128; end
+if ~isfield(tileCfg, "mode"); tileCfg.mode = "lossy"; end
+if ~isfield(tileCfg, "compressionRatio"); tileCfg.compressionRatio = 8; end
+if ~isfield(tileCfg, "quality"); tileCfg.quality = 75; end
+if ~isfield(tileCfg, "decodeFailureFill"); tileCfg.decodeFailureFill = "zeros"; end
+
+tileCfg.tileRows = round(double(tileCfg.tileRows));
+tileCfg.tileCols = round(double(tileCfg.tileCols));
+if tileCfg.tileRows < 8 || tileCfg.tileCols < 8
+    error("payload.tileJp2.tileRows 和 tileCols 必须 >= 8。");
+end
+
+tileCfg.mode = lower(string(tileCfg.mode));
+if ~any(tileCfg.mode == ["lossy" "lossless"])
+    error("payload.tileJp2.mode 必须是 'lossy' 或 'lossless'。");
+end
+
+tileCfg.compressionRatio = max(1, double(tileCfg.compressionRatio));
+tileCfg.quality = max(0, min(100, round(double(tileCfg.quality))));
+tileCfg.decodeFailureFill = lower(string(tileCfg.decodeFailureFill));
+if ~any(tileCfg.decodeFailureFill == ["zeros" "gray"])
+    error("payload.tileJp2.decodeFailureFill 必须是 'zeros' 或 'gray'。");
+end
 end
 
 function toolboxCfg = local_resolve_toolbox_image_cfg_local(payload, codec)

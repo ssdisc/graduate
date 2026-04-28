@@ -1,12 +1,34 @@
-﻿function [meta, payloadBits, ok] = parse_session_header_bits(rxBits, frameCfg)
-%PARSE_SESSION_HEADER_BITS  解析首包中的会话头并返回剩余载荷比特。
+function [meta, payloadBits, ok] = parse_session_header_bits(rxBits, frameCfg)
+%PARSE_SESSION_HEADER_BITS Parse the session metadata header and residual payload bits.
 
 if nargin < 2
     frameCfg = struct();
 end
 
 rxBits = uint8(rxBits(:) ~= 0);
-needBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16 + 16 + 16 + 16;
+fixedBodyBits = 16 + 16 + 16 + 8 + 8 + 32 + 16 + 16 + 16 + 16 + 8 + 16;
+if numel(rxBits) < fixedBodyBits + 16
+    meta = struct();
+    payloadBits = uint8([]);
+    ok = false;
+    return;
+end
+
+idx = 1;
+magic = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+rows = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+cols = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+channels = bits_to_uint(rxBits(idx:idx+7), 'uint8'); idx = idx + 8;
+bitsPerPixel = bits_to_uint(rxBits(idx:idx+7), 'uint8'); idx = idx + 8;
+totalPayloadBytes = bits_to_uint(rxBits(idx:idx+31), 'uint32'); idx = idx + 32;
+totalDataPackets = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+totalPackets = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+rsDataPacketsPerBlock = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+rsParityPacketsPerBlock = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+payloadCodecId = bits_to_uint(rxBits(idx:idx+7), 'uint8'); idx = idx + 8;
+payloadManifestBytesLen = bits_to_uint(rxBits(idx:idx+15), 'uint16'); idx = idx + 16;
+
+needBits = fixedBodyBits + double(payloadManifestBytesLen) * 8 + 16;
 if numel(rxBits) < needBits
     meta = struct();
     payloadBits = uint8([]);
@@ -14,18 +36,14 @@ if numel(rxBits) < needBits
     return;
 end
 
+payloadManifestBytes = uint8([]);
+if double(payloadManifestBytesLen) > 0
+    payloadManifestBytes = bits_to_uint( ...
+        rxBits(idx:idx + double(payloadManifestBytesLen) * 8 - 1), 'uint8vec');
+    payloadManifestBytes = uint8(payloadManifestBytes(:));
+end
+
 bodyBits = rxBits(1:needBits-16);
-idx = 1;
-magic = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
-rows = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
-cols = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
-channels = bits_to_uint(bodyBits(idx:idx+7), 'uint8'); idx = idx + 8;
-bitsPerPixel = bits_to_uint(bodyBits(idx:idx+7), 'uint8'); idx = idx + 8;
-totalPayloadBytes = bits_to_uint(bodyBits(idx:idx+31), 'uint32'); idx = idx + 32;
-totalDataPackets = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
-totalPackets = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
-rsDataPacketsPerBlock = bits_to_uint(bodyBits(idx:idx+15), 'uint16'); idx = idx + 16;
-rsParityPacketsPerBlock = bits_to_uint(bodyBits(idx:idx+15), 'uint16');
 headerCrc16 = bits_to_uint(rxBits(needBits-15:needBits), 'uint16');
 
 ok = true;
@@ -41,24 +59,38 @@ ok = ok && totalPackets >= totalDataPackets;
 ok = ok && rsDataPacketsPerBlock >= 1;
 ok = ok && rsParityPacketsPerBlock >= 0;
 
+baseMeta = struct( ...
+    "rows", rows, ...
+    "cols", cols, ...
+    "channels", channels, ...
+    "bitsPerPixel", bitsPerPixel, ...
+    "payloadBytes", totalPayloadBytes, ...
+    "totalPayloadBytes", totalPayloadBytes);
+
+codec = "";
+codecMeta = struct();
+if ok
+    try
+        [codec, codecMeta] = parse_payload_codec_descriptor_bytes(payloadCodecId, payloadManifestBytes, baseMeta);
+    catch
+        ok = false;
+    end
+end
+
 if ~ok
     meta = struct();
     payloadBits = uint8([]);
     return;
 end
 
-meta = struct();
-meta.rows = rows;
-meta.cols = cols;
-meta.channels = channels;
-meta.bitsPerPixel = bitsPerPixel;
-meta.payloadBytes = totalPayloadBytes;
-meta.totalPayloadBytes = totalPayloadBytes;
+meta = baseMeta;
 meta.totalDataPackets = totalDataPackets;
 meta.totalPackets = totalPackets;
 meta.rsDataPacketsPerBlock = rsDataPacketsPerBlock;
 meta.rsParityPacketsPerBlock = rsParityPacketsPerBlock;
 meta.sessionHeaderCrc16 = headerCrc16;
+meta.codec = codec;
+meta.codecMeta = codecMeta;
 payloadBits = rxBits(needBits+1:end);
 end
 

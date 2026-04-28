@@ -1,10 +1,12 @@
-﻿function [headerBits, header] = build_session_header_bits(meta, frameCfg)
-%BUILD_SESSION_HEADER_BITS  构建首包中的会话头。
+function [headerBits, header] = build_session_header_bits(meta, frameCfg)
+%BUILD_SESSION_HEADER_BITS Build the session metadata header.
 %
 % 字段：
 %   magic16 | rows16 | cols16 | channels8 | bitsPerPixel8 |
 %   totalPayloadBytes32 | totalDataPackets16 | totalTxPackets16 |
-%   rsDataPacketsPerBlock16 | rsParityPacketsPerBlock16 | headerCrc16
+%   rsDataPacketsPerBlock16 | rsParityPacketsPerBlock16 |
+%   payloadCodecId8 | payloadManifestBytes16 | payloadManifestBytes |
+%   headerCrc16
 
 if nargin < 2
     frameCfg = struct();
@@ -43,6 +45,12 @@ else
 end
 header.payloadBytes = header.totalPayloadBytes;
 
+[payloadCodecId, payloadManifestBytes, payloadCodecInfo] = build_payload_codec_descriptor_bytes(meta);
+header.payloadCodecId = uint8(payloadCodecId);
+header.payloadCodec = string(payloadCodecInfo.codec);
+header.payloadManifestBytes = uint8(payloadManifestBytes(:));
+header.payloadManifestBytesLen = uint16(numel(payloadManifestBytes));
+
 bodyBits = [ ...
     uint_to_bits(header.magic, 'uint16'); ...
     uint_to_bits(header.rows, 'uint16'); ...
@@ -53,7 +61,10 @@ bodyBits = [ ...
     uint_to_bits(header.totalDataPackets, 'uint16'); ...
     uint_to_bits(header.totalPackets, 'uint16'); ...
     uint_to_bits(header.rsDataPacketsPerBlock, 'uint16'); ...
-    uint_to_bits(header.rsParityPacketsPerBlock, 'uint16') ...
+    uint_to_bits(header.rsParityPacketsPerBlock, 'uint16'); ...
+    uint_to_bits(header.payloadCodecId, 'uint8'); ...
+    uint_to_bits(header.payloadManifestBytesLen, 'uint16'); ...
+    uint_to_bits(header.payloadManifestBytes, 'uint8vec') ...
     ];
 header.headerCrc16 = crc16_ccitt_bits(bodyBits);
 headerBits = [bodyBits; uint_to_bits(header.headerCrc16, 'uint16')];

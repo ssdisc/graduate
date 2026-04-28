@@ -26,6 +26,7 @@ nFrames = max(1, round(double(runtimeCfg.sim.nFramesPerPoint)));
 ber = nan(nMethods, nPoints);
 rawPer = nan(nMethods, nPoints);
 per = nan(nMethods, nPoints);
+perExact = nan(nMethods, nPoints);
 frontEndByMethod = nan(nMethods, nPoints);
 phyHeaderByMethod = nan(nMethods, nPoints);
 headerByMethod = nan(nMethods, nPoints);
@@ -33,9 +34,11 @@ sessionTransportByMethod = nan(nMethods, nPoints);
 packetSessionByMethod = nan(nMethods, nPoints);
 rawPayloadSuccess = nan(nMethods, nPoints);
 payloadSuccess = nan(nMethods, nPoints);
+exactFrameSuccess = nan(nMethods, nPoints);
 
 metricAcc = local_init_image_metric_acc_local(nMethods, nPoints);
 payloadLast = cell(nMethods, nPoints);
+sessionCtxLast = cell(nMethods, nPoints);
 
 for pointIdx = 1:nPoints
     frameBer = nan(nMethods, nFrames);
@@ -46,6 +49,7 @@ for pointIdx = 1:nPoints
     frameHeader = nan(nMethods, nFrames);
     frameSessionTransport = nan(nMethods, nFrames);
     framePacketSession = nan(nMethods, nFrames);
+    frameExactOk = nan(nMethods, nFrames);
     frameMetrics = local_init_image_metric_acc_local(nMethods, nFrames);
 
     pointChannel = local_build_point_channel_local(runtimeCfg, budget, pointIdx, waveform);
@@ -60,6 +64,7 @@ for pointIdx = 1:nPoints
         phyHeaderPacketOkByMethod = cell(nMethods, 1);
         headerPacketOkByMethod = cell(nMethods, 1);
         packetSessionOkByMethod = cell(nMethods, 1);
+        packetReliabilityByMethod = cell(nMethods, 1);
         sessionCtxByMethod = cell(nMethods, 1);
         rxCursorByMethod = repmat(local_initial_packet_cursor_local(txArtifacts), nMethods, 1);
         for methodIdx = 1:nMethods
@@ -69,6 +74,7 @@ for pointIdx = 1:nPoints
             phyHeaderPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
             headerPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
             packetSessionOkByMethod{methodIdx} = nan(numel(txPackets), 1);
+            packetReliabilityByMethod{methodIdx} = zeros(numel(txPackets), 1);
             sessionCtxByMethod{methodIdx} = rx_build_session_context(struct(), session_transport_mode(runtimeCfg.frame), "none");
         end
 
@@ -109,11 +115,13 @@ for pointIdx = 1:nPoints
                     "sessionCtx", sessionCtxByMethod{methodIdx}, ...
                     "windowStartSample", double(rxCursor));
                 rxPacket = local_run_profile_packet_rx_local(profileName, rxWindow, txArtifacts, rxCfg);
-                rxPayloadByMethod{methodIdx}{pktIdx} = rxPacket.payloadBits;
+                rxPayloadByMethod{methodIdx}{pktIdx} = local_prepare_plain_packet_payload_local( ...
+                    rxPacket.payloadBits, txPacket, txArtifacts, runtimeCfg, "known", 0);
                 rawPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.rawPacketOk);
                 frontPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.frontEndOk);
                 phyHeaderPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.phyHeaderOk);
                 headerPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.headerOk);
+                packetReliabilityByMethod{methodIdx}(pktIdx) = local_packet_reliability_local(rxPacket);
                 if logical(rxPacket.packetSessionRequired)
                     packetSessionOkByMethod{methodIdx}(pktIdx) = double(rxPacket.packetSessionOk);
                 end
@@ -133,29 +141,34 @@ for pointIdx = 1:nPoints
                 txPackets, ...
                 numel(txArtifacts.payloadAssist.payloadBitsPlain), ...
                 double(runtimeCfg.packet.payloadBitsPerPacket), ...
-                runtimeCfg.outerRs);
+                runtimeCfg.outerRs, ...
+                packetReliabilityByMethod{methodIdx});
 
             payloadBitsOut = fit_bits_length(payloadBitsOut, numel(txArtifacts.payloadAssist.payloadBitsPlain));
             payloadBitsOut = local_apply_payload_security_postprocess_local( ...
                 payloadBitsOut, txArtifacts, runtimeCfg, "known", 0);
             payloadLast{methodIdx, pointIdx} = payloadBitsOut;
+            sessionCtxLast{methodIdx, pointIdx} = sessionCtxByMethod{methodIdx};
             frameBer(methodIdx, frameIdx) = mean(double(payloadBitsOut ~= txArtifacts.payloadAssist.payloadBitsPlain));
             frameRawSuccess(methodIdx, frameIdx) = double(rsInfo.rawDataPacketSuccessRate);
             framePayloadSuccess(methodIdx, frameIdx) = double(rsInfo.effectiveDataPacketSuccessRate);
+            frameExactOk(methodIdx, frameIdx) = double(all(payloadBitsOut == txArtifacts.payloadAssist.payloadBitsPlain));
             frameFrontEnd(methodIdx, frameIdx) = mean(double(frontPacketOkByMethod{methodIdx}));
             framePhyHeader(methodIdx, frameIdx) = mean(double(phyHeaderPacketOkByMethod{methodIdx}));
             frameHeader(methodIdx, frameIdx) = mean(double(headerPacketOkByMethod{methodIdx}));
             framePacketSession(methodIdx, frameIdx) = local_mean_omit_nan_local(packetSessionOkByMethod{methodIdx}, 1);
             frameMetrics = local_store_frame_image_metrics_local(frameMetrics, methodIdx, frameIdx, ...
-                payloadBitsOut, txArtifacts, runtimeCfg);
+                payloadBitsOut, txArtifacts, runtimeCfg, sessionCtxByMethod{methodIdx});
         end
     end
 
     ber(:, pointIdx) = local_mean_omit_nan_local(frameBer, 2);
     rawPayloadSuccess(:, pointIdx) = local_mean_omit_nan_local(frameRawSuccess, 2);
     payloadSuccess(:, pointIdx) = local_mean_omit_nan_local(framePayloadSuccess, 2);
+    exactFrameSuccess(:, pointIdx) = local_mean_omit_nan_local(frameExactOk, 2);
     rawPer(:, pointIdx) = max(min(1 - rawPayloadSuccess(:, pointIdx), 1), 0);
     per(:, pointIdx) = max(min(1 - payloadSuccess(:, pointIdx), 1), 0);
+    perExact(:, pointIdx) = max(min(1 - exactFrameSuccess(:, pointIdx), 1), 0);
     frontEndByMethod(:, pointIdx) = local_mean_omit_nan_local(frameFrontEnd, 2);
     phyHeaderByMethod(:, pointIdx) = local_mean_omit_nan_local(framePhyHeader, 2);
     headerByMethod(:, pointIdx) = local_mean_omit_nan_local(frameHeader, 2);
@@ -171,6 +184,7 @@ results.jsrDb = double(budget.bob.jsrDb(:).');
 results.ber = ber;
 results.rawPer = rawPer;
 results.per = per;
+results.perExact = perExact;
 results.params = runtimeCfg;
 results.linkSpec = linkSpec;
 results.runtime = struct( ...
@@ -197,14 +211,15 @@ results.packetDiagnostics.bob = struct( ...
     "sessionTransportSuccessRateByMethod", sessionTransportByMethod, ...
     "packetSessionSuccessRateByMethod", packetSessionByMethod, ...
     "rawPayloadSuccessRate", rawPayloadSuccess, ...
-    "payloadSuccessRate", payloadSuccess);
+    "payloadSuccessRate", payloadSuccess, ...
+    "exactFrameSuccessRate", exactFrameSuccess);
 results.imageMetrics = local_finalize_image_metrics_local(metricAcc);
 results.sourceImages = struct( ...
     "original", txArtifacts.commonMeta.sourceImageOriginal, ...
     "resized", txArtifacts.commonMeta.sourceImage);
 results.kl = local_build_kl_report_local(budget, txArtifacts);
 results.spectrum = local_build_spectrum_report_local(runtimeCfg, txArtifacts);
-results.example = local_build_example_outputs_local(results, payloadLast, txArtifacts, runtimeCfg);
+results.example = local_build_example_outputs_local(results, payloadLast, sessionCtxLast, txArtifacts, runtimeCfg);
 results.rxResults = struct();
 results.rxResults.bob = local_build_standardized_rx_results_local(results, payloadLast);
 results.commonDiagnostics = struct( ...
@@ -508,11 +523,11 @@ metricAcc.resizedCompPsnr = nan(nMethods, nPoints);
 metricAcc.resizedCompSsim = nan(nMethods, nPoints);
 end
 
-function metricAcc = local_store_frame_image_metrics_local(metricAcc, methodIdx, frameIdx, payloadBitsOut, txArtifacts, runtimeCfg)
-payloadMeta = txArtifacts.payloadAssist.payloadMeta;
+function metricAcc = local_store_frame_image_metrics_local(metricAcc, methodIdx, frameIdx, payloadBitsOut, txArtifacts, runtimeCfg, sessionCtx)
+[payloadMeta, payloadCfg] = resolve_payload_decode_inputs(sessionCtx, txArtifacts, runtimeCfg.payload);
 imgTx = txArtifacts.commonMeta.sourceImage;
 imgTxOriginal = txArtifacts.commonMeta.sourceImageOriginal;
-imgRxResized = payload_bits_to_image(payloadBitsOut, payloadMeta, runtimeCfg.payload);
+imgRxResized = payload_bits_to_image(payloadBitsOut, payloadMeta, payloadCfg);
 imgRxOriginal = imgRxResized;
 if ~isequal(size(imgRxOriginal), size(imgTxOriginal))
     imgRxOriginal = imresize(imgRxResized, [size(imgTxOriginal, 1), size(imgTxOriginal, 2)]);
@@ -587,6 +602,7 @@ rxResults = repmat(struct( ...
     "headerOk", false(1, 0), ...
     "packetOk", false(1, 0), ...
     "rawPacketOk", false(1, 0), ...
+    "frameExactOk", false(1, 0), ...
     "payloadBits", uint8([]), ...
     "metrics", struct(), ...
     "commonDiagnostics", struct(), ...
@@ -597,6 +613,7 @@ for idx = 1:nMethods
     rxResults(idx).headerOk = double(results.packetDiagnostics.bob.headerSuccessRateByMethod(idx, :)) >= 1 - 1e-12;
     rxResults(idx).packetOk = double(1 - results.per(idx, :)) >= 1 - 1e-12;
     rxResults(idx).rawPacketOk = double(1 - results.rawPer(idx, :)) >= 1 - 1e-12;
+    rxResults(idx).frameExactOk = double(1 - local_optional_result_metric_local(results, "perExact", idx)) >= 1 - 1e-12;
     if lastPoint >= 1 && ~isempty(payloadLast{idx, lastPoint})
         rxResults(idx).payloadBits = uint8(payloadLast{idx, lastPoint});
     else
@@ -607,16 +624,46 @@ for idx = 1:nMethods
         "jsrDb", results.jsrDb, ...
         "ber", results.ber(idx, :), ...
         "rawPer", results.rawPer(idx, :), ...
-        "per", results.per(idx, :));
+        "per", results.per(idx, :), ...
+        "perExact", local_optional_result_metric_local(results, "perExact", idx));
     rxResults(idx).commonDiagnostics = struct( ...
         "frontEndSuccessRate", results.packetDiagnostics.bob.frontEndSuccessRateByMethod(idx, :), ...
         "headerSuccessRate", results.packetDiagnostics.bob.headerSuccessRateByMethod(idx, :), ...
-        "sessionSuccessRate", results.packetDiagnostics.bob.sessionSuccessRateByMethod(idx, :));
+        "sessionSuccessRate", results.packetDiagnostics.bob.sessionSuccessRateByMethod(idx, :), ...
+        "exactFrameSuccessRate", local_optional_packet_diag_metric_local(results.packetDiagnostics.bob, "exactFrameSuccessRate", idx));
     rxResults(idx).profileDiagnostics = struct( ...
         "profileName", string(results.linkSpec.linkProfile.name), ...
         "receiver", string(results.linkSpec.linkProfile.rxChain), ...
         "backend", "continuous_burst_v2", ...
         "role", "bob");
+end
+end
+
+function packetReliability = local_packet_reliability_local(rxPacket)
+packetReliability = 0;
+if isstruct(rxPacket) && isfield(rxPacket, "packetReliability") ...
+        && isfinite(double(rxPacket.packetReliability))
+    packetReliability = double(rxPacket.packetReliability);
+elseif isstruct(rxPacket) && isfield(rxPacket, "metrics") && isstruct(rxPacket.metrics) ...
+        && isfield(rxPacket.metrics, "packetReliability") && isfinite(double(rxPacket.metrics.packetReliability))
+    packetReliability = double(rxPacket.metrics.packetReliability);
+end
+packetReliability = max(min(packetReliability, 1), 0);
+end
+
+function values = local_optional_result_metric_local(results, fieldName, methodIdx)
+if isfield(results, fieldName) && ~isempty(results.(fieldName))
+    values = results.(fieldName)(methodIdx, :);
+else
+    values = nan(1, numel(results.ebN0dB));
+end
+end
+
+function values = local_optional_packet_diag_metric_local(diagStruct, fieldName, methodIdx)
+if isfield(diagStruct, fieldName) && ~isempty(diagStruct.(fieldName))
+    values = diagStruct.(fieldName)(methodIdx, :);
+else
+    values = nan(1, size(diagStruct.frontEndSuccessRateByMethod, 2));
 end
 end
 
@@ -654,7 +701,7 @@ local_validate_eve_extension_cfg_local(eveCfg);
 eveBudget = local_offset_budget_from_bob_local(budget.bob, double(eveCfg.linkGainOffsetDb));
 rxDiversityCfg = eveCfg.rxDiversity;
 
-[roleMetrics, payloadLast] = local_decode_role_metrics_local( ...
+[roleMetrics, payloadLast, sessionCtxLast] = local_decode_role_metrics_local( ...
     "eve", linkSpec, runtimeCfg, txArtifacts, budget, eveBudget, waveform, profileName, methods, rxDiversityCfg, eveCfg.assumptions, 200000);
 
 eveResults = struct();
@@ -665,6 +712,7 @@ eveResults.scan = local_build_scan_struct_local(budget);
 eveResults.ber = roleMetrics.ber;
 eveResults.rawPer = roleMetrics.rawPer;
 eveResults.per = roleMetrics.per;
+eveResults.perExact = roleMetrics.perExact;
 eveResults.packetDiagnostics = struct( ...
     "frontEndSuccessRate", max(roleMetrics.frontEndByMethod, [], 1), ...
     "phyHeaderSuccessRate", max(roleMetrics.phyHeaderByMethod, [], 1), ...
@@ -679,7 +727,8 @@ eveResults.packetDiagnostics = struct( ...
     "sessionTransportSuccessRateByMethod", roleMetrics.sessionTransportByMethod, ...
     "packetSessionSuccessRateByMethod", roleMetrics.packetSessionByMethod, ...
     "rawPayloadSuccessRate", roleMetrics.rawPayloadSuccess, ...
-    "payloadSuccessRate", roleMetrics.payloadSuccess);
+    "payloadSuccessRate", roleMetrics.payloadSuccess, ...
+    "exactFrameSuccessRate", roleMetrics.exactFrameSuccess);
 eveResults.imageMetrics = local_finalize_image_metrics_local(roleMetrics.imageMetricAcc);
 eveResults.assumptions = eveCfg.assumptions;
 eveResults.receiver = struct( ...
@@ -687,7 +736,7 @@ eveResults.receiver = struct( ...
     "methods", methods, ...
     "profileName", profileName);
 eveResults.example = local_build_example_outputs_local( ...
-    local_make_role_result_for_examples_local(eveResults, linkSpec), payloadLast, txArtifacts, runtimeCfg);
+    local_make_role_result_for_examples_local(eveResults, linkSpec), payloadLast, sessionCtxLast, txArtifacts, runtimeCfg);
 eveResults.rxResults = local_build_role_standardized_rx_results_local(eveResults, payloadLast, linkSpec, "eve");
 end
 
@@ -727,7 +776,7 @@ end
 rx_validate_diversity_cfg(eveCfg.rxDiversity, "extensions.eve.rxDiversity");
 end
 
-function [roleMetrics, payloadLast] = local_decode_role_metrics_local( ...
+function [roleMetrics, payloadLast, sessionCtxLast] = local_decode_role_metrics_local( ...
     roleName, ~, runtimeCfg, txArtifacts, budget, roleBudget, waveform, profileName, methods, rxDiversityCfg, roleAssumptions, seedOffset)
 txPackets = txArtifacts.packetAssist.txPackets;
 nMethods = numel(methods);
@@ -738,6 +787,7 @@ roleMetrics = struct();
 roleMetrics.ber = nan(nMethods, nPoints);
 roleMetrics.rawPer = nan(nMethods, nPoints);
 roleMetrics.per = nan(nMethods, nPoints);
+roleMetrics.perExact = nan(nMethods, nPoints);
 roleMetrics.frontEndByMethod = nan(nMethods, nPoints);
 roleMetrics.phyHeaderByMethod = nan(nMethods, nPoints);
 roleMetrics.headerByMethod = nan(nMethods, nPoints);
@@ -745,8 +795,10 @@ roleMetrics.sessionTransportByMethod = nan(nMethods, nPoints);
 roleMetrics.packetSessionByMethod = nan(nMethods, nPoints);
 roleMetrics.rawPayloadSuccess = nan(nMethods, nPoints);
 roleMetrics.payloadSuccess = nan(nMethods, nPoints);
+roleMetrics.exactFrameSuccess = nan(nMethods, nPoints);
 roleMetrics.imageMetricAcc = local_init_image_metric_acc_local(nMethods, nPoints);
 payloadLast = cell(nMethods, nPoints);
+sessionCtxLast = cell(nMethods, nPoints);
 
 for pointIdx = 1:nPoints
     frameBer = nan(nMethods, nFrames);
@@ -757,6 +809,7 @@ for pointIdx = 1:nPoints
     frameHeader = nan(nMethods, nFrames);
     frameSessionTransport = nan(nMethods, nFrames);
     framePacketSession = nan(nMethods, nFrames);
+    frameExactOk = nan(nMethods, nFrames);
     frameMetrics = local_init_image_metric_acc_local(nMethods, nFrames);
 
     pointChannel = local_build_point_channel_local(runtimeCfg, budget, pointIdx, waveform);
@@ -771,6 +824,7 @@ for pointIdx = 1:nPoints
         phyHeaderPacketOkByMethod = cell(nMethods, 1);
         headerPacketOkByMethod = cell(nMethods, 1);
         packetSessionOkByMethod = cell(nMethods, 1);
+        packetReliabilityByMethod = cell(nMethods, 1);
         sessionCtxByMethod = cell(nMethods, 1);
         rxCursorByMethod = repmat(local_initial_packet_cursor_local(txArtifacts), nMethods, 1);
         for methodIdx = 1:nMethods
@@ -780,6 +834,7 @@ for pointIdx = 1:nPoints
             phyHeaderPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
             headerPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
             packetSessionOkByMethod{methodIdx} = nan(numel(txPackets), 1);
+            packetReliabilityByMethod{methodIdx} = zeros(numel(txPackets), 1);
             sessionCtxByMethod{methodIdx} = rx_build_session_context(struct(), session_transport_mode(runtimeCfg.frame), "none");
         end
 
@@ -821,11 +876,14 @@ for pointIdx = 1:nPoints
                     "windowStartSample", double(rxCursor), ...
                     "receiverRole", string(roleName));
                 rxPacket = local_run_profile_packet_rx_local(profileName, rxWindow, txArtifacts, rxCfg);
-                rxPayloadByMethod{methodIdx}{pktIdx} = rxPacket.payloadBits;
+                rxPayloadByMethod{methodIdx}{pktIdx} = local_prepare_plain_packet_payload_local( ...
+                    rxPacket.payloadBits, txPacket, txArtifacts, runtimeCfg, ...
+                    string(roleAssumptions.chaos), double(roleAssumptions.chaosApproxDelta));
                 rawPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.rawPacketOk);
                 frontPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.frontEndOk);
                 phyHeaderPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.phyHeaderOk);
                 headerPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.headerOk);
+                packetReliabilityByMethod{methodIdx}(pktIdx) = local_packet_reliability_local(rxPacket);
                 if logical(rxPacket.packetSessionRequired)
                     packetSessionOkByMethod{methodIdx}(pktIdx) = double(rxPacket.packetSessionOk);
                 end
@@ -845,29 +903,34 @@ for pointIdx = 1:nPoints
                 txPackets, ...
                 numel(txArtifacts.payloadAssist.payloadBitsPlain), ...
                 double(runtimeCfg.packet.payloadBitsPerPacket), ...
-                runtimeCfg.outerRs);
+                runtimeCfg.outerRs, ...
+                packetReliabilityByMethod{methodIdx});
             payloadBitsOut = fit_bits_length(payloadBitsOut, numel(txArtifacts.payloadAssist.payloadBitsPlain));
             payloadBitsOut = local_apply_payload_security_postprocess_local( ...
                 payloadBitsOut, txArtifacts, runtimeCfg, ...
                 string(roleAssumptions.chaos), double(roleAssumptions.chaosApproxDelta));
             payloadLast{methodIdx, pointIdx} = payloadBitsOut;
+            sessionCtxLast{methodIdx, pointIdx} = sessionCtxByMethod{methodIdx};
             frameBer(methodIdx, frameIdx) = mean(double(payloadBitsOut ~= txArtifacts.payloadAssist.payloadBitsPlain));
             frameRawSuccess(methodIdx, frameIdx) = double(rsInfo.rawDataPacketSuccessRate);
             framePayloadSuccess(methodIdx, frameIdx) = double(rsInfo.effectiveDataPacketSuccessRate);
+            frameExactOk(methodIdx, frameIdx) = double(all(payloadBitsOut == txArtifacts.payloadAssist.payloadBitsPlain));
             frameFrontEnd(methodIdx, frameIdx) = mean(double(frontPacketOkByMethod{methodIdx}));
             framePhyHeader(methodIdx, frameIdx) = mean(double(phyHeaderPacketOkByMethod{methodIdx}));
             frameHeader(methodIdx, frameIdx) = mean(double(headerPacketOkByMethod{methodIdx}));
             framePacketSession(methodIdx, frameIdx) = local_mean_omit_nan_local(packetSessionOkByMethod{methodIdx}, 1);
             frameMetrics = local_store_frame_image_metrics_local(frameMetrics, methodIdx, frameIdx, ...
-                payloadBitsOut, txArtifacts, runtimeCfg);
+                payloadBitsOut, txArtifacts, runtimeCfg, sessionCtxByMethod{methodIdx});
         end
     end
 
     roleMetrics.ber(:, pointIdx) = local_mean_omit_nan_local(frameBer, 2);
     roleMetrics.rawPayloadSuccess(:, pointIdx) = local_mean_omit_nan_local(frameRawSuccess, 2);
     roleMetrics.payloadSuccess(:, pointIdx) = local_mean_omit_nan_local(framePayloadSuccess, 2);
+    roleMetrics.exactFrameSuccess(:, pointIdx) = local_mean_omit_nan_local(frameExactOk, 2);
     roleMetrics.rawPer(:, pointIdx) = max(min(1 - roleMetrics.rawPayloadSuccess(:, pointIdx), 1), 0);
     roleMetrics.per(:, pointIdx) = max(min(1 - roleMetrics.payloadSuccess(:, pointIdx), 1), 0);
+    roleMetrics.perExact(:, pointIdx) = max(min(1 - roleMetrics.exactFrameSuccess(:, pointIdx), 1), 0);
     roleMetrics.frontEndByMethod(:, pointIdx) = local_mean_omit_nan_local(frameFrontEnd, 2);
     roleMetrics.phyHeaderByMethod(:, pointIdx) = local_mean_omit_nan_local(framePhyHeader, 2);
     roleMetrics.headerByMethod(:, pointIdx) = local_mean_omit_nan_local(frameHeader, 2);
@@ -993,6 +1056,9 @@ exampleResults.jsrDb = roleResults.jsrDb;
 exampleResults.ber = roleResults.ber;
 exampleResults.rawPer = roleResults.rawPer;
 exampleResults.per = roleResults.per;
+if isfield(roleResults, "perExact")
+    exampleResults.perExact = roleResults.perExact;
+end
 exampleResults.packetDiagnostics = struct("bob", roleResults.packetDiagnostics);
 exampleResults.linkSpec = linkSpec;
 end
@@ -1015,42 +1081,95 @@ if ~(isfield(txArtifacts, "payloadAssist") && isstruct(txArtifacts.payloadAssist
         && isfield(txArtifacts.payloadAssist, "packetIndependentBitChaos"))
     error("txArtifacts.payloadAssist.packetIndependentBitChaos is required when chaosEncrypt is enabled.");
 end
-if ~logical(txArtifacts.payloadAssist.packetIndependentBitChaos)
-    error("Refactored payload security postprocess requires packetIndependentBitChaos=true.");
+if logical(txArtifacts.payloadAssist.packetIndependentBitChaos)
+    return;
 end
-payloadBitsOut = decrypt_payload_packets( ...
-    payloadBitsOut, local_data_packet_mask_local(txArtifacts.packetAssist.txPackets), ...
-    txArtifacts.packetAssist.txPackets, string(chaosAssumption), double(chaosApproxDelta));
+if ~(isfield(txArtifacts.payloadAssist, "chaosInfo") && isstruct(txArtifacts.payloadAssist.chaosInfo) ...
+        && isfield(txArtifacts.payloadAssist.chaosInfo, "enabled") && logical(txArtifacts.payloadAssist.chaosInfo.enabled))
+    error("Whole-payload chaos mode requires txArtifacts.payloadAssist.chaosInfo.enabled=true.");
+end
+chaosAssumption = lower(string(chaosAssumption));
+if chaosAssumption == "none"
+    return;
+end
+infoUse = txArtifacts.payloadAssist.chaosInfo;
+if chaosAssumption == "wrong_key"
+    infoUse = perturb_chaos_enc_info(infoUse, 7e-10);
+elseif chaosAssumption == "approximate"
+    infoUse = perturb_chaos_enc_info(infoUse, double(chaosApproxDelta));
+elseif chaosAssumption ~= "known"
+    error("Unknown chaos assumption: %s", chaosAssumption);
+end
+if ~(isfield(infoUse, "mode") && lower(string(infoUse.mode)) == "payload_bits")
+    error("Whole-payload chaos postprocess only supports chaosInfo.mode='payload_bits'.");
+end
+payloadBitsOut = chaos_decrypt_bits(payloadBitsOut, infoUse);
 end
 
-function packetMask = local_data_packet_mask_local(txPackets)
-packetMask = false(numel(txPackets), 1);
-for pktIdx = 1:numel(txPackets)
-    packetMask(pktIdx) = isfield(txPackets(pktIdx), "isDataPacket") && logical(txPackets(pktIdx).isDataPacket);
+function payloadBitsOut = local_prepare_plain_packet_payload_local( ...
+        payloadBitsIn, txPacket, txArtifacts, runtimeCfg, chaosAssumption, chaosApproxDelta)
+payloadBitsOut = uint8(payloadBitsIn(:) ~= 0);
+if isempty(payloadBitsOut)
+    return;
 end
+if ~(isfield(runtimeCfg, "chaosEncrypt") && isstruct(runtimeCfg.chaosEncrypt) ...
+        && isfield(runtimeCfg.chaosEncrypt, "enable") && logical(runtimeCfg.chaosEncrypt.enable))
+    return;
+end
+if ~(isfield(txArtifacts, "payloadAssist") && isstruct(txArtifacts.payloadAssist) ...
+        && isfield(txArtifacts.payloadAssist, "packetIndependentBitChaos") ...
+        && logical(txArtifacts.payloadAssist.packetIndependentBitChaos))
+    return;
+end
+if ~(isfield(txPacket, "chaosEncInfo") && isstruct(txPacket.chaosEncInfo) ...
+        && isfield(txPacket.chaosEncInfo, "enabled") && logical(txPacket.chaosEncInfo.enabled))
+    return;
 end
 
-function example = local_build_example_outputs_local(results, payloadLast, txArtifacts, runtimeCfg)
+chaosAssumption = lower(string(chaosAssumption));
+if chaosAssumption == "none"
+    return;
+end
+infoUse = txPacket.chaosEncInfo;
+if chaosAssumption == "wrong_key"
+    infoUse = perturb_chaos_enc_info(infoUse, local_wrong_key_delta_local(double(txPacket.packetIndex)));
+elseif chaosAssumption == "approximate"
+    infoUse = perturb_chaos_enc_info(infoUse, double(chaosApproxDelta));
+elseif chaosAssumption ~= "known"
+    error("Unknown packet chaos assumption: %s", chaosAssumption);
+end
+payloadBitsOut = chaos_decrypt_bits(payloadBitsOut, infoUse);
+end
+
+function delta = local_wrong_key_delta_local(pktIdx)
+delta = 7e-10 * (double(pktIdx) + 1);
+end
+
+function example = local_build_example_outputs_local(results, payloadLast, sessionCtxLast, txArtifacts, runtimeCfg)
 nPoints = numel(results.ebN0dB);
 nMethods = numel(results.methods);
-payloadMeta = txArtifacts.payloadAssist.payloadMeta;
 imgTxOriginal = txArtifacts.commonMeta.sourceImageOriginal;
 example = repmat(struct("methods", struct()), nPoints, 1);
 for pointIdx = 1:nPoints
     methodsStruct = struct();
     for methodIdx = 1:nMethods
         payloadBits = payloadLast{methodIdx, pointIdx};
+        [payloadMeta, payloadCfg] = resolve_payload_decode_inputs( ...
+            sessionCtxLast{methodIdx, pointIdx}, txArtifacts, runtimeCfg.payload);
         if isempty(payloadBits)
             imgRxResized = zeros(size(txArtifacts.commonMeta.sourceImage), "uint8");
         else
-            imgRxResized = payload_bits_to_image(payloadBits, payloadMeta, runtimeCfg.payload);
+            imgRxResized = payload_bits_to_image(payloadBits, payloadMeta, payloadCfg);
         end
         imgRx = imgRxResized;
         if ~isequal(size(imgRx), size(imgTxOriginal))
             imgRx = imresize(imgRxResized, [size(imgTxOriginal, 1), size(imgTxOriginal, 2)]);
         end
         methodsStruct.(char(results.methods(methodIdx))) = struct( ...
+            "imgRxResized", imgRxResized, ...
             "imgRx", imgRx, ...
+            "imgRxCommResized", imgRxResized, ...
+            "imgRxCompensatedResized", imgRxResized, ...
             "imgRxComm", imgRx, ...
             "imgRxCompensated", imgRx, ...
             "packetSuccessRate", double(1 - results.per(methodIdx, pointIdx)), ...

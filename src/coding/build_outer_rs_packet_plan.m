@@ -1,7 +1,6 @@
-function plan = build_outer_rs_packet_plan(payloadBits, pktBitsPerPacket, rsCfg)
-%BUILD_OUTER_RS_PACKET_PLAN  Build systematic packet-level RS layout.
+function plan = build_outer_rs_packet_plan(payloadBitsOrSegments, pktBitsPerPacket, rsCfg)
+%BUILD_OUTER_RS_PACKET_PLAN Build systematic packet-level RS layout.
 
-payloadBits = uint8(payloadBits(:) ~= 0);
 pktBitsPerPacket = round(double(pktBitsPerPacket));
 if pktBitsPerPacket <= 0 || mod(pktBitsPerPacket, 8) ~= 0
     error("pktBitsPerPacket 必须是正的8整数倍。");
@@ -9,15 +8,8 @@ end
 
 rsCfg = resolve_outer_rs_cfg(rsCfg);
 pktBytesPerPacket = pktBitsPerPacket / 8;
-totalBits = numel(payloadBits);
-nDataPackets = max(1, ceil(totalBits / pktBitsPerPacket));
-
-payloadData = cell(nDataPackets, 1);
-for dataIdx = 1:nDataPackets
-    startBit = (dataIdx - 1) * pktBitsPerPacket + 1;
-    endBit = min(dataIdx * pktBitsPerPacket, totalBits);
-    payloadData{dataIdx} = payloadBits(startBit:endBit);
-end
+[segments, totalBits] = local_normalize_segments_local(payloadBitsOrSegments, pktBitsPerPacket);
+nDataPackets = numel(segments);
 
 packetTemplate = struct( ...
     "packetIndex", uint16(0), ...
@@ -31,18 +23,23 @@ packetTemplate = struct( ...
     "blockLocalParityIndex", uint16(0), ...
     "startBit", 0, ...
     "endBit", 0, ...
-    "payloadBitsPlain", uint8([]));
+    "payloadBitsPlain", uint8([]), ...
+    "segmentBytes", uint16(0), ...
+    "tileIndex", uint16(0), ...
+    "tileSegmentIndex", uint16(0), ...
+    "tileOffsetBytes", uint32(0), ...
+    "tileBytesTotal", uint32(0), ...
+    "isTileStart", false, ...
+    "isTileEnd", false);
 packetSpecs = repmat(packetTemplate, 0, 1);
 
 nextTxIndex = 1;
 nextDataIndex = 1;
-nextStartBit = 1;
 blockIndex = 0;
 totalParityPackets = 0;
 
 while nextDataIndex <= nDataPackets
     blockIndex = blockIndex + 1;
-    kBlock = 1;
     if rsCfg.enable
         kBlock = min(rsCfg.dataPacketsPerBlock, nDataPackets - nextDataIndex + 1);
     else
@@ -52,9 +49,8 @@ while nextDataIndex <= nDataPackets
     dataBytes = zeros(kBlock, pktBytesPerPacket, "uint8");
     for localDataIdx = 1:kBlock
         sourcePacketIndex = nextDataIndex + localDataIdx - 1;
-        payloadBitsNow = payloadData{sourcePacketIndex};
-        startBit = nextStartBit;
-        endBit = nextStartBit + numel(payloadBitsNow) - 1;
+        segNow = segments(sourcePacketIndex);
+        payloadBitsNow = segNow.payloadBits;
 
         spec = packetTemplate;
         spec.packetIndex = uint16(nextTxIndex);
@@ -66,15 +62,21 @@ while nextDataIndex <= nDataPackets
         spec.blockParityCount = uint16(rsCfg.parityPacketsPerBlock);
         spec.blockLocalDataIndex = uint16(localDataIdx);
         spec.blockLocalParityIndex = uint16(0);
-        spec.startBit = startBit;
-        spec.endBit = endBit;
+        spec.startBit = segNow.startBit;
+        spec.endBit = segNow.endBit;
         spec.payloadBitsPlain = payloadBitsNow;
+        spec.segmentBytes = uint16(segNow.segmentBytes);
+        spec.tileIndex = uint16(segNow.tileIndex);
+        spec.tileSegmentIndex = uint16(segNow.tileSegmentIndex);
+        spec.tileOffsetBytes = uint32(segNow.tileOffsetBytes);
+        spec.tileBytesTotal = uint32(segNow.tileBytesTotal);
+        spec.isTileStart = logical(segNow.isTileStart);
+        spec.isTileEnd = logical(segNow.isTileEnd);
         packetSpecs(end+1, 1) = spec; %#ok<AGROW>
 
         dataBytes(localDataIdx, :) = bits_to_uint( ...
             fit_bits_length(payloadBitsNow, pktBitsPerPacket), "uint8vec").';
         nextTxIndex = nextTxIndex + 1;
-        nextStartBit = endBit + 1;
     end
 
     if rsCfg.enable
@@ -115,6 +117,50 @@ plan.totalTxPacketCount = numel(packetSpecs);
 plan.dataPacketsPerBlock = rsCfg.dataPacketsPerBlock;
 plan.parityPacketsPerBlock = rsCfg.parityPacketsPerBlock;
 plan.packetSpecs = packetSpecs;
+end
+
+function [segments, totalBits] = local_normalize_segments_local(payloadBitsOrSegments, pktBitsPerPacket)
+if isstruct(payloadBitsOrSegments)
+    if isfield(payloadBitsOrSegments, "segments")
+        segments = payloadBitsOrSegments.segments(:);
+    else
+        segments = payloadBitsOrSegments(:);
+    end
+    if isempty(segments)
+        error("build_outer_rs_packet_plan requires at least one payload segment.");
+    end
+    required = ["startBit" "endBit" "payloadBits"];
+    for idx = 1:numel(required)
+        if ~isfield(segments, required(idx))
+            error("Payload segment is missing field %s.", required(idx));
+        end
+    end
+    totalBits = double(segments(end).endBit);
+    return;
+end
+
+payloadBits = uint8(payloadBitsOrSegments(:) ~= 0);
+totalBits = numel(payloadBits);
+nSegments = max(1, ceil(totalBits / pktBitsPerPacket));
+segments = repmat(struct( ...
+    "startBit", 0, ...
+    "endBit", 0, ...
+    "payloadBits", uint8([]), ...
+    "segmentBytes", uint16(0), ...
+    "tileIndex", uint16(0), ...
+    "tileSegmentIndex", uint16(0), ...
+    "tileOffsetBytes", uint32(0), ...
+    "tileBytesTotal", uint32(0), ...
+    "isTileStart", false, ...
+    "isTileEnd", false), nSegments, 1);
+for segIdx = 1:nSegments
+    startBit = (segIdx - 1) * pktBitsPerPacket + 1;
+    endBit = min(segIdx * pktBitsPerPacket, totalBits);
+    segments(segIdx).startBit = startBit;
+    segments(segIdx).endBit = endBit;
+    segments(segIdx).payloadBits = payloadBits(startBit:endBit);
+    segments(segIdx).segmentBytes = uint16(ceil((endBit - startBit + 1) / 8));
+end
 end
 
 function packetSpecsOut = local_interleave_packets_across_blocks_local(packetSpecsIn)

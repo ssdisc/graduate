@@ -28,6 +28,9 @@ end
 imageMetrics = local_get_image_metrics(results);
 s.berAtMaxEbN0 = results.ber(:, end);
 s.perAtMaxEbN0 = results.per(:, end);
+if isfield(results, "perExact")
+    s.perExactAtMaxEbN0 = results.perExact(:, end);
+end
 s.originalCommMseAtMaxEbN0 = imageMetrics.original.communication.mse(:, end);
 s.originalCommPsnrAtMaxEbN0 = imageMetrics.original.communication.psnr(:, end);
 s.originalCommSsimAtMaxEbN0 = imageMetrics.original.communication.ssim(:, end);
@@ -56,6 +59,9 @@ if isfield(results, "packetDiagnostics") && isfield(results.packetDiagnostics, "
     end
     if isfield(bobDiag, "payloadSuccessRate")
         s.payloadSuccessRateAtMaxEbN0 = bobDiag.payloadSuccessRate(:, end);
+    end
+    if isfield(bobDiag, "exactFrameSuccessRate")
+        s.exactFrameSuccessRateAtMaxEbN0 = bobDiag.exactFrameSuccessRate(:, end);
     end
 end
 s.klSymAtMaxEbN0 = results.kl.symmetric(end);
@@ -87,6 +93,9 @@ if isfield(results, "eve")
     imageMetricsEve = local_get_image_metrics(results.eve);
     s.eveBerAtMaxEbN0 = results.eve.ber(:, end);
     s.evePerAtMaxEbN0 = results.eve.per(:, end);
+    if isfield(results.eve, "perExact")
+        s.evePerExactAtMaxEbN0 = results.eve.perExact(:, end);
+    end
     s.eveOriginalCommMseAtMaxEbN0 = imageMetricsEve.original.communication.mse(:, end);
     s.eveOriginalCommPsnrAtMaxEbN0 = imageMetricsEve.original.communication.psnr(:, end);
     s.eveOriginalCommSsimAtMaxEbN0 = imageMetricsEve.original.communication.ssim(:, end);
@@ -109,6 +118,9 @@ if isfield(results, "eve")
         end
         if isfield(eveDiag, "payloadSuccessRate")
             s.evePayloadSuccessRateAtMaxEbN0 = eveDiag.payloadSuccessRate(:, end);
+        end
+        if isfield(eveDiag, "exactFrameSuccessRate")
+            s.eveExactFrameSuccessRateAtMaxEbN0 = eveDiag.exactFrameSuccessRate(:, end);
         end
     end
 end

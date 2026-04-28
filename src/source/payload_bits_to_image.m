@@ -6,8 +6,9 @@ function img = payload_bits_to_image(bits, meta, payload)
 %   meta - 图像元数据结构体
 %          .rows, .cols, .channels
 %   payload - 载荷配置结构体
-%             .codec - 'raw' | 'dct' | 'toolbox_image'
+%             .codec - 'raw' | 'dct' | 'toolbox_image' | 'tile_jp2'
 %             .dct   - DCT解压配置（codec='dct'）
+%             .tileJp2 - 分块JPEG 2000配置（codec='tile_jp2'）
 %             .toolboxImage - imwrite/imread工具箱压缩配置（codec='toolbox_image'）
 %
 % 输出:
@@ -31,6 +32,8 @@ switch codec
         img = raw_decode(bytes, meta);
     case "dct"
         img = dct_decode_bytes(bytes, meta, codecCfg.dct);
+    case "tile_jp2"
+        img = tile_jp2_decode_bytes(bytes, meta, codecCfg.tileJp2);
     case "toolbox_image"
         img = toolbox_image_decode_bytes(bytes, meta, codecCfg.toolboxImage);
     otherwise

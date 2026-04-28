@@ -19,13 +19,14 @@ end
 headerResult = rx_decode_common_phy_header(ctx, headerSym);
 packetDataBitsRx = uint8([]);
 symbolReliabilityData = zeros(0, 1);
+decodeDiag = struct();
 profileDiag = struct();
 if frontEndDiag.ok && headerResult.ok
-    [packetDataBitsRx, symbolReliabilityData] = local_decode_impulse_payload_local(ctx, dataSym, symbolReliability);
+    [packetDataBitsRx, symbolReliabilityData, decodeDiag] = local_decode_impulse_payload_local(ctx, dataSym, symbolReliability);
 end
 
 rxResult = rx_finalize_packet_result( ...
-    ctx, captureStage, frontEndDiag, headerResult, packetDataBitsRx, symbolReliabilityData, profileDiag);
+    ctx, captureStage, frontEndDiag, headerResult, packetDataBitsRx, symbolReliabilityData, profileDiag, decodeDiag);
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_impulse_frontend_stage_local(ctx, captureStage)
@@ -55,9 +56,9 @@ diagOut.ok = true;
 diagOut.frontEndMethod = string(ctx.method);
 end
 
-function [packetDataBitsRx, symbolReliabilityData] = local_decode_impulse_payload_local(ctx, dataSym, symbolReliability)
+function [packetDataBitsRx, symbolReliabilityData, decodeDiag] = local_decode_impulse_payload_local(ctx, dataSym, symbolReliability)
 symbolReliabilityData = rx_expand_reliability(symbolReliability, numel(dataSym));
-packetDataBitsRx = rx_decode_packet_bits_common(dataSym(:), symbolReliabilityData, ctx.pkt, ctx.runtimeCfg);
+[packetDataBitsRx, decodeDiag] = rx_decode_packet_bits_common(dataSym(:), symbolReliabilityData, ctx.pkt, ctx.runtimeCfg);
 end
 
 function [headerSym, dataSym, symbolReliability, diagOut] = local_failed_frontend_placeholder_local(pkt)
