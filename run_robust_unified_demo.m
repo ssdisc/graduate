@@ -17,13 +17,15 @@ ui = struct();
 ui.fig = uifigure( ...
     "Name", "Robust Unified 演示", ...
     "Position", [100 30 1180 1000], ...
+    "AutoResizeChildren", "off", ...
     "Color", [0.98 0.98 0.98]);
 
-mainGrid = uigridlayout(ui.fig, [7 1]);
+mainGrid = uigridlayout(ui.fig, [7 1], "Scrollable", "on");
 mainGrid.RowHeight = {86, 86, 120, 84, 112, 112, "1x"};
 mainGrid.ColumnWidth = {"1x"};
 mainGrid.Padding = [12 12 12 12];
 mainGrid.RowSpacing = 10;
+ui.mainGrid = mainGrid;
 
 ui.imagePanel = uipanel(mainGrid, "Title", "源图像");
 ui.imageGrid = uigridlayout(ui.imagePanel, [2 3]);
@@ -245,9 +247,9 @@ ui.mpNote2.Layout.Row = 3;
 ui.mpNote2.Layout.Column = [1 6];
 
 ui.bottomPanel = uipanel(mainGrid, "Title", "运行与信号监视");
-ui.bottomGrid = uigridlayout(ui.bottomPanel, [3 4]);
+ui.bottomGrid = uigridlayout(ui.bottomPanel, [3 6]);
 ui.bottomGrid.RowHeight = {34, "1x", "1x"};
-ui.bottomGrid.ColumnWidth = {160, 140, "1x", "1x"};
+ui.bottomGrid.ColumnWidth = {160, 140, 46, 46, "1x", "1x"};
 ui.bottomGrid.Padding = [8 8 8 8];
 ui.bottomGrid.RowSpacing = 8;
 ui.bottomGrid.ColumnSpacing = 8;
@@ -257,21 +259,27 @@ ui.runButton.Layout.Column = 1;
 ui.clearButton = uibutton(ui.bottomGrid, "push", "Text", "清空状态");
 ui.clearButton.Layout.Row = 1;
 ui.clearButton.Layout.Column = 2;
+ui.scrollLeftButton = uibutton(ui.bottomGrid, "push", "Text", "←");
+ui.scrollLeftButton.Layout.Row = 1;
+ui.scrollLeftButton.Layout.Column = 3;
+ui.scrollRightButton = uibutton(ui.bottomGrid, "push", "Text", "→");
+ui.scrollRightButton.Layout.Row = 1;
+ui.scrollRightButton.Layout.Column = 4;
 ui.signalNote = uilabel(ui.bottomGrid, ...
-    "Text", "TX 预览会在 RX 仿真前刷新；完整运行结束后再刷新最终图。", ...
+    "Text", "TX 预览会在 RX 仿真前刷新；完整运行结束后再刷新最终图。左右按钮可横向滚动界面。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.signalNote.Layout.Row = 1;
-ui.signalNote.Layout.Column = [3 4];
+ui.signalNote.Layout.Column = [5 6];
 ui.status = uitextarea(ui.bottomGrid, "Editable", "off");
 ui.status.Layout.Row = [2 3];
 ui.status.Layout.Column = [1 2];
 ui.status.Value = {'就绪。'};
 ui.timeAxis = uiaxes(ui.bottomGrid);
 ui.timeAxis.Layout.Row = 2;
-ui.timeAxis.Layout.Column = [3 4];
+ui.timeAxis.Layout.Column = [3 6];
 ui.freqAxis = uiaxes(ui.bottomGrid);
 ui.freqAxis.Layout.Row = 3;
-ui.freqAxis.Layout.Column = [3 4];
+ui.freqAxis.Layout.Column = [3 6];
 local_reset_signal_axes(ui, "等待运行");
 
 ui.browseButton.ButtonPushedFcn = @(~, ~) local_browse_image(ui);
@@ -283,8 +291,36 @@ ui.enableNarrowband.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
 ui.enableMultipath.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
 ui.runButton.ButtonPushedFcn = @(~, ~) local_run_button(ui);
 ui.clearButton.ButtonPushedFcn = @(~, ~) local_clear_status(ui);
+ui.scrollLeftButton.ButtonPushedFcn = @(~, ~) local_scroll_main_grid(ui, -220, 0);
+ui.scrollRightButton.ButtonPushedFcn = @(~, ~) local_scroll_main_grid(ui, 220, 0);
+ui.fig.SizeChangedFcn = @(~, ~) local_apply_responsive_layout(ui);
 
 local_refresh_enable_state(ui);
+local_apply_responsive_layout(ui);
+end
+
+function local_apply_responsive_layout(ui)
+if ~(isfield(ui, "fig") && isvalid(ui.fig) && isfield(ui, "mainGrid") && isvalid(ui.mainGrid))
+    return;
+end
+figPos = ui.fig.Position;
+figW = max(1, double(figPos(3)));
+figH = max(1, double(figPos(4)));
+
+contentMinWidth = 1160;
+if figW < contentMinWidth
+    ui.mainGrid.ColumnWidth = {contentMinWidth};
+else
+    ui.mainGrid.ColumnWidth = {"1x"};
+end
+
+if isfield(ui, "bottomGrid") && isvalid(ui.bottomGrid)
+    if figH < 860
+        ui.bottomGrid.RowHeight = {34, 210, 210};
+    else
+        ui.bottomGrid.RowHeight = {34, "1x", "1x"};
+    end
+end
 end
 
 function local_browse_image(ui)
@@ -402,6 +438,13 @@ end
 
 function local_clear_status(ui)
 ui.status.Value = {''};
+end
+
+function local_scroll_main_grid(ui, dx, dy)
+if ~(isfield(ui, "mainGrid") && isvalid(ui.mainGrid))
+    return;
+end
+scroll(ui.mainGrid, double(dx), double(dy));
 end
 
 function local_append_sidecar_status(ui, report)
@@ -766,6 +809,12 @@ report.headerSuccess = double(results.packetDiagnostics.bob.headerSuccessRateByM
 report.sessionTransportSuccess = double(results.packetDiagnostics.bob.sessionTransportSuccessRateByMethod(methodIdx, pointIdx));
 report.packetSessionSuccess = double(results.packetDiagnostics.bob.packetSessionSuccessRateByMethod(methodIdx, pointIdx));
 report.payloadSuccess = double(results.packetDiagnostics.bob.payloadSuccessRate(methodIdx, pointIdx));
+report.psnrOriginal = local_optional_image_metric_local(results, "original", "communication", "psnr", methodIdx, pointIdx);
+report.ssimOriginal = local_optional_image_metric_local(results, "original", "communication", "ssim", methodIdx, pointIdx);
+report.mseOriginal = local_optional_image_metric_local(results, "original", "communication", "mse", methodIdx, pointIdx);
+report.psnrResized = local_optional_image_metric_local(results, "resized", "communication", "psnr", methodIdx, pointIdx);
+report.ssimResized = local_optional_image_metric_local(results, "resized", "communication", "ssim", methodIdx, pointIdx);
+report.mseResized = local_optional_image_metric_local(results, "resized", "communication", "mse", methodIdx, pointIdx);
 report.sidecars = local_build_demo_sidecar_report(results, cfg, methodIdx, pointIdx);
 report.spectrum = results.spectrum;
 report.signal = local_build_signal_monitor_report(results, runtimeCfg);
@@ -775,6 +824,32 @@ report.runtime = struct( ...
     "sampleRateHz", double(runtimeCfg.waveform.sampleRateHz), ...
     "sps", double(runtimeCfg.waveform.sps), ...
     "rolloff", double(runtimeCfg.waveform.rolloff));
+end
+
+function value = local_optional_image_metric_local(results, levelName, modeName, metricName, methodIdx, pointIdx)
+value = NaN;
+if ~(isfield(results, "imageMetrics") && isstruct(results.imageMetrics))
+    return;
+end
+levelField = char(levelName);
+modeField = char(modeName);
+metricField = char(metricName);
+if ~(isfield(results.imageMetrics, levelField) && isstruct(results.imageMetrics.(levelField)))
+    return;
+end
+levelStruct = results.imageMetrics.(levelField);
+if ~(isfield(levelStruct, modeField) && isstruct(levelStruct.(modeField)))
+    return;
+end
+modeStruct = levelStruct.(modeField);
+if ~(isfield(modeStruct, metricField) && ~isempty(modeStruct.(metricField)))
+    return;
+end
+metricMat = modeStruct.(metricField);
+if size(metricMat, 1) < methodIdx || size(metricMat, 2) < pointIdx
+    return;
+end
+value = double(metricMat(methodIdx, pointIdx));
 end
 
 function sidecars = local_build_demo_sidecar_report(results, cfg, methodIdx, pointIdx)
@@ -1063,33 +1138,52 @@ exportgraphics(fig, char(report.savedImages.signalMonitorFigure), "Resolution", 
 end
 
 function local_show_comparison_figure(report)
-fig = figure("Name", "Robust Unified 演示对比", "Color", "w", "NumberTitle", "off");
+fig = figure("Name", "Robust Unified 演示对比", ...
+    "Color", "w", ...
+    "NumberTitle", "off", ...
+    "Position", [120 80 1220 920]);
 t = tiledlayout(fig, 2, 2, "Padding", "compact", "TileSpacing", "compact");
+t.Position = [0.03 0.04 0.94 0.80];
+headerText = strjoin(cellstr(local_build_comparison_header_lines(report)), newline);
+annotation(fig, "textbox", [0.03 0.855 0.94 0.13], ...
+    "String", headerText, ...
+    "Interpreter", "none", ...
+    "FitBoxToText", "off", ...
+    "EdgeColor", "none", ...
+    "HorizontalAlignment", "left", ...
+    "VerticalAlignment", "top", ...
+    "FontSize", 11);
 
-nexttile(t);
+ax1 = nexttile(t);
 imshow(report.txImageOriginal);
-title("原始输入");
+title(ax1, "原始输入");
 
-nexttile(t);
+ax2 = nexttile(t);
 imshow(report.txImageResized);
-title(sprintf('实际 TX (%dx%d)', size(report.txImageResized, 2), size(report.txImageResized, 1)));
+title(ax2, sprintf('实际 TX (%dx%d)', size(report.txImageResized, 2), size(report.txImageResized, 1)));
 
-nexttile(t);
+ax3 = nexttile(t);
 imshow(report.rxImageResized);
-title(sprintf('恢复 RX (%dx%d)', size(report.rxImageResized, 2), size(report.rxImageResized, 1)));
+title(ax3, sprintf('恢复 RX (%dx%d)', size(report.rxImageResized, 2), size(report.rxImageResized, 1)));
 
-nexttile(t);
+ax4 = nexttile(t);
 imshow(report.rxImageDisplay);
-title(sprintf('显示 RX (%dx%d)', size(report.rxImageDisplay, 2), size(report.rxImageDisplay, 1)));
-
-sgtitle(t, sprintf([ ...
-    'robust_unified | %s | %s | Eb/N0 %.2f dB | JSR %.2f dB | BER %.3g | rawPER %.3g | ' ...
-    'PER %.3g | PER_exact %.3g | bitPerfect %d | burst %.3fs | elapsed %.3fs'], ...
-    strjoin(cellstr(report.activeInterferences), " + "), ...
-    char(report.modulationType), report.ebN0dB, report.jsrDb, report.ber, report.rawPer, report.per, report.perExact, ...
-    report.endToEndBitPerfect, report.burstSec, report.elapsedSec));
+title(ax4, sprintf('显示 RX (%dx%d)', size(report.rxImageDisplay, 2), size(report.rxImageDisplay, 1)));
 
 exportgraphics(fig, char(report.savedImages.comparisonFigure), "Resolution", 160);
+end
+
+function headerLines = local_build_comparison_header_lines(report)
+line1 = sprintf("robust_unified | %s | %s | Eb/N0 %.2f dB | JSR %.2f dB", ...
+    strjoin(cellstr(report.activeInterferences), " + "), ...
+    char(report.modulationType), report.ebN0dB, report.jsrDb);
+line2 = sprintf("BER %.3g | rawPER %.3g | PER %.3g | PER_exact %.3g | bitPerfect %d", ...
+    report.ber, report.rawPer, report.per, report.perExact, report.endToEndBitPerfect);
+line3 = sprintf("Image(Original): PSNR %.3g dB | SSIM %.4g | MSE %.3g", ...
+    report.psnrOriginal, report.ssimOriginal, report.mseOriginal);
+line4 = sprintf("Image(Resized): PSNR %.3g dB | SSIM %.4g | MSE %.3g | burst %.3fs | elapsed %.3fs", ...
+    report.psnrResized, report.ssimResized, report.mseResized, report.burstSec, report.elapsedSec);
+headerLines = [string(line1); string(line2); string(line3); string(line4)];
 end
 
 function values = local_parse_numeric_vector(rawText, requireInteger, fieldName)
