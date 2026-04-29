@@ -474,6 +474,7 @@ switch profileName
         commonTx.control.phyHeaderDiversity.enable = true;
         commonTx.control.phyHeaderDiversity.copies = numel(robustControlFreqSet);
         commonTx.control.phyHeaderFhFreqSet = controlPlan.controlOnlyFreqSet;
+        commonTx.modulation.type = "QPSK";
         commonTx.innerCode.kind = "ldpc";
         commonTx.innerCode.ldpc.rate = "1/2";
         commonTx.innerCode.ldpc.frameType = "short";
