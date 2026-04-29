@@ -16,7 +16,7 @@ end
 ui = struct();
 ui.fig = uifigure( ...
     "Name", "Robust Unified Demo", ...
-    "Position", [100 80 980 760], ...
+    "Position", [100 60 1180 900], ...
     "Color", [0.98 0.98 0.98]);
 
 mainGrid = uigridlayout(ui.fig, [6 1]);
@@ -48,9 +48,9 @@ ui.imageNote.Layout.Row = 2;
 ui.imageNote.Layout.Column = [1 3];
 
 ui.generalPanel = uipanel(mainGrid, "Title", "General");
-ui.generalGrid = uigridlayout(ui.generalPanel, [2 6]);
+ui.generalGrid = uigridlayout(ui.generalPanel, [2 8]);
 ui.generalGrid.RowHeight = {24, 24};
-ui.generalGrid.ColumnWidth = {70, 120, 70, 120, 90, "1x"};
+ui.generalGrid.ColumnWidth = {70, 120, 70, 120, 90, 120, 90, "1x"};
 ui.generalGrid.Padding = [8 8 8 8];
 ui.generalGrid.RowSpacing = 6;
 ui.generalGrid.ColumnSpacing = 8;
@@ -66,17 +66,25 @@ ui.jsrLabel.Layout.Column = 3;
 ui.jsr = uieditfield(ui.generalGrid, "numeric", "Value", 0);
 ui.jsr.Layout.Row = 1;
 ui.jsr.Layout.Column = 4;
+ui.modulationLabel = uilabel(ui.generalGrid, "Text", "Modulation", "HorizontalAlignment", "right");
+ui.modulationLabel.Layout.Row = 1;
+ui.modulationLabel.Layout.Column = 5;
+ui.modulation = uidropdown(ui.generalGrid, ...
+    "Items", ["QPSK" "BPSK" "MSK"], ...
+    "Value", "QPSK");
+ui.modulation.Layout.Row = 1;
+ui.modulation.Layout.Column = 6;
 ui.resultsRootLabel = uilabel(ui.generalGrid, "Text", "Results Root", "HorizontalAlignment", "right");
 ui.resultsRootLabel.Layout.Row = 1;
-ui.resultsRootLabel.Layout.Column = 5;
+ui.resultsRootLabel.Layout.Column = 7;
 ui.resultsRoot = uieditfield(ui.generalGrid, "text", "Value", defaultResultsRoot);
 ui.resultsRoot.Layout.Row = 1;
-ui.resultsRoot.Layout.Column = 6;
+ui.resultsRoot.Layout.Column = 8;
 ui.generalNote = uilabel(ui.generalGrid, ...
     "Text", "Fixed path: robust_unified + robust_combo + sample blanking + fh_erasure.", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.generalNote.Layout.Row = 2;
-ui.generalNote.Layout.Column = [1 6];
+ui.generalNote.Layout.Column = [1 8];
 
 ui.impulsePanel = uipanel(mainGrid, "Title", "Impulse Interference");
 ui.impulseGrid = uigridlayout(ui.impulsePanel, [2 4]);
@@ -167,10 +175,10 @@ ui.mpNote2 = uilabel(ui.mpGrid, ...
 ui.mpNote2.Layout.Row = 3;
 ui.mpNote2.Layout.Column = [1 6];
 
-ui.bottomPanel = uipanel(mainGrid, "Title", "Run");
-ui.bottomGrid = uigridlayout(ui.bottomPanel, [2 3]);
-ui.bottomGrid.RowHeight = {34, "1x"};
-ui.bottomGrid.ColumnWidth = {160, 140, "1x"};
+ui.bottomPanel = uipanel(mainGrid, "Title", "Run and Signal Monitor");
+ui.bottomGrid = uigridlayout(ui.bottomPanel, [3 4]);
+ui.bottomGrid.RowHeight = {34, "1x", "1x"};
+ui.bottomGrid.ColumnWidth = {160, 140, "1x", "1x"};
 ui.bottomGrid.Padding = [8 8 8 8];
 ui.bottomGrid.RowSpacing = 8;
 ui.bottomGrid.ColumnSpacing = 8;
@@ -180,10 +188,22 @@ ui.runButton.Layout.Column = 1;
 ui.clearButton = uibutton(ui.bottomGrid, "push", "Text", "Clear Status");
 ui.clearButton.Layout.Row = 1;
 ui.clearButton.Layout.Column = 2;
+ui.signalNote = uilabel(ui.bottomGrid, ...
+    "Text", "Live plot updates with the actual TX burst used in this run.", ...
+    "FontColor", [0.35 0.35 0.35]);
+ui.signalNote.Layout.Row = 1;
+ui.signalNote.Layout.Column = [3 4];
 ui.status = uitextarea(ui.bottomGrid, "Editable", "off");
-ui.status.Layout.Row = 2;
-ui.status.Layout.Column = [1 3];
+ui.status.Layout.Row = [2 3];
+ui.status.Layout.Column = [1 2];
 ui.status.Value = {'Ready.'};
+ui.timeAxis = uiaxes(ui.bottomGrid);
+ui.timeAxis.Layout.Row = 2;
+ui.timeAxis.Layout.Column = [3 4];
+ui.freqAxis = uiaxes(ui.bottomGrid);
+ui.freqAxis.Layout.Row = 3;
+ui.freqAxis.Layout.Column = [3 4];
+local_reset_signal_axes(ui, "Waiting for run");
 
 ui.browseButton.ButtonPushedFcn = @(~, ~) local_browse_image(ui);
 ui.enableImpulse.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
@@ -231,6 +251,7 @@ drawnow;
 try
     cfg = local_collect_demo_cfg(ui);
     local_append_status(ui, "Building robust_unified spec...");
+    local_reset_signal_axes(ui, "Running...");
     drawnow;
 
     progress = uiprogressdlg(ui.fig, ...
@@ -244,9 +265,12 @@ try
     end
 
     local_append_status(ui, sprintf( ...
-        'Run finished. BER=%.4g, rawPER=%.4g, PER=%.4g, PER_exact=%.4g, bitPerfect=%d, elapsed=%.3fs', ...
-        report.ber, report.rawPer, report.per, report.perExact, report.endToEndBitPerfect, report.elapsedSec));
+        'Run finished. %s, BER=%.4g, rawPER=%.4g, PER=%.4g, PER_exact=%.4g, bitPerfect=%d, elapsed=%.3fs', ...
+        char(report.modulationType), report.ber, report.rawPer, report.per, report.perExact, ...
+        report.endToEndBitPerfect, report.elapsedSec));
+    local_update_signal_axes(ui, report);
     local_append_status(ui, "Saved RX image: " + string(report.savedImages.rxDisplay));
+    local_append_status(ui, "Saved signal monitor: " + string(report.savedImages.signalMonitorFigure));
     local_show_comparison_figure(report);
     local_append_status(ui, "Saved comparison figure: " + string(report.savedImages.comparisonFigure));
     if report.per <= 1e-12 && report.ber > 1e-6
@@ -300,6 +324,7 @@ cfg.imagePath = string(strtrim(ui.imagePath.Value));
 cfg.resultsRoot = string(strtrim(ui.resultsRoot.Value));
 cfg.ebN0dB = double(ui.ebn0.Value);
 cfg.jsrDb = double(ui.jsr.Value);
+cfg.modulationType = upper(string(ui.modulation.Value));
 cfg.enableImpulse = logical(ui.enableImpulse.Value);
 cfg.enableNarrowband = logical(ui.enableNarrowband.Value);
 cfg.enableMultipath = logical(ui.enableMultipath.Value);
@@ -329,6 +354,9 @@ if ~(isscalar(cfg.ebN0dB) && isfinite(cfg.ebN0dB))
 end
 if ~(isscalar(cfg.jsrDb) && isfinite(cfg.jsrDb))
     error("JSR must be a finite scalar.");
+end
+if ~isscalar(cfg.modulationType) || ~any(cfg.modulationType == ["QPSK" "BPSK" "MSK"])
+    error("Unsupported modulation type: %s.", char(cfg.modulationType));
 end
 if cfg.enableImpulse
     if ~(isscalar(cfg.impulseProb) && isfinite(cfg.impulseProb) && cfg.impulseProb > 0 && cfg.impulseProb <= 1)
@@ -365,6 +393,7 @@ spec = default_link_spec( ...
 
 spec.commonTx.source.useBuiltinImage = false;
 spec.commonTx.source.imagePath = cfg.imagePath;
+spec.commonTx.modulation.type = cfg.modulationType;
 spec.sim.nFramesPerPoint = 1;
 spec.sim.saveFigures = false;
 spec.sim.useParallel = false;
@@ -456,6 +485,7 @@ rxImgDisplay = local_require_uint8_image(exampleEntry.imgRx, "example imgRx");
 savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgResized, rxImgDisplay);
 report = local_build_demo_report(results, cfg, runtimeCfg, runDir, savedImages, ...
     txImgOriginal, txImgResized, rxImgResized, rxImgDisplay, elapsedSec);
+local_save_signal_monitor_figure(report);
 save(fullfile(runDir, "demo_report.mat"), "report", "cfg", "results");
 end
 
@@ -480,6 +510,7 @@ savedImages.txResized = string(fullfile(runDir, "tx_resized.png"));
 savedImages.rxResized = string(fullfile(runDir, "rx_resized.png"));
 savedImages.rxDisplay = string(fullfile(runDir, "rx_display.png"));
 savedImages.comparisonFigure = string(fullfile(runDir, "comparison.png"));
+savedImages.signalMonitorFigure = string(fullfile(runDir, "signal_monitor.png"));
 
 imwrite(local_require_uint8_image(txImgOriginal, "tx original"), char(savedImages.txOriginal));
 imwrite(local_require_uint8_image(txImgResized, "tx resized"), char(savedImages.txResized));
@@ -502,6 +533,7 @@ report = struct();
 report.runDir = string(runDir);
 report.method = string(results.methods(methodIdx));
 report.imagePath = string(cfg.imagePath);
+report.modulationType = string(cfg.modulationType);
 report.savedImages = savedImages;
 report.txImageOriginal = txImgOriginal;
 report.txImageResized = txImgResized;
@@ -537,8 +569,10 @@ report.sessionTransportSuccess = double(results.packetDiagnostics.bob.sessionTra
 report.packetSessionSuccess = double(results.packetDiagnostics.bob.packetSessionSuccessRateByMethod(methodIdx, pointIdx));
 report.payloadSuccess = double(results.packetDiagnostics.bob.payloadSuccessRate(methodIdx, pointIdx));
 report.spectrum = results.spectrum;
+report.signal = local_build_signal_monitor_report(results, runtimeCfg);
 report.runtime = struct( ...
     "profileName", string(runtimeCfg.linkProfile.name), ...
+    "modulationType", string(runtimeCfg.mod.type), ...
     "sampleRateHz", double(runtimeCfg.waveform.sampleRateHz), ...
     "sps", double(runtimeCfg.waveform.sps), ...
     "rolloff", double(runtimeCfg.waveform.rolloff));
@@ -565,6 +599,153 @@ if cfg.enableMultipath
 end
 end
 
+function signal = local_build_signal_monitor_report(results, runtimeCfg)
+if ~(isfield(results, "txArtifacts") && isstruct(results.txArtifacts) ...
+        && isfield(results.txArtifacts, "burstForChannel"))
+    error("Signal monitor requires results.txArtifacts.burstForChannel.");
+end
+txWave = results.txArtifacts.burstForChannel(:);
+if isempty(txWave)
+    error("Signal monitor received an empty TX burst.");
+end
+Fs = double(runtimeCfg.waveform.sampleRateHz);
+if ~(isscalar(Fs) && isfinite(Fs) && Fs > 0)
+    error("Signal monitor requires a positive waveform.sampleRateHz.");
+end
+
+viewSamples = min(numel(txWave), max(1, round(0.02 * Fs)));
+idx = local_evenly_spaced_indices_local(viewSamples, 5000);
+txView = txWave(idx);
+timeSec = (double(idx(:)) - 1) / Fs;
+
+freqHz = double(results.spectrum.freqHz(:));
+psd = double(results.spectrum.psd(:));
+validSpectrum = numel(freqHz) == numel(psd) && ~isempty(freqHz) ...
+    && any(isfinite(freqHz)) && any(isfinite(psd) & psd > 0);
+if ~validSpectrum
+    [psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum( ...
+        txWave, results.txArtifacts.commonMeta.modInfo, runtimeCfg.waveform, ...
+        struct("payloadBits", numel(results.txArtifacts.payloadAssist.payloadBitsPlain)));
+else
+    bw99Hz = double(results.spectrum.bw99Hz);
+    etaBpsHz = double(results.spectrum.etaBpsHz);
+end
+freqHz = double(freqHz(:));
+psd = double(psd(:));
+psdDbHz = 10 * log10(max(psd, realmin));
+
+signal = struct( ...
+    "sampleRateHz", Fs, ...
+    "durationSec", double(numel(txWave)) / Fs, ...
+    "timeSec", timeSec(:), ...
+    "real", real(txView(:)), ...
+    "imag", imag(txView(:)), ...
+    "magnitude", abs(txView(:)), ...
+    "freqHz", freqHz, ...
+    "psdDbHz", psdDbHz, ...
+    "bw99Hz", double(bw99Hz), ...
+    "etaBpsHz", double(etaBpsHz));
+end
+
+function idx = local_evenly_spaced_indices_local(nAvailable, maxSamples)
+nAvailable = max(1, round(double(nAvailable)));
+maxSamples = max(1, round(double(maxSamples)));
+if nAvailable <= maxSamples
+    idx = (1:nAvailable).';
+    return;
+end
+idx = unique(round(linspace(1, nAvailable, maxSamples))).';
+idx = max(1, min(nAvailable, idx));
+end
+
+function local_reset_signal_axes(ui, message)
+if ~(isfield(ui, "timeAxis") && isvalid(ui.timeAxis) && isfield(ui, "freqAxis") && isvalid(ui.freqAxis))
+    return;
+end
+local_draw_empty_axis_local(ui.timeAxis, "Time Domain", message);
+local_draw_empty_axis_local(ui.freqAxis, "Frequency Domain", message);
+end
+
+function local_draw_empty_axis_local(ax, titleText, message)
+cla(ax, "reset");
+ax.XLim = [0 1];
+ax.YLim = [0 1];
+ax.XTick = [];
+ax.YTick = [];
+title(ax, titleText);
+text(ax, 0.5, 0.5, char(string(message)), ...
+    "HorizontalAlignment", "center", ...
+    "VerticalAlignment", "middle", ...
+    "Color", [0.35 0.35 0.35]);
+box(ax, "on");
+end
+
+function local_update_signal_axes(ui, report)
+if ~(isfield(ui, "timeAxis") && isvalid(ui.timeAxis) && isfield(ui, "freqAxis") && isvalid(ui.freqAxis))
+    return;
+end
+local_plot_signal_monitor_axes(ui.timeAxis, ui.freqAxis, report);
+drawnow;
+end
+
+function local_plot_signal_monitor_axes(timeAx, freqAx, report)
+if ~(isfield(report, "signal") && isstruct(report.signal))
+    error("Signal monitor plot requires report.signal.");
+end
+sig = report.signal;
+
+cla(timeAx, "reset");
+tMs = double(sig.timeSec(:)) * 1e3;
+plot(timeAx, tMs, double(sig.real(:)), "Color", [0.10 0.32 0.76], "LineWidth", 0.85);
+hold(timeAx, "on");
+plot(timeAx, tMs, double(sig.imag(:)), "Color", [0.78 0.18 0.16], "LineWidth", 0.85);
+plot(timeAx, tMs, double(sig.magnitude(:)), "Color", [0.10 0.10 0.10], "LineStyle", ":", "LineWidth", 0.85);
+hold(timeAx, "off");
+grid(timeAx, "on");
+box(timeAx, "on");
+xlabel(timeAx, "Time (ms)");
+ylabel(timeAx, "Amplitude");
+title(timeAx, sprintf("TX Time Domain | %s | first %.2f ms", ...
+    char(report.modulationType), max(tMs)));
+legend(timeAx, ["Real" "Imag" "|x|"], "Location", "northeast");
+
+cla(freqAx, "reset");
+freqKhz = double(sig.freqHz(:)) / 1e3;
+psdDbHz = double(sig.psdDbHz(:));
+finiteUse = isfinite(freqKhz) & isfinite(psdDbHz);
+if ~any(finiteUse)
+    local_draw_empty_axis_local(freqAx, "Frequency Domain", "No finite PSD samples");
+    return;
+end
+plot(freqAx, freqKhz(finiteUse), psdDbHz(finiteUse), "Color", [0.05 0.45 0.36], "LineWidth", 0.95);
+grid(freqAx, "on");
+box(freqAx, "on");
+xlabel(freqAx, "Frequency (kHz)");
+ylabel(freqAx, "PSD (dB/Hz)");
+if isfinite(double(sig.bw99Hz)) && double(sig.bw99Hz) > 0
+    halfBwKhz = double(sig.bw99Hz) / 2e3;
+    xline(freqAx, -halfBwKhz, "--", "Color", [0.35 0.35 0.35]);
+    xline(freqAx, halfBwKhz, "--", "Color", [0.35 0.35 0.35]);
+end
+title(freqAx, sprintf("TX Frequency Domain | BW99 %.1f kHz | eta %.3g bit/s/Hz", ...
+    double(sig.bw99Hz) / 1e3, double(sig.etaBpsHz)));
+end
+
+function local_save_signal_monitor_figure(report)
+fig = figure("Name", "Robust Unified Signal Monitor", ...
+    "Color", "w", ...
+    "NumberTitle", "off", ...
+    "Visible", "off");
+cleanupObj = onCleanup(@() close(fig));
+t = tiledlayout(fig, 2, 1, "Padding", "compact", "TileSpacing", "compact");
+timeAx = nexttile(t);
+freqAx = nexttile(t);
+local_plot_signal_monitor_axes(timeAx, freqAx, report);
+sgtitle(t, sprintf("robust_unified signal monitor | %s | Eb/N0 %.2f dB | JSR %.2f dB", ...
+    char(report.modulationType), report.ebN0dB, report.jsrDb));
+exportgraphics(fig, char(report.savedImages.signalMonitorFigure), "Resolution", 160);
+end
+
 function local_show_comparison_figure(report)
 fig = figure("Name", "Robust Unified Demo Comparison", "Color", "w", "NumberTitle", "off");
 t = tiledlayout(fig, 2, 2, "Padding", "compact", "TileSpacing", "compact");
@@ -586,10 +767,10 @@ imshow(report.rxImageDisplay);
 title(sprintf('Display RX (%dx%d)', size(report.rxImageDisplay, 2), size(report.rxImageDisplay, 1)));
 
 sgtitle(t, sprintf([ ...
-    'robust_unified | %s | Eb/N0 %.2f dB | JSR %.2f dB | BER %.3g | rawPER %.3g | ' ...
+    'robust_unified | %s | %s | Eb/N0 %.2f dB | JSR %.2f dB | BER %.3g | rawPER %.3g | ' ...
     'PER %.3g | PER_exact %.3g | bitPerfect %d | burst %.3fs | elapsed %.3fs'], ...
     strjoin(cellstr(report.activeInterferences), " + "), ...
-    report.ebN0dB, report.jsrDb, report.ber, report.rawPer, report.per, report.perExact, ...
+    char(report.modulationType), report.ebN0dB, report.jsrDb, report.ber, report.rawPer, report.per, report.perExact, ...
     report.endToEndBitPerfect, report.burstSec, report.elapsedSec));
 
 exportgraphics(fig, char(report.savedImages.comparisonFigure), "Resolution", 160);
