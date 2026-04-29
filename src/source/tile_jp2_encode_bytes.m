@@ -11,17 +11,15 @@ tileCols = round(double(cfg.tileCols));
 nTileRows = ceil(rows / tileRows);
 nTileCols = ceil(cols / tileCols);
 nTiles = nTileRows * nTileCols;
+interleaveMode = local_resolve_interleave_mode_local(cfg);
 
 tileBytes = cell(nTiles, 1);
 tileLengths = zeros(nTiles, 1, "uint32");
 tileIdx = 1;
 for tr = 1:nTileRows
-    r0 = (tr - 1) * tileRows + 1;
-    r1 = min(tr * tileRows, rows);
     for tc = 1:nTileCols
-        c0 = (tc - 1) * tileCols + 1;
-        c1 = min(tc * tileCols, cols);
-        tileImg = img(r0:r1, c0:c1, :);
+        tileImg = local_extract_tile_image_local( ...
+            img, tr, tc, rows, cols, tileRows, tileCols, nTileRows, nTileCols, interleaveMode);
         tilePayload = local_encode_single_tile_local(tileImg, cfg);
         tileBytes{tileIdx} = tilePayload;
         tileLengths(tileIdx) = uint32(numel(tilePayload));
@@ -46,8 +44,41 @@ codecMeta = struct( ...
     "nTileRows", uint16(nTileRows), ...
     "nTileCols", uint16(nTileCols), ...
     "tileLengths", tileLengths, ...
+    "interleaveMode", interleaveMode, ...
     "manifestBytes", manifestBytes, ...
     "payloadBytes", uint32(numel(bytes)));
+end
+
+function interleaveMode = local_resolve_interleave_mode_local(cfg)
+if ~isfield(cfg, "interleaveMode")
+    error("tile_jp2_encode_bytes:MissingInterleaveMode", ...
+        "cfg.interleaveMode is required.");
+end
+interleaveMode = lower(string(cfg.interleaveMode));
+if ~any(interleaveMode == ["none" "polyphase"])
+    error("tile_jp2_encode_bytes:InvalidInterleaveMode", ...
+        "cfg.interleaveMode must be 'none' or 'polyphase'.");
+end
+end
+
+function tileImg = local_extract_tile_image_local( ...
+        img, tr, tc, rows, cols, tileRows, tileCols, nTileRows, nTileCols, interleaveMode)
+if interleaveMode == "polyphase"
+    rowIdx = tr:nTileRows:rows;
+    colIdx = tc:nTileCols:cols;
+    tileImg = img(rowIdx, colIdx, :);
+else
+    r0 = (tr - 1) * tileRows + 1;
+    r1 = min(tr * tileRows, rows);
+    c0 = (tc - 1) * tileCols + 1;
+    c1 = min(tc * tileCols, cols);
+    tileImg = img(r0:r1, c0:c1, :);
+end
+if isempty(tileImg)
+    error("tile_jp2_encode_bytes:EmptyTile", ...
+        "Tile (%d, %d) is empty under interleave mode '%s'.", ...
+        tr, tc, char(interleaveMode));
+end
 end
 
 function bytes = local_encode_single_tile_local(tileImg, cfg)

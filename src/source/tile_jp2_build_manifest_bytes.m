@@ -30,6 +30,9 @@ flags = uint8(0);
 if isfield(cfg, "mode") && string(cfg.mode) == "lossless"
     flags = bitor(flags, uint8(1));
 end
+if isfield(cfg, "interleaveMode") && lower(string(cfg.interleaveMode)) == "polyphase"
+    flags = bitor(flags, uint8(2));
+end
 
 magic = uint8('TJP2').';
 version = uint8(1);

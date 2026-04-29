@@ -59,6 +59,7 @@ if ~isfield(tileCfg, "mode"); tileCfg.mode = "lossy"; end
 if ~isfield(tileCfg, "compressionRatio"); tileCfg.compressionRatio = 8; end
 if ~isfield(tileCfg, "quality"); tileCfg.quality = 75; end
 if ~isfield(tileCfg, "decodeFailureFill"); tileCfg.decodeFailureFill = "zeros"; end
+if ~isfield(tileCfg, "interleaveMode"); tileCfg.interleaveMode = "none"; end
 
 tileCfg.tileRows = round(double(tileCfg.tileRows));
 tileCfg.tileCols = round(double(tileCfg.tileCols));
@@ -76,6 +77,11 @@ tileCfg.quality = max(0, min(100, round(double(tileCfg.quality))));
 tileCfg.decodeFailureFill = lower(string(tileCfg.decodeFailureFill));
 if ~any(tileCfg.decodeFailureFill == ["zeros" "gray"])
     error("payload.tileJp2.decodeFailureFill 必须是 'zeros' 或 'gray'。");
+end
+
+tileCfg.interleaveMode = lower(string(tileCfg.interleaveMode));
+if ~any(tileCfg.interleaveMode == ["none" "polyphase"])
+    error("payload.tileJp2.interleaveMode 必须是 'none' 或 'polyphase'。");
 end
 end
 

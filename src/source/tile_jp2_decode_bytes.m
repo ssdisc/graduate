@@ -14,25 +14,24 @@ tileCols = double(manifest.tileCols);
 nTileRows = double(manifest.nTileRows);
 nTileCols = double(manifest.nTileCols);
 tileLengths = double(manifest.tileLengths(:));
+interleaveMode = local_resolve_interleave_mode_local(manifest);
 
 cursor = 1;
 tileIdx = 1;
 for tr = 1:nTileRows
-    r0 = (tr - 1) * tileRows + 1;
-    r1 = min(tr * tileRows, rows);
     for tc = 1:nTileCols
-        c0 = (tc - 1) * tileCols + 1;
-        c1 = min(tc * tileCols, cols);
+        [rowIdx, colIdx, outRows, outCols] = local_tile_target_local( ...
+            tr, tc, rows, cols, tileRows, tileCols, nTileRows, nTileCols, interleaveMode);
         tileLen = tileLengths(tileIdx);
         nextCursor = cursor + tileLen - 1;
         if tileLen > 0 && nextCursor <= numel(bytes)
             tileBytes = bytes(cursor:nextCursor);
             try
-                tileImg = local_decode_single_tile_local(tileBytes, r1 - r0 + 1, c1 - c0 + 1, ch);
+                tileImg = local_decode_single_tile_local(tileBytes, outRows, outCols, ch);
                 if ch == 1
-                    img(r0:r1, c0:c1, 1) = tileImg;
+                    img(rowIdx, colIdx, 1) = tileImg;
                 else
-                    img(r0:r1, c0:c1, :) = tileImg;
+                    img(rowIdx, colIdx, :) = tileImg;
                 end
             catch
             end
@@ -47,6 +46,41 @@ if ch == 1
 end
 end
 
+function interleaveMode = local_resolve_interleave_mode_local(manifest)
+if isfield(manifest, "interleaveMode")
+    interleaveMode = lower(string(manifest.interleaveMode));
+else
+    error("tile_jp2_decode_bytes:MissingInterleaveMode", ...
+        "Tile JP2 manifest must include interleaveMode.");
+end
+if ~any(interleaveMode == ["none" "polyphase"])
+    error("tile_jp2_decode_bytes:InvalidInterleaveMode", ...
+        "interleaveMode must be 'none' or 'polyphase'.");
+end
+end
+
+function [rowIdx, colIdx, outRows, outCols] = local_tile_target_local( ...
+        tr, tc, rows, cols, tileRows, tileCols, nTileRows, nTileCols, interleaveMode)
+if interleaveMode == "polyphase"
+    rowIdx = tr:nTileRows:rows;
+    colIdx = tc:nTileCols:cols;
+else
+    r0 = (tr - 1) * tileRows + 1;
+    r1 = min(tr * tileRows, rows);
+    c0 = (tc - 1) * tileCols + 1;
+    c1 = min(tc * tileCols, cols);
+    rowIdx = r0:r1;
+    colIdx = c0:c1;
+end
+outRows = numel(rowIdx);
+outCols = numel(colIdx);
+if outRows < 1 || outCols < 1
+    error("tile_jp2_decode_bytes:EmptyTileTarget", ...
+        "Tile (%d, %d) target is empty under interleave mode '%s'.", ...
+        tr, tc, char(interleaveMode));
+end
+end
+
 function manifest = local_resolve_manifest_local(meta)
 if ~(isfield(meta, "codecMeta") && isstruct(meta.codecMeta))
     error("tile_jp2_decode_bytes:MissingCodecMeta", "Tile JP2 decode requires meta.codecMeta.");
@@ -58,7 +92,7 @@ if isfield(codecMeta, "manifestBytes") && ~isempty(codecMeta.manifestBytes)
     return;
 end
 
-requiredFields = ["tileRows" "tileCols" "nTileRows" "nTileCols" "tileLengths"];
+requiredFields = ["tileRows" "tileCols" "nTileRows" "nTileCols" "tileLengths" "interleaveMode"];
 for fieldName = requiredFields
     if ~isfield(codecMeta, fieldName)
         error("tile_jp2_decode_bytes:MissingManifest", ...
@@ -74,7 +108,8 @@ manifest = struct( ...
     "tileCols", uint16(codecMeta.tileCols), ...
     "nTileRows", uint16(codecMeta.nTileRows), ...
     "nTileCols", uint16(codecMeta.nTileCols), ...
-    "tileLengths", uint32(codecMeta.tileLengths));
+    "tileLengths", uint32(codecMeta.tileLengths), ...
+    "interleaveMode", string(codecMeta.interleaveMode));
 end
 
 function tileImg = local_decode_single_tile_local(tileBytes, outRows, outCols, ch)

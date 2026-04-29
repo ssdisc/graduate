@@ -38,6 +38,7 @@ switch codec
         ok = ok && local_compare_codec_field_local(metaA, metaB, "tileCols");
         ok = ok && local_compare_codec_field_local(metaA, metaB, "nTileRows");
         ok = ok && local_compare_codec_field_local(metaA, metaB, "nTileCols");
+        ok = ok && local_compare_codec_field_local(metaA, metaB, "interleaveMode");
         ok = ok && local_compare_codec_vector_local(metaA, metaB, "tileLengths");
     case "toolbox_image"
         ok = local_compare_codec_field_local(metaA, metaB, "format");
