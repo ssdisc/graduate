@@ -15,7 +15,7 @@ end
 
 ui = struct();
 ui.fig = uifigure( ...
-    "Name", "Robust Unified Demo", ...
+    "Name", "Robust Unified 演示", ...
     "Position", [100 60 1180 900], ...
     "Color", [0.98 0.98 0.98]);
 
@@ -25,29 +25,29 @@ mainGrid.ColumnWidth = {"1x"};
 mainGrid.Padding = [12 12 12 12];
 mainGrid.RowSpacing = 10;
 
-ui.imagePanel = uipanel(mainGrid, "Title", "Source Image");
+ui.imagePanel = uipanel(mainGrid, "Title", "源图像");
 ui.imageGrid = uigridlayout(ui.imagePanel, [2 3]);
 ui.imageGrid.RowHeight = {24, 24};
 ui.imageGrid.ColumnWidth = {90, "1x", 100};
 ui.imageGrid.Padding = [8 8 8 8];
 ui.imageGrid.RowSpacing = 6;
 ui.imageGrid.ColumnSpacing = 8;
-ui.imagePathLabel = uilabel(ui.imageGrid, "Text", "Image Path", "HorizontalAlignment", "right");
+ui.imagePathLabel = uilabel(ui.imageGrid, "Text", "图像路径", "HorizontalAlignment", "right");
 ui.imagePathLabel.Layout.Row = 1;
 ui.imagePathLabel.Layout.Column = 1;
 ui.imagePath = uieditfield(ui.imageGrid, "text", "Value", char(defaultImagePath));
 ui.imagePath.Layout.Row = 1;
 ui.imagePath.Layout.Column = 2;
-ui.browseButton = uibutton(ui.imageGrid, "push", "Text", "Browse...");
+ui.browseButton = uibutton(ui.imageGrid, "push", "Text", "浏览...");
 ui.browseButton.Layout.Row = 1;
 ui.browseButton.Layout.Column = 3;
 ui.imageNote = uilabel(ui.imageGrid, ...
-    "Text", "The TX image keeps aspect ratio and resizes the long edge to 256.", ...
+    "Text", "TX 图像保持长宽比，并将长边缩放到 256。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.imageNote.Layout.Row = 2;
 ui.imageNote.Layout.Column = [1 3];
 
-ui.generalPanel = uipanel(mainGrid, "Title", "General");
+ui.generalPanel = uipanel(mainGrid, "Title", "通用设置");
 ui.generalGrid = uigridlayout(ui.generalPanel, [2 8]);
 ui.generalGrid.RowHeight = {24, 24};
 ui.generalGrid.ColumnWidth = {70, 120, 70, 120, 90, 120, 90, "1x"};
@@ -66,7 +66,7 @@ ui.jsrLabel.Layout.Column = 3;
 ui.jsr = uieditfield(ui.generalGrid, "numeric", "Value", 0);
 ui.jsr.Layout.Row = 1;
 ui.jsr.Layout.Column = 4;
-ui.modulationLabel = uilabel(ui.generalGrid, "Text", "Modulation", "HorizontalAlignment", "right");
+ui.modulationLabel = uilabel(ui.generalGrid, "Text", "调制方式", "HorizontalAlignment", "right");
 ui.modulationLabel.Layout.Row = 1;
 ui.modulationLabel.Layout.Column = 5;
 ui.modulation = uidropdown(ui.generalGrid, ...
@@ -74,26 +74,26 @@ ui.modulation = uidropdown(ui.generalGrid, ...
     "Value", "QPSK");
 ui.modulation.Layout.Row = 1;
 ui.modulation.Layout.Column = 6;
-ui.resultsRootLabel = uilabel(ui.generalGrid, "Text", "Results Root", "HorizontalAlignment", "right");
+ui.resultsRootLabel = uilabel(ui.generalGrid, "Text", "结果目录", "HorizontalAlignment", "right");
 ui.resultsRootLabel.Layout.Row = 1;
 ui.resultsRootLabel.Layout.Column = 7;
 ui.resultsRoot = uieditfield(ui.generalGrid, "text", "Value", defaultResultsRoot);
 ui.resultsRoot.Layout.Row = 1;
 ui.resultsRoot.Layout.Column = 8;
 ui.generalNote = uilabel(ui.generalGrid, ...
-    "Text", "Fixed path: robust_unified + robust_combo + sample blanking + fh_erasure.", ...
+    "Text", "固定链路：robust_unified + robust_combo + sample blanking + fh_erasure。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.generalNote.Layout.Row = 2;
 ui.generalNote.Layout.Column = [1 8];
 
-ui.impulsePanel = uipanel(mainGrid, "Title", "Impulse Interference");
+ui.impulsePanel = uipanel(mainGrid, "Title", "脉冲干扰");
 ui.impulseGrid = uigridlayout(ui.impulsePanel, [2 4]);
 ui.impulseGrid.RowHeight = {24, 24};
 ui.impulseGrid.ColumnWidth = {90, 110, 90, "1x"};
 ui.impulseGrid.Padding = [8 8 8 8];
 ui.impulseGrid.RowSpacing = 6;
 ui.impulseGrid.ColumnSpacing = 8;
-ui.enableImpulse = uicheckbox(ui.impulseGrid, "Text", "Enable", "Value", false);
+ui.enableImpulse = uicheckbox(ui.impulseGrid, "Text", "启用", "Value", false);
 ui.enableImpulse.Layout.Row = 1;
 ui.enableImpulse.Layout.Column = 1;
 ui.impulseProbLabel = uilabel(ui.impulseGrid, "Text", "impulseProb", "HorizontalAlignment", "right");
@@ -104,19 +104,19 @@ ui.impulseProb = uieditfield(ui.impulseGrid, "numeric", "Value", 0.03, ...
 ui.impulseProb.Layout.Row = 1;
 ui.impulseProb.Layout.Column = 3;
 ui.impulseNote = uilabel(ui.impulseGrid, ...
-    "Text", "JSR-based power calibration stays enabled. Weight is fixed to 1.", ...
+    "Text", "保持基于 JSR 的功率标定；weight 固定为 1。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.impulseNote.Layout.Row = 2;
 ui.impulseNote.Layout.Column = [1 4];
 
-ui.nbPanel = uipanel(mainGrid, "Title", "Narrowband Interference");
+ui.nbPanel = uipanel(mainGrid, "Title", "窄带干扰");
 ui.nbGrid = uigridlayout(ui.nbPanel, [3 6]);
 ui.nbGrid.RowHeight = {24, 30, 24};
 ui.nbGrid.ColumnWidth = {90, 110, 110, 110, 110, "1x"};
 ui.nbGrid.Padding = [8 8 8 8];
 ui.nbGrid.RowSpacing = 6;
 ui.nbGrid.ColumnSpacing = 8;
-ui.enableNarrowband = uicheckbox(ui.nbGrid, "Text", "Enable", "Value", true);
+ui.enableNarrowband = uicheckbox(ui.nbGrid, "Text", "启用", "Value", true);
 ui.enableNarrowband.Layout.Row = 1;
 ui.enableNarrowband.Layout.Column = 1;
 ui.nbCenterLabel = uilabel(ui.nbGrid, "Text", "center", "HorizontalAlignment", "right");
@@ -132,24 +132,24 @@ ui.nbBandwidth = uieditfield(ui.nbGrid, "text", "Value", "auto");
 ui.nbBandwidth.Layout.Row = 1;
 ui.nbBandwidth.Layout.Column = [5 6];
 ui.nbNote1 = uilabel(ui.nbGrid, ...
-    "Text", "bandwidth = auto uses the current robust_unified prespread FH bandwidth in FH-point units.", ...
+    "Text", "bandwidth = auto 表示使用当前 robust_unified 的 prespread FH 带宽，单位为 FH point。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.nbNote1.Layout.Row = 2;
 ui.nbNote1.Layout.Column = [1 6];
 ui.nbNote2 = uilabel(ui.nbGrid, ...
-    "Text", "Valid center range is checked before the run. Out-of-range values error out directly.", ...
+    "Text", "运行前会检查 center 合法范围；超出范围直接报错。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.nbNote2.Layout.Row = 3;
 ui.nbNote2.Layout.Column = [1 6];
 
-ui.mpPanel = uipanel(mainGrid, "Title", "Rayleigh Multipath");
+ui.mpPanel = uipanel(mainGrid, "Title", "Rayleigh 多径");
 ui.mpGrid = uigridlayout(ui.mpPanel, [3 6]);
 ui.mpGrid.RowHeight = {24, 30, 24};
 ui.mpGrid.ColumnWidth = {90, 130, 90, 150, 90, "1x"};
 ui.mpGrid.Padding = [8 8 8 8];
 ui.mpGrid.RowSpacing = 6;
 ui.mpGrid.ColumnSpacing = 8;
-ui.enableMultipath = uicheckbox(ui.mpGrid, "Text", "Enable", "Value", false);
+ui.enableMultipath = uicheckbox(ui.mpGrid, "Text", "启用", "Value", false);
 ui.enableMultipath.Layout.Row = 1;
 ui.enableMultipath.Layout.Column = 1;
 ui.mpDelaysLabel = uilabel(ui.mpGrid, "Text", "delays", "HorizontalAlignment", "right");
@@ -165,45 +165,45 @@ ui.mpGains = uieditfield(ui.mpGrid, "text", "Value", "0 -6 -10");
 ui.mpGains.Layout.Row = 1;
 ui.mpGains.Layout.Column = [5 6];
 ui.mpNote1 = uilabel(ui.mpGrid, ...
-    "Text", "Use space/comma separated vectors, e.g. delays: 0 2 4, gains: 0 -6 -10.", ...
+    "Text", "使用空格或逗号分隔向量，例如 delays: 0 2 4，gains: 0 -6 -10。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.mpNote1.Layout.Row = 2;
 ui.mpNote1.Layout.Column = [1 6];
 ui.mpNote2 = uilabel(ui.mpGrid, ...
-    "Text", "Illegal CP/channel-memory combinations are not masked; the run errors out directly.", ...
+    "Text", "非法 CP/channel-memory 组合不做掩盖，运行时直接报错。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.mpNote2.Layout.Row = 3;
 ui.mpNote2.Layout.Column = [1 6];
 
-ui.bottomPanel = uipanel(mainGrid, "Title", "Run and Signal Monitor");
+ui.bottomPanel = uipanel(mainGrid, "Title", "运行与信号监视");
 ui.bottomGrid = uigridlayout(ui.bottomPanel, [3 4]);
 ui.bottomGrid.RowHeight = {34, "1x", "1x"};
 ui.bottomGrid.ColumnWidth = {160, 140, "1x", "1x"};
 ui.bottomGrid.Padding = [8 8 8 8];
 ui.bottomGrid.RowSpacing = 8;
 ui.bottomGrid.ColumnSpacing = 8;
-ui.runButton = uibutton(ui.bottomGrid, "push", "Text", "Run Demo");
+ui.runButton = uibutton(ui.bottomGrid, "push", "Text", "运行演示");
 ui.runButton.Layout.Row = 1;
 ui.runButton.Layout.Column = 1;
-ui.clearButton = uibutton(ui.bottomGrid, "push", "Text", "Clear Status");
+ui.clearButton = uibutton(ui.bottomGrid, "push", "Text", "清空状态");
 ui.clearButton.Layout.Row = 1;
 ui.clearButton.Layout.Column = 2;
 ui.signalNote = uilabel(ui.bottomGrid, ...
-    "Text", "Live plot updates with the actual TX burst used in this run.", ...
+    "Text", "TX 预览会在 RX 仿真前刷新；完整运行结束后再刷新最终图。", ...
     "FontColor", [0.35 0.35 0.35]);
 ui.signalNote.Layout.Row = 1;
 ui.signalNote.Layout.Column = [3 4];
 ui.status = uitextarea(ui.bottomGrid, "Editable", "off");
 ui.status.Layout.Row = [2 3];
 ui.status.Layout.Column = [1 2];
-ui.status.Value = {'Ready.'};
+ui.status.Value = {'就绪。'};
 ui.timeAxis = uiaxes(ui.bottomGrid);
 ui.timeAxis.Layout.Row = 2;
 ui.timeAxis.Layout.Column = [3 4];
 ui.freqAxis = uiaxes(ui.bottomGrid);
 ui.freqAxis.Layout.Row = 3;
 ui.freqAxis.Layout.Column = [3 4];
-local_reset_signal_axes(ui, "Waiting for run");
+local_reset_signal_axes(ui, "等待运行");
 
 ui.browseButton.ButtonPushedFcn = @(~, ~) local_browse_image(ui);
 ui.enableImpulse.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
@@ -217,8 +217,8 @@ end
 
 function local_browse_image(ui)
 [fileName, folderPath] = uigetfile( ...
-    {"*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.jp2", "Image Files"; "*.*", "All Files"}, ...
-    "Select Source Image", char(local_parent_or_pwd(ui.imagePath.Value)));
+    {"*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.jp2", "图像文件"; "*.*", "所有文件"}, ...
+    "选择源图像", char(local_parent_or_pwd(ui.imagePath.Value)));
 if isequal(fileName, 0)
     return;
 end
@@ -250,13 +250,19 @@ drawnow;
 
 try
     cfg = local_collect_demo_cfg(ui);
-    local_append_status(ui, "Building robust_unified spec...");
-    local_reset_signal_axes(ui, "Running...");
+    local_append_status(ui, "正在构建 robust_unified spec...");
+    local_reset_signal_axes(ui, "正在运行...");
+    drawnow;
+
+    previewReport = local_build_demo_tx_preview_report(cfg);
+    local_update_signal_axes(ui, previewReport);
+    local_append_status(ui, sprintf("TX 预览已在 RX 仿真前刷新。%s burst %.3fs。", ...
+        char(previewReport.modulationType), previewReport.signal.durationSec));
     drawnow;
 
     progress = uiprogressdlg(ui.fig, ...
-        "Title", "Running robust_unified demo", ...
-        "Message", "Simulating link...", ...
+        "Title", "运行 robust_unified 演示", ...
+        "Message", "正在仿真链路...", ...
         "Indeterminate", "on");
 
     [~, report] = local_run_demo_case(cfg);
@@ -265,22 +271,22 @@ try
     end
 
     local_append_status(ui, sprintf( ...
-        'Run finished. %s, BER=%.4g, rawPER=%.4g, PER=%.4g, PER_exact=%.4g, bitPerfect=%d, elapsed=%.3fs', ...
+        '运行完成。%s, BER=%.4g, rawPER=%.4g, PER=%.4g, PER_exact=%.4g, bitPerfect=%d, elapsed=%.3fs', ...
         char(report.modulationType), report.ber, report.rawPer, report.per, report.perExact, ...
         report.endToEndBitPerfect, report.elapsedSec));
     local_update_signal_axes(ui, report);
-    local_append_status(ui, "Saved RX image: " + string(report.savedImages.rxDisplay));
-    local_append_status(ui, "Saved signal monitor: " + string(report.savedImages.signalMonitorFigure));
+    local_append_status(ui, "已保存 RX 图像: " + string(report.savedImages.rxDisplay));
+    local_append_status(ui, "已保存信号监视图: " + string(report.savedImages.signalMonitorFigure));
     local_show_comparison_figure(report);
-    local_append_status(ui, "Saved comparison figure: " + string(report.savedImages.comparisonFigure));
+    local_append_status(ui, "已保存对比图: " + string(report.savedImages.comparisonFigure));
     if report.per <= 1e-12 && report.ber > 1e-6
         local_append_status(ui, sprintf([ ...
-            'Warning: current PER is packet-level after RS, but BER=%.4g is still nonzero, ' ...
-            'so image quality can remain poor.'], report.ber));
+            '警告：当前 PER 是 RS 后的 packet-level 指标，但 BER=%.4g 仍非零，' ...
+            '因此图像质量可能仍然较差。'], report.ber));
     end
     if ~report.endToEndBitPerfect
         local_append_status(ui, sprintf( ...
-            'Exact payload still failed: PER_exact=%.4g. Use BER/PER_exact, not only PER, to judge image quality.', ...
+            'Exact payload 仍未完全恢复：PER_exact=%.4g。判断图像质量时应看 BER/PER_exact，不能只看 PER。', ...
             report.perExact));
     end
 
@@ -288,8 +294,8 @@ catch ME
     if ~isempty(progress) && isvalid(progress)
         close(progress);
     end
-    local_append_status(ui, "Run failed: " + string(ME.message));
-    uialert(ui.fig, ME.message, "Run Failed", "Icon", "error");
+    local_append_status(ui, "运行失败: " + string(ME.message));
+    uialert(ui.fig, ME.message, "运行失败", "Icon", "error");
     rethrow(ME);
 end
 end
@@ -335,56 +341,116 @@ cfg.mpDelays = local_parse_numeric_vector(ui.mpDelays.Value, true, "Multipath de
 cfg.mpGains = local_parse_numeric_vector(ui.mpGains.Value, false, "Multipath gains");
 
 if strlength(cfg.imagePath) == 0
-    error("Image path must not be empty.");
+    error("图像路径不能为空。");
 end
 if ~isfile(cfg.imagePath)
-    error("Image file not found: %s", char(cfg.imagePath));
+    error("找不到图像文件: %s", char(cfg.imagePath));
 end
 if strlength(cfg.resultsRoot) == 0
-    error("Results root must not be empty.");
+    error("结果目录不能为空。");
 end
 if ~exist(char(cfg.resultsRoot), "dir")
     mkdir(char(cfg.resultsRoot));
 end
 if ~(cfg.enableImpulse || cfg.enableNarrowband || cfg.enableMultipath)
-    error("At least one interference type must be enabled.");
+    error("至少需要启用一种干扰。");
 end
 if ~(isscalar(cfg.ebN0dB) && isfinite(cfg.ebN0dB))
-    error("Eb/N0 must be a finite scalar.");
+    error("Eb/N0 必须是有限标量。");
 end
 if ~(isscalar(cfg.jsrDb) && isfinite(cfg.jsrDb))
-    error("JSR must be a finite scalar.");
+    error("JSR 必须是有限标量。");
 end
 if ~isscalar(cfg.modulationType) || ~any(cfg.modulationType == ["QPSK" "BPSK" "MSK"])
-    error("Unsupported modulation type: %s.", char(cfg.modulationType));
+    error("不支持的调制方式: %s。", char(cfg.modulationType));
 end
 if cfg.enableImpulse
     if ~(isscalar(cfg.impulseProb) && isfinite(cfg.impulseProb) && cfg.impulseProb > 0 && cfg.impulseProb <= 1)
-        error("impulseProb must be in (0, 1].");
+        error("impulseProb 必须位于 (0, 1]。");
     end
 end
 if cfg.enableMultipath
     if isempty(cfg.mpDelays)
-        error("Multipath delays must not be empty.");
+        error("Multipath delays 不能为空。");
     end
     if isempty(cfg.mpGains)
-        error("Multipath gains must not be empty.");
+        error("Multipath gains 不能为空。");
     end
     if numel(cfg.mpDelays) ~= numel(cfg.mpGains)
-        error("Multipath delays and gains must have the same length.");
+        error("Multipath delays 和 gains 的长度必须一致。");
     end
     if any(cfg.mpDelays < 0) || any(abs(cfg.mpDelays - round(cfg.mpDelays)) > 1e-12)
-        error("Multipath delays must contain nonnegative integers.");
+        error("Multipath delays 必须是非负整数。");
     end
 end
 if cfg.enableNarrowband
     if ~(isscalar(cfg.nbCenter) && isfinite(cfg.nbCenter))
-        error("Narrowband center must be a finite scalar.");
+        error("Narrowband center 必须是有限标量。");
     end
 end
 end
 
 function [results, report] = local_run_demo_case(cfg)
+spec = local_build_demo_spec(cfg);
+
+timestampTag = string(datetime("now", "Format", "yyyyMMdd_HHmmss"));
+runDir = fullfile(char(cfg.resultsRoot), char("robust_unified_demo_" + timestampTag));
+mkdir(runDir);
+spec.sim.resultsDir = runDir;
+runtimeCfg = compile_runtime_config(spec);
+validate_link_profile(spec);
+
+elapsedTic = tic;
+results = run_link_profile(spec);
+elapsedSec = toc(elapsedTic);
+
+if numel(results.methods) ~= 1
+    error("results 中应只有一个 method，实际为 %d。", numel(results.methods));
+end
+
+methodName = string(results.methods(1));
+methodField = char(methodName);
+if ~(isfield(results, "example") && numel(results.example) >= 1 ...
+        && isfield(results.example(1), "methods") ...
+        && isfield(results.example(1).methods, methodField))
+    error("缺少 method %s 对应的 example 图像。", methodField);
+end
+
+txImgOriginal = results.sourceImages.original;
+txImgResized = results.sourceImages.resized;
+exampleEntry = results.example(1).methods.(methodField);
+requiredExampleFields = ["imgRxResized" "imgRx"];
+for idx = 1:numel(requiredExampleFields)
+    fieldName = requiredExampleFields(idx);
+    if ~isfield(exampleEntry, fieldName)
+        error("method %s 的 example entry 缺少字段 %s。", methodField, fieldName);
+    end
+end
+rxImgResized = local_require_uint8_image(exampleEntry.imgRxResized, "example imgRxResized");
+rxImgDisplay = local_require_uint8_image(exampleEntry.imgRx, "example imgRx");
+
+savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgResized, rxImgDisplay);
+report = local_build_demo_report(results, cfg, runtimeCfg, runDir, savedImages, ...
+    txImgOriginal, txImgResized, rxImgResized, rxImgDisplay, elapsedSec);
+local_save_signal_monitor_figure(report);
+save(fullfile(runDir, "demo_report.mat"), "report", "cfg", "results");
+end
+
+function previewReport = local_build_demo_tx_preview_report(cfg)
+spec = local_build_demo_spec(cfg);
+runtimeCfg = compile_runtime_config(spec);
+validate_link_profile(spec);
+txArtifacts = build_tx_artifacts(spec, runtimeCfg);
+previewResults = struct("txArtifacts", txArtifacts);
+
+previewReport = struct();
+previewReport.modulationType = string(cfg.modulationType);
+previewReport.ebN0dB = double(cfg.ebN0dB);
+previewReport.jsrDb = double(cfg.jsrDb);
+previewReport.signal = local_build_signal_monitor_report(previewResults, runtimeCfg);
+end
+
+function spec = local_build_demo_spec(cfg)
 spec = default_link_spec( ...
     "linkProfileName", "robust_unified", ...
     "loadMlModels", string.empty(1, 0), ...
@@ -438,55 +504,13 @@ if cfg.enableNarrowband
     [maxAbsCenter, ~] = narrowband_center_freq_points_limit( ...
         runtimeCfg.fh, runtimeCfg.waveform, spec.channel.narrowband.bandwidthFreqPoints);
     if abs(spec.channel.narrowband.centerFreqPoints) > maxAbsCenter
-        error("Narrowband center %.6g exceeds valid range [-%.6g, %.6g].", ...
+        error("Narrowband center %.6g 超出合法范围 [-%.6g, %.6g]。", ...
             spec.channel.narrowband.centerFreqPoints, maxAbsCenter, maxAbsCenter);
     end
 end
 if cfg.enableMultipath && ~(cfg.enableImpulse || cfg.enableNarrowband) && abs(cfg.jsrDb) > 1e-12
-    error("JSR must be 0 when multipath is the only enabled interference.");
+    error("仅启用 multipath 时，JSR 必须为 0。");
 end
-
-validate_link_profile(spec);
-
-timestampTag = string(datetime("now", "Format", "yyyyMMdd_HHmmss"));
-runDir = fullfile(char(cfg.resultsRoot), char("robust_unified_demo_" + timestampTag));
-mkdir(runDir);
-spec.sim.resultsDir = runDir;
-
-elapsedTic = tic;
-results = run_link_profile(spec);
-elapsedSec = toc(elapsedTic);
-
-if numel(results.methods) ~= 1
-    error("Expected exactly one method in results, got %d.", numel(results.methods));
-end
-
-methodName = string(results.methods(1));
-methodField = char(methodName);
-if ~(isfield(results, "example") && numel(results.example) >= 1 ...
-        && isfield(results.example(1), "methods") ...
-        && isfield(results.example(1).methods, methodField))
-    error("Missing example image for method %s.", methodField);
-end
-
-txImgOriginal = results.sourceImages.original;
-txImgResized = results.sourceImages.resized;
-exampleEntry = results.example(1).methods.(methodField);
-requiredExampleFields = ["imgRxResized" "imgRx"];
-for idx = 1:numel(requiredExampleFields)
-    fieldName = requiredExampleFields(idx);
-    if ~isfield(exampleEntry, fieldName)
-        error("Example entry for method %s is missing field %s.", methodField, fieldName);
-    end
-end
-rxImgResized = local_require_uint8_image(exampleEntry.imgRxResized, "example imgRxResized");
-rxImgDisplay = local_require_uint8_image(exampleEntry.imgRx, "example imgRx");
-
-savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgResized, rxImgDisplay);
-report = local_build_demo_report(results, cfg, runtimeCfg, runDir, savedImages, ...
-    txImgOriginal, txImgResized, rxImgResized, rxImgDisplay, elapsedSec);
-local_save_signal_monitor_figure(report);
-save(fullfile(runDir, "demo_report.mat"), "report", "cfg", "results");
 end
 
 function bw = local_resolve_demo_narrowband_bandwidth(spec, rawText)
@@ -498,7 +522,7 @@ if rawText == "" || rawText == "auto"
 end
 value = str2double(rawText);
 if ~(isscalar(value) && isfinite(value) && value > 0)
-    error("Narrowband bandwidth must be a positive scalar or 'auto'.");
+    error("Narrowband bandwidth 必须是正标量或 'auto'。");
 end
 bw = double(value);
 end
@@ -520,7 +544,7 @@ end
 
 function img = local_require_uint8_image(img, imageName)
 if ~(isa(img, "uint8") && ndims(img) <= 3)
-    error("%s must be a uint8 image with ndims <= 3.", imageName);
+    error("%s 必须是 ndims <= 3 的 uint8 图像。", imageName);
 end
 end
 
@@ -602,15 +626,15 @@ end
 function signal = local_build_signal_monitor_report(results, runtimeCfg)
 if ~(isfield(results, "txArtifacts") && isstruct(results.txArtifacts) ...
         && isfield(results.txArtifacts, "burstForChannel"))
-    error("Signal monitor requires results.txArtifacts.burstForChannel.");
+    error("信号监视需要 results.txArtifacts.burstForChannel。");
 end
 txWave = results.txArtifacts.burstForChannel(:);
 if isempty(txWave)
-    error("Signal monitor received an empty TX burst.");
+    error("信号监视收到空的 TX burst。");
 end
 Fs = double(runtimeCfg.waveform.sampleRateHz);
 if ~(isscalar(Fs) && isfinite(Fs) && Fs > 0)
-    error("Signal monitor requires a positive waveform.sampleRateHz.");
+    error("信号监视需要正数 waveform.sampleRateHz。");
 end
 
 viewSamples = min(numel(txWave), max(1, round(0.02 * Fs)));
@@ -618,9 +642,16 @@ idx = local_evenly_spaced_indices_local(viewSamples, 5000);
 txView = txWave(idx);
 timeSec = (double(idx(:)) - 1) / Fs;
 
-freqHz = double(results.spectrum.freqHz(:));
-psd = double(results.spectrum.psd(:));
-validSpectrum = numel(freqHz) == numel(psd) && ~isempty(freqHz) ...
+hasSpectrum = isfield(results, "spectrum") && isstruct(results.spectrum) ...
+    && isfield(results.spectrum, "freqHz") && isfield(results.spectrum, "psd");
+if hasSpectrum
+    freqHz = double(results.spectrum.freqHz(:));
+    psd = double(results.spectrum.psd(:));
+else
+    freqHz = zeros(0, 1);
+    psd = zeros(0, 1);
+end
+validSpectrum = hasSpectrum && numel(freqHz) == numel(psd) && ~isempty(freqHz) ...
     && any(isfinite(freqHz)) && any(isfinite(psd) & psd > 0);
 if ~validSpectrum
     [psd, freqHz, bw99Hz, etaBpsHz] = estimate_spectrum( ...
@@ -662,8 +693,8 @@ function local_reset_signal_axes(ui, message)
 if ~(isfield(ui, "timeAxis") && isvalid(ui.timeAxis) && isfield(ui, "freqAxis") && isvalid(ui.freqAxis))
     return;
 end
-local_draw_empty_axis_local(ui.timeAxis, "Time Domain", message);
-local_draw_empty_axis_local(ui.freqAxis, "Frequency Domain", message);
+local_draw_empty_axis_local(ui.timeAxis, "时域", message);
+local_draw_empty_axis_local(ui.freqAxis, "频域", message);
 end
 
 function local_draw_empty_axis_local(ax, titleText, message)
@@ -690,7 +721,7 @@ end
 
 function local_plot_signal_monitor_axes(timeAx, freqAx, report)
 if ~(isfield(report, "signal") && isstruct(report.signal))
-    error("Signal monitor plot requires report.signal.");
+    error("信号监视绘图需要 report.signal。");
 end
 sig = report.signal;
 
@@ -703,36 +734,36 @@ plot(timeAx, tMs, double(sig.magnitude(:)), "Color", [0.10 0.10 0.10], "LineStyl
 hold(timeAx, "off");
 grid(timeAx, "on");
 box(timeAx, "on");
-xlabel(timeAx, "Time (ms)");
-ylabel(timeAx, "Amplitude");
-title(timeAx, sprintf("TX Time Domain | %s | first %.2f ms", ...
+xlabel(timeAx, "时间 (ms)");
+ylabel(timeAx, "幅度");
+title(timeAx, sprintf("TX 时域 | %s | 前 %.2f ms", ...
     char(report.modulationType), max(tMs)));
-legend(timeAx, ["Real" "Imag" "|x|"], "Location", "northeast");
+legend(timeAx, ["实部" "虚部" "|x|"], "Location", "northeast");
 
 cla(freqAx, "reset");
 freqKhz = double(sig.freqHz(:)) / 1e3;
 psdDbHz = double(sig.psdDbHz(:));
 finiteUse = isfinite(freqKhz) & isfinite(psdDbHz);
 if ~any(finiteUse)
-    local_draw_empty_axis_local(freqAx, "Frequency Domain", "No finite PSD samples");
+    local_draw_empty_axis_local(freqAx, "频域", "没有有限 PSD 样本");
     return;
 end
 plot(freqAx, freqKhz(finiteUse), psdDbHz(finiteUse), "Color", [0.05 0.45 0.36], "LineWidth", 0.95);
 grid(freqAx, "on");
 box(freqAx, "on");
-xlabel(freqAx, "Frequency (kHz)");
+xlabel(freqAx, "频率 (kHz)");
 ylabel(freqAx, "PSD (dB/Hz)");
 if isfinite(double(sig.bw99Hz)) && double(sig.bw99Hz) > 0
     halfBwKhz = double(sig.bw99Hz) / 2e3;
     xline(freqAx, -halfBwKhz, "--", "Color", [0.35 0.35 0.35]);
     xline(freqAx, halfBwKhz, "--", "Color", [0.35 0.35 0.35]);
 end
-title(freqAx, sprintf("TX Frequency Domain | BW99 %.1f kHz | eta %.3g bit/s/Hz", ...
+title(freqAx, sprintf("TX 频域 | BW99 %.1f kHz | eta %.3g bit/s/Hz", ...
     double(sig.bw99Hz) / 1e3, double(sig.etaBpsHz)));
 end
 
 function local_save_signal_monitor_figure(report)
-fig = figure("Name", "Robust Unified Signal Monitor", ...
+fig = figure("Name", "Robust Unified 信号监视", ...
     "Color", "w", ...
     "NumberTitle", "off", ...
     "Visible", "off");
@@ -741,30 +772,30 @@ t = tiledlayout(fig, 2, 1, "Padding", "compact", "TileSpacing", "compact");
 timeAx = nexttile(t);
 freqAx = nexttile(t);
 local_plot_signal_monitor_axes(timeAx, freqAx, report);
-sgtitle(t, sprintf("robust_unified signal monitor | %s | Eb/N0 %.2f dB | JSR %.2f dB", ...
+sgtitle(t, sprintf("robust_unified 信号监视 | %s | Eb/N0 %.2f dB | JSR %.2f dB", ...
     char(report.modulationType), report.ebN0dB, report.jsrDb));
 exportgraphics(fig, char(report.savedImages.signalMonitorFigure), "Resolution", 160);
 end
 
 function local_show_comparison_figure(report)
-fig = figure("Name", "Robust Unified Demo Comparison", "Color", "w", "NumberTitle", "off");
+fig = figure("Name", "Robust Unified 演示对比", "Color", "w", "NumberTitle", "off");
 t = tiledlayout(fig, 2, 2, "Padding", "compact", "TileSpacing", "compact");
 
 nexttile(t);
 imshow(report.txImageOriginal);
-title("Original Input");
+title("原始输入");
 
 nexttile(t);
 imshow(report.txImageResized);
-title(sprintf('Actual TX (%dx%d)', size(report.txImageResized, 2), size(report.txImageResized, 1)));
+title(sprintf('实际 TX (%dx%d)', size(report.txImageResized, 2), size(report.txImageResized, 1)));
 
 nexttile(t);
 imshow(report.rxImageResized);
-title(sprintf('Recovered RX (%dx%d)', size(report.rxImageResized, 2), size(report.rxImageResized, 1)));
+title(sprintf('恢复 RX (%dx%d)', size(report.rxImageResized, 2), size(report.rxImageResized, 1)));
 
 nexttile(t);
 imshow(report.rxImageDisplay);
-title(sprintf('Display RX (%dx%d)', size(report.rxImageDisplay, 2), size(report.rxImageDisplay, 1)));
+title(sprintf('显示 RX (%dx%d)', size(report.rxImageDisplay, 2), size(report.rxImageDisplay, 1)));
 
 sgtitle(t, sprintf([ ...
     'robust_unified | %s | %s | Eb/N0 %.2f dB | JSR %.2f dB | BER %.3g | rawPER %.3g | ' ...
@@ -781,13 +812,13 @@ textValue = string(rawText);
 textValue = regexprep(textValue, "[\\[\\],;]", " ");
 values = sscanf(char(textValue), "%f").';
 if isempty(values)
-    error("%s must not be empty.", char(fieldName));
+    error("%s 不能为空。", char(fieldName));
 end
 if any(~isfinite(values))
-    error("%s must contain finite numeric values.", char(fieldName));
+    error("%s 必须包含有限数值。", char(fieldName));
 end
 if requireInteger && any(abs(values - round(values)) > 1e-12)
-    error("%s must contain integers.", char(fieldName));
+    error("%s 必须包含整数。", char(fieldName));
 end
 if requireInteger
     values = round(values);
