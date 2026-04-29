@@ -1,6 +1,0 @@
-function tmp_validate_robust_unified_single_narrowband()
-addpath(genpath("src"));
-validate_robust_unified_single_sweeps( ...
-    "Suites", "narrowband", ...
-    "Tag", "robust_unified_single_narrowband_full_6db");
-end

@@ -1,6 +1,0 @@
-function tmp_validate_robust_unified_single_impulse()
-addpath(genpath("src"));
-validate_robust_unified_single_sweeps( ...
-    "Suites", "impulse", ...
-    "Tag", "robust_unified_single_impulse_full_6db");
-end
