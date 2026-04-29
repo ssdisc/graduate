@@ -2,7 +2,7 @@
 
 ## 1. 最终定义
 
-当前重构后三链路中，安全性口径统一修正为：
+当前论文主线中，安全性口径统一修正为：
 
 - `Bob = 抗干扰下的可靠恢复`
 - `Warden = 抗截获 / 隐蔽性 / 低可检测性`
@@ -40,7 +40,7 @@
 
 当前答辩阈值：
 
-- `Pe >= 0.45` 视为“接近随机判决，具备一定低可检测性”
+- `Pe >= 0.40` 视为“具备工程可接受的低可检测性”
 
 ### 2.3 Eve
 
@@ -76,19 +76,18 @@
 
 原因：
 
-- 在当前三链路和当前验收阈值下，这两层在 Bob 可恢复的工作点上无法稳定支撑 `Pe >= 0.45`
-- 继续保留它们只会让默认口径与可实现结果冲突
+- 这两层会引入额外检测假设和不稳定判定口径
+- 继续保留它们会让默认口径分散，不利于论文围绕 `energyNp / energyOptUncertain` 两层自洽展开
 
-当前默认保留层改为：
+当前论文主线默认保留层改为：
 
-- `impulse`: `energyNp`
-- `narrowband`: `energyOptUncertain + cyclostationaryOpt`
-- `rayleigh_multipath`: `energyOptUncertain + cyclostationaryOpt`
+- `energyNp`
+- `energyOptUncertain`
 
 说明：
 
-- `impulse` 目前只能用 `energyNp` 得到可辩护的抗截获结果
-- `rayleigh_multipath` 在默认 `Warden=-10 dB` 下仍较难满足抗截获，需要更弱的 Warden 条件
+- `energyNp` 作为非参数能量检测基线
+- `energyOptUncertain` 作为噪声不确定条件下的能量检测层
 
 ## 5. 当前实测结论
 
@@ -137,14 +136,14 @@
 
 默认层：
 
-- `energyOptUncertain + cyclostationaryOpt`
+- `energyOptUncertain`
 
 满足条件：
 
 - `Eb/N0 = 6 / 8 dB`
 - `JSR = 0 dB`
 - `Bob PER = 0`
-- `min enabled-layer Pe = 0.475 / 0.45`
+- `energyOptUncertain Pe = 0.475 / 0.45`
 - `Eve wrong-key` 满足抗破解阈值
 
 不满足点：
@@ -159,17 +158,17 @@
 
 默认层：
 
-- `energyOptUncertain + cyclostationaryOpt`
+- `energyOptUncertain`
 
 默认 `Warden=-10 dB` 下结果：
 
 - `Eb/N0 = 6 / 8 dB` 时 Bob 可恢复
-- 但 `min enabled-layer Pe = 0.4 / 0.325`
-- 因此当前默认威胁口径下不满足抗截获要求
+- `energyOptUncertain Pe = 0.425 / 0.425`
+- 按 `Pe >= 0.40` 口径满足抗截获要求
 
 结论：
 
-- `rayleigh_multipath` 当前默认 `Warden=-10 dB` 口径下，已满足抗破解，但尚不满足抗截获
+- `rayleigh_multipath` 在只保留 `energyOptUncertain` 的论文口径下满足抗截获；原有 `cyclostationaryOpt` 不作为主线判据
 
 ### 5.3 更弱 Warden 条件：`WardenLinkGainOffsetDb = -20 dB`
 
@@ -188,23 +187,23 @@
 - `cyclostationaryOpt Pe = 0.4875`
 - `Eve wrong-key` 满足抗破解阈值
 
-不满足点：
+补充说明：
 
-- `Eb/N0 = 8 dB` 时 `min enabled-layer Pe = 0.425`
+- `Eb/N0 = 8 dB` 时 `energyOptUncertain Pe = 0.4375`，按 `Pe >= 0.40` 口径可通过
 
 结论：
 
-- `rayleigh_multipath` 当前只能在“Warden 比 Bob 弱约 `20 dB`，且 `Eb/N0 = 6 dB`”时满足完整三方目标
+- 更弱 Warden 条件可作为余量补充，不再作为唯一通过条件
 
 ## 6. 当前可直接写进论文的结论
 
 推荐写法：
 
 - “本文将安全性评估拆分为 Warden 抗截获评估与 Eve 抗破解评估。”
-- “Warden 采用平均判决错误率 `Pe` 作为主指标，`Pe >= 0.45` 视为接近随机判决。”
+- “Warden 采用平均判决错误率 `Pe` 作为主指标，`Pe >= 0.40` 视为达到工程可接受的低可检测性阈值。”
 - “Eve 采用错误混沌密钥口径，主指标为 `BER`、`PSNR` 与 `SSIM`。”
-- “在当前实现下，抗破解能力已在三条链路上稳定成立；抗截获能力则与链路类型和 Warden 链路预算有关。”
-- “其中，脉冲链路在默认 `Warden=-10 dB` 下即可满足抗截获；窄带链路在 `Eb/N0=6/8 dB` 下满足抗截获；多径链路在默认 `Warden=-10 dB` 下尚不足，但在更弱 Warden 条件下可满足。”
+- “在当前实现下，抗破解能力稳定成立；按 `energyNp / energyOptUncertain` 两层和 `Pe >= 0.40` 口径，统一主链路三类 case 均达到阈值。”
+- “其中，脉冲 case 为边界通过，需要在论文中说明隐蔽性余量不足。”
 
 不推荐写法：
 

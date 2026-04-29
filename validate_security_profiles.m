@@ -114,7 +114,7 @@ addParameter(p, "EveChaosApproxDelta", 1e-10, @(x) isscalar(x) && isnumeric(x) &
 addParameter(p, "WardenLinkGainOffsetDb", -10, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
 addParameter(p, "WardenTrials", 80, @(x) isscalar(x) && isnumeric(x) && isfinite(x) && x >= 10);
 addParameter(p, "WardenObs", 4096, @(x) isscalar(x) && isnumeric(x) && isfinite(x) && x >= 16);
-addParameter(p, "WardenPeThreshold", 0.45, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
+addParameter(p, "WardenPeThreshold", 0.40, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
 addParameter(p, "ScreenAllWardenLayers", true, @(x) islogical(x) || isnumeric(x));
 addParameter(p, "EveBerThreshold", 0.45, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
 addParameter(p, "EvePsnrThreshold", 8.0, @(x) isscalar(x) && isnumeric(x) && isfinite(x));

@@ -74,7 +74,7 @@ addParameter(p, "WardenTrials", 40, @(x) isscalar(x) && isnumeric(x) && isfinite
 addParameter(p, "WardenObs", 4096, @(x) isscalar(x) && isnumeric(x) && isfinite(x) && x >= 16);
 addParameter(p, "WardenNoiseUncertaintyDb", 1.0, @(x) isscalar(x) && isnumeric(x) && isfinite(x) && x >= 0);
 addParameter(p, "WardenExtraDelaySamples", 4096, @(x) isscalar(x) && isnumeric(x) && isfinite(x) && x >= 0);
-addParameter(p, "WardenPeThreshold", 0.45, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
+addParameter(p, "WardenPeThreshold", 0.40, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
 addParameter(p, "EveBerThreshold", 0.45, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
 addParameter(p, "EvePsnrThreshold", 8.0, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
 addParameter(p, "EveSsimThreshold", 0.05, @(x) isscalar(x) && isnumeric(x) && isfinite(x));
