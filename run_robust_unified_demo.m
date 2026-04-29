@@ -575,7 +575,10 @@ savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgR
 report = local_build_demo_report(results, cfg, runtimeCfg, runDir, savedImages, ...
     txImgOriginal, txImgResized, rxImgResized, rxImgDisplay, elapsedSec);
 local_save_signal_monitor_figure(report);
-save(fullfile(runDir, "demo_report.mat"), "report", "cfg", "results");
+reportForUi = report;
+report = local_prune_demo_report_for_save(reportForUi);
+save(fullfile(runDir, "demo_report.mat"), "report", "cfg");
+report = reportForUi;
 end
 
 function previewReport = local_build_demo_tx_preview_report(cfg)
@@ -778,6 +781,21 @@ function sidecars = local_build_demo_sidecar_report(results, cfg, methodIdx, poi
 sidecars = struct();
 sidecars.eve = local_build_demo_eve_report(results, cfg, methodIdx, pointIdx);
 sidecars.warden = local_build_demo_warden_report(results, cfg, pointIdx);
+end
+
+function reportSaved = local_prune_demo_report_for_save(reportFull)
+reportSaved = reportFull;
+largeImageFields = ["txImageOriginal" "txImageResized" "rxImageResized" "rxImageDisplay"];
+for idx = 1:numel(largeImageFields)
+    fieldName = char(largeImageFields(idx));
+    if isfield(reportSaved, fieldName)
+        reportSaved = rmfield(reportSaved, fieldName);
+    end
+end
+if isfield(reportSaved, "spectrum")
+    reportSaved = rmfield(reportSaved, "spectrum");
+end
+reportSaved.savedMatContents = "lightweight_report_cfg_only";
 end
 
 function eve = local_build_demo_eve_report(results, cfg, methodIdx, pointIdx)
