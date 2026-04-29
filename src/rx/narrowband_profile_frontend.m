@@ -27,6 +27,21 @@ switch method
             "freqReliability", infoOut.freqReliability, ...
             "featureInfo", infoOut.featureInfo);
 
+    case "ml_fh_erasure"
+        dataSymOut = dataSym;
+        [reliabilitySym, infoOut] = local_ml_fh_erasure_reliability_local(dataSym, pkt, runtimeCfg);
+        diagOut = struct( ...
+            "frontEndMethod", method, ...
+            "ok", true, ...
+            "hopReliability", infoOut.hopReliability, ...
+            "ruleHopReliability", infoOut.ruleHopReliability, ...
+            "mlHopReliability", infoOut.mlHopReliability, ...
+            "freqReliability", infoOut.freqReliability, ...
+            "pBadFreq", infoOut.pBadFreq, ...
+            "featureInfo", infoOut.featureInfo, ...
+            "freqFeatureInfo", infoOut.freqFeatureInfo, ...
+            "mlInfo", infoOut.mlInfo);
+
     case "narrowband_notch_soft"
         [dataSymOut, reliabilitySym, diagOut] = local_narrowband_notch_soft_local(dataSym, pkt, runtimeCfg);
 
@@ -277,6 +292,51 @@ infoOut = struct( ...
     "featureInfo", info);
 end
 
+function [reliabilitySym, infoOut] = local_ml_fh_erasure_reliability_local(dataSym, pkt, runtimeCfg)
+cfg = runtimeCfg.mitigation.fhErasure;
+model = local_required_ml_fh_erasure_model_local(runtimeCfg.mitigation);
+
+[hopFeatureMatrix, featureInfo] = ml_extract_fh_erasure_features(dataSym, pkt.hopInfo, cfg, runtimeCfg.mod);
+featureNames = string(featureInfo.featureNames(:).');
+ruleIdx = find(featureNames == "ruleReliability", 1, "first");
+if isempty(ruleIdx)
+    error("FH erasure feature set is missing ruleReliability.");
+end
+ruleHopReliability = double(hopFeatureMatrix(:, ruleIdx));
+ruleHopReliability(~isfinite(ruleHopReliability)) = 0;
+ruleHopReliability = max(0, min(1, ruleHopReliability));
+
+[freqFeatureMatrix, freqFeatureInfo] = ml_extract_fh_erasure_freq_features(hopFeatureMatrix, featureInfo);
+[~, pBadFreq, probabilities, mlInfo] = ml_predict_fh_erasure_reliability(freqFeatureMatrix, model, ...
+    "minReliability", cfg.minReliability);
+mlHopReliability = local_ml_erasure_reliability_from_probability_local( ...
+    pBadFreq, featureInfo.freqIdx, freqFeatureInfo.nFreqs, cfg);
+hopReliability = min(ruleHopReliability(:), mlHopReliability(:));
+hopReliability = max(double(cfg.minReliability), min(1, hopReliability));
+
+reliabilitySym = repelem(hopReliability, round(double(featureInfo.hopLen)), 1);
+reliabilitySym = rx_expand_reliability(reliabilitySym, numel(dataSym));
+
+freqReliability = ones(round(double(freqFeatureInfo.nFreqs)), 1);
+for freqIdxNow = 1:numel(freqReliability)
+    use = featureInfo.freqIdx == freqIdxNow;
+    if any(use)
+        freqReliability(freqIdxNow) = median(hopReliability(use));
+    end
+end
+
+infoOut = struct( ...
+    "hopReliability", hopReliability, ...
+    "ruleHopReliability", ruleHopReliability, ...
+    "mlHopReliability", mlHopReliability, ...
+    "freqReliability", freqReliability, ...
+    "pBadFreq", pBadFreq, ...
+    "probabilities", probabilities, ...
+    "featureInfo", featureInfo, ...
+    "freqFeatureInfo", freqFeatureInfo, ...
+    "mlInfo", mlInfo);
+end
+
 function hopReliability = local_rule_reliability_local(dataSym, pkt, runtimeCfg)
 featureNames = ml_fh_erasure_feature_names();
 ruleIdx = find(featureNames == "ruleReliability", 1, "first");
@@ -328,6 +388,52 @@ if ~(isstruct(mitigation) && isfield(mitigation, "mlNarrowbandResidual") ...
     error("mitigation.mlNarrowbandResidual is required for narrowband_cnn_residual_soft.");
 end
 model = mitigation.mlNarrowbandResidual;
+end
+
+function model = local_required_ml_fh_erasure_model_local(mitigation)
+if ~(isstruct(mitigation) && isfield(mitigation, "mlFhErasure") && isstruct(mitigation.mlFhErasure))
+    error("mitigation.mlFhErasure is required for ml_fh_erasure.");
+end
+model = mitigation.mlFhErasure;
+if ~(isfield(model, "trained") && logical(model.trained))
+    error("ml_fh_erasure requires a trained FH-erasure model.");
+end
+end
+
+function rel = local_ml_erasure_reliability_from_probability_local(pBadFreq, freqIdx, nFreqs, cfg)
+pBadFreq = double(pBadFreq(:));
+freqIdx = round(double(freqIdx(:)));
+nFreqs = round(double(nFreqs));
+if ~(isscalar(nFreqs) && isfinite(nFreqs) && nFreqs >= 1)
+    error("ml_fh_erasure requires a positive finite nFreqs.");
+end
+if numel(pBadFreq) ~= nFreqs
+    error("ml_fh_erasure predicted %d frequency probabilities, expected %d.", numel(pBadFreq), nFreqs);
+end
+if any(~isfinite(freqIdx) | freqIdx < 1 | freqIdx > nFreqs)
+    error("ml_fh_erasure freqIdx must be within [1, nFreqs].");
+end
+
+rel = ones(size(freqIdx));
+candidateFreq = find(isfinite(pBadFreq) & pBadFreq >= cfg.mlFreqProbabilityThreshold);
+if ~isempty(candidateFreq)
+    [~, ord] = sort(pBadFreq(candidateFreq), "descend");
+    maxErasedFreqs = max(1, ceil(double(cfg.mlMaxErasedFreqFraction) * double(nFreqs)));
+    candidateFreq = candidateFreq(ord(1:min(numel(ord), maxErasedFreqs)));
+    for k = 1:numel(candidateFreq)
+        freqNow = candidateFreq(k);
+        freqRel = local_probability_erasure_reliability_local( ...
+            pBadFreq(freqNow), cfg.mlFreqProbabilityThreshold, cfg.minReliability, cfg.mlProbabilitySlope);
+        rel(freqIdx == freqNow) = min(rel(freqIdx == freqNow), freqRel);
+    end
+end
+rel = max(double(cfg.minReliability), min(1, rel));
+end
+
+function rel = local_probability_erasure_reliability_local(probability, threshold, minReliability, slope)
+excess = max(double(probability) - double(threshold), 0);
+rel = 1 ./ (1 + double(slope) .* excess);
+rel = max(double(minReliability), min(1, rel));
 end
 
 function detectCfg = local_build_bandstop_cfg_local(mitigation, cfg)

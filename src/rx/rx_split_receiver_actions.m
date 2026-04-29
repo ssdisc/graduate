@@ -17,7 +17,7 @@ if profileName == "robust_unified" && method == "robust_combo"
 end
 
 sampleActions = ["blanking" "clipping" "ml_blanking" "ml_cnn" "ml_cnn_hard" "ml_gru" "ml_gru_hard" "robust_mixed_sample"];
-symbolActions = ["adaptive_notch" "fft_notch" "fft_bandstop" "stft_notch" "fh_erasure" ...
+symbolActions = ["adaptive_notch" "fft_notch" "fft_bandstop" "stft_notch" "fh_erasure" "ml_fh_erasure" ...
     "narrowband_notch_soft" "narrowband_subband_excision_soft" "narrowband_cnn_residual_soft"];
 
 if any(method == sampleActions)

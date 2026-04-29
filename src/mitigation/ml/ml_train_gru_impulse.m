@@ -32,6 +32,8 @@ arguments
     opts.jsrDbRange (1,2) double = [NaN NaN]
     opts.impulseEnableProbability (1,1) double = 1.0
     opts.impulseProbRange (1,2) double = [NaN NaN]
+    opts.impulseProbFocusRange (1,2) double = [NaN NaN]
+    opts.impulseProbFocusProbability (1,1) double = 0.0
     opts.impulseToBgRatioRange (1,2) double = [NaN NaN]
     opts.singleToneProbability (1,1) double = 0.0
     opts.singleTonePowerRange (1,2) double = [NaN NaN]
@@ -95,6 +97,8 @@ dataset = ml_generate_impulse_blocks(p, opts.nBlocks, opts.blockLen, opts.ebN0dB
     "jsrDbRange", opts.jsrDbRange, ...
     "impulseEnableProbability", opts.impulseEnableProbability, ...
     "impulseProbRange", opts.impulseProbRange, ...
+    "impulseProbFocusRange", opts.impulseProbFocusRange, ...
+    "impulseProbFocusProbability", opts.impulseProbFocusProbability, ...
     "impulseToBgRatioRange", opts.impulseToBgRatioRange, ...
     "singleToneProbability", opts.singleToneProbability, ...
     "singleTonePowerRange", opts.singleTonePowerRange, ...
@@ -124,13 +128,13 @@ end
 
 trainRx = dataset.rxInput(split.trainIdx);
 trainTx = dataset.txClean(split.trainIdx);
-trainY = dataset.impMask(split.trainIdx);
+trainY = dataset.teacherBlankMask(split.trainIdx);
 trainScore = dataset.impulseScore(split.trainIdx);
 valRx = dataset.rxInput(split.valIdx);
-valY = dataset.impMask(split.valIdx);
+valY = dataset.teacherBlankMask(split.valIdx);
 valScore = dataset.impulseScore(split.valIdx);
 testRx = dataset.rxInput(split.testIdx);
-testY = dataset.impMask(split.testIdx);
+testY = dataset.teacherBlankMask(split.testIdx);
 
 trainX = local_extract_features(trainRx);
 valX = local_extract_features(valRx);

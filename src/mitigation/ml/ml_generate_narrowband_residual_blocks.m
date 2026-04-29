@@ -47,7 +47,7 @@ for b = 1:nBlocks
     ebN0dB = opts.ebN0dBRange(1) + rand() * diff(opts.ebN0dBRange);
     jsrDb = opts.jsrDbRange(1) + rand() * diff(opts.jsrDbRange);
 
-    txSym = local_random_qpsk_local(blockLen);
+    txSym = local_random_payload_chip_symbols_local(blockLen, p.mod, p.dsss);
     [txHopped, hopInfo] = fh_modulate(txSym, p.fh);
     txSample = pulse_tx_from_symbol_rate(txHopped, waveform);
     signalPower = mean(abs(txSample).^2);
@@ -110,12 +110,26 @@ pBlock.channel.narrowband.bandwidthFreqPoints = double(bandwidth);
 pBlock.channel.narrowband.power = double(signalPower) * 10^(double(jsrDb) / 10);
 end
 
-function sym = local_random_qpsk_local(nSym)
-bits = randi([0 1], 2 * nSym, 1, "uint8");
-bI = bits(1:2:end);
-bQ = bits(2:2:end);
-sym = (1 - 2 * double(bI) + 1j * (1 - 2 * double(bQ))) / sqrt(2);
-sym = sym(:);
+function chipSym = local_random_payload_chip_symbols_local(nChipSym, modCfg, dsssCfg)
+nChipSym = max(1, round(double(nChipSym)));
+spreadFactor = dsss_effective_spread_factor(dsssCfg);
+nBaseSym = ceil(double(nChipSym) / double(spreadFactor));
+bitsPerSymbol = local_bits_per_symbol_local(modCfg);
+bits = randi([0 1], nBaseSym * bitsPerSymbol, 1, "uint8");
+[baseSym, ~] = modulate_bits(bits, modCfg);
+[chipSym, ~] = dsss_spread(baseSym(:), dsssCfg);
+chipSym = local_fit_complex_length_local(chipSym, nChipSym);
+end
+
+function bitsPerSymbol = local_bits_per_symbol_local(modCfg)
+switch upper(string(modCfg.type))
+    case {"BPSK", "MSK"}
+        bitsPerSymbol = 1;
+    case "QPSK"
+        bitsPerSymbol = 2;
+    otherwise
+        error("Unsupported modulation for narrowband residual training: %s", char(string(modCfg.type)));
+end
 end
 
 function y = local_fit_complex_length_local(x, targetLen)

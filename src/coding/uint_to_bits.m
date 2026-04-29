@@ -26,6 +26,10 @@ switch lower(type)
         bits = uint8(int2bit(uint32(x), 32));
 
     case {'uint8vec', 'uint8_vec'}
+        if isempty(x)
+            bits = zeros(0, 1, "uint8");
+            return;
+        end
         bits = uint8(int2bit(uint8(x(:)), 8));
 
     otherwise

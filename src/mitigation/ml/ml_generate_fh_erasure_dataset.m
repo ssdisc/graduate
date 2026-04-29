@@ -72,7 +72,7 @@ for blockIdx = 1:nBlocks
     ebN0dB = ebN0dBRange(1) + rand() * diff(ebN0dBRange);
     N0 = 10^(-ebN0dB / 10);
 
-    txSym = local_random_symbols(nSym, p.mod);
+    txSym = local_random_payload_chip_symbols_local(nSym, p.mod, p.dsss);
     txSample = pulse_tx_from_symbol_rate(txSym, waveform);
     [txHopped, sampleHopInfo] = fh_modulate_samples(txSample, p.fh, waveform);
     signalPower = mean(abs(txHopped).^2);
@@ -271,21 +271,26 @@ if abs(centerFreqPoints) > maxCenterFreqPoints
 end
 end
 
-function sym = local_random_symbols(nSym, modCfg)
-nSym = max(1, round(double(nSym)));
+function chipSym = local_random_payload_chip_symbols_local(nChipSym, modCfg, dsssCfg)
+nChipSym = max(1, round(double(nChipSym)));
+spreadFactor = dsss_effective_spread_factor(dsssCfg);
+nBaseSym = ceil(double(nChipSym) / double(spreadFactor));
+bitsPerSymbol = local_bits_per_symbol_local(modCfg);
+bits = randi([0 1], nBaseSym * bitsPerSymbol, 1, "uint8");
+[baseSym, ~] = modulate_bits(bits, modCfg);
+[chipSym, ~] = dsss_spread(baseSym(:), dsssCfg);
+chipSym = local_fit_complex_length(chipSym, nChipSym);
+end
+
+function bitsPerSymbol = local_bits_per_symbol_local(modCfg)
 switch upper(string(modCfg.type))
-    case "BPSK"
-        bits = randi([0 1], nSym, 1, "uint8");
-        sym = 1 - 2 * double(bits);
+    case {"BPSK", "MSK"}
+        bitsPerSymbol = 1;
     case "QPSK"
-        bits = randi([0 1], 2 * nSym, 1, "uint8");
-        bI = bits(1:2:end);
-        bQ = bits(2:2:end);
-        sym = (1 - 2 * double(bI) + 1j * (1 - 2 * double(bQ))) / sqrt(2);
+        bitsPerSymbol = 2;
     otherwise
         error("Unsupported modulation for FH-erasure dataset: %s", char(string(modCfg.type)));
 end
-sym = sym(:);
 end
 
 function y = local_fit_complex_length(x, targetLen)
