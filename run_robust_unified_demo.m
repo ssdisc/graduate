@@ -391,7 +391,8 @@ try
         report.endToEndBitPerfect, report.elapsedSec));
     local_append_sidecar_status(ui, report);
     local_update_signal_axes(ui, report);
-    local_append_status(ui, "已保存 RX 图像: " + string(report.savedImages.rxDisplay));
+    local_append_status(ui, "已保存 RX(补偿前)图像: " + string(report.savedImages.rxCommResized));
+    local_append_status(ui, "已保存 RX(补偿后)图像: " + string(report.savedImages.rxCompResized));
     local_append_status(ui, "已保存信号监视图: " + string(report.savedImages.signalMonitorFigure));
     local_show_comparison_figure(report);
     local_append_status(ui, "已保存对比图: " + string(report.savedImages.comparisonFigure));
@@ -604,19 +605,19 @@ end
 txImgOriginal = results.sourceImages.original;
 txImgResized = results.sourceImages.resized;
 exampleEntry = results.example(1).methods.(methodField);
-requiredExampleFields = ["imgRxResized" "imgRx"];
+requiredExampleFields = ["imgRxCommResized" "imgRxCompensatedResized"];
 for idx = 1:numel(requiredExampleFields)
     fieldName = requiredExampleFields(idx);
     if ~isfield(exampleEntry, fieldName)
         error("method %s 的 example entry 缺少字段 %s。", methodField, fieldName);
     end
 end
-rxImgResized = local_require_uint8_image(exampleEntry.imgRxResized, "example imgRxResized");
-rxImgDisplay = local_require_uint8_image(exampleEntry.imgRx, "example imgRx");
+rxImgCommResized = local_require_uint8_image(exampleEntry.imgRxCommResized, "example imgRxCommResized");
+rxImgCompResized = local_require_uint8_image(exampleEntry.imgRxCompensatedResized, "example imgRxCompensatedResized");
 
-savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgResized, rxImgDisplay);
+savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgCommResized, rxImgCompResized);
 report = local_build_demo_report(results, cfg, runtimeCfg, runDir, savedImages, ...
-    txImgOriginal, txImgResized, rxImgResized, rxImgDisplay, elapsedSec);
+    txImgOriginal, txImgResized, rxImgCommResized, rxImgCompResized, elapsedSec);
 local_save_signal_monitor_figure(report);
 reportForUi = report;
 report = local_prune_demo_report_for_save(reportForUi);
@@ -747,19 +748,19 @@ end
 bw = double(value);
 end
 
-function savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgResized, rxImgDisplay)
+function savedImages = local_save_demo_images(runDir, txImgOriginal, txImgResized, rxImgCommResized, rxImgCompResized)
 savedImages = struct();
 savedImages.txOriginal = string(fullfile(runDir, "tx_original.png"));
 savedImages.txResized = string(fullfile(runDir, "tx_resized.png"));
-savedImages.rxResized = string(fullfile(runDir, "rx_resized.png"));
-savedImages.rxDisplay = string(fullfile(runDir, "rx_display.png"));
+savedImages.rxCommResized = string(fullfile(runDir, "rx_comm_resized.png"));
+savedImages.rxCompResized = string(fullfile(runDir, "rx_comp_resized.png"));
 savedImages.comparisonFigure = string(fullfile(runDir, "comparison.png"));
 savedImages.signalMonitorFigure = string(fullfile(runDir, "signal_monitor.png"));
 
 imwrite(local_require_uint8_image(txImgOriginal, "tx original"), char(savedImages.txOriginal));
 imwrite(local_require_uint8_image(txImgResized, "tx resized"), char(savedImages.txResized));
-imwrite(local_require_uint8_image(rxImgResized, "rx resized"), char(savedImages.rxResized));
-imwrite(local_require_uint8_image(rxImgDisplay, "rx display"), char(savedImages.rxDisplay));
+imwrite(local_require_uint8_image(rxImgCommResized, "rx comm resized"), char(savedImages.rxCommResized));
+imwrite(local_require_uint8_image(rxImgCompResized, "rx comp resized"), char(savedImages.rxCompResized));
 end
 
 function img = local_require_uint8_image(img, imageName)
@@ -769,7 +770,7 @@ end
 end
 
 function report = local_build_demo_report(results, cfg, runtimeCfg, runDir, savedImages, ...
-        txImgOriginal, txImgResized, rxImgResized, rxImgDisplay, elapsedSec)
+        txImgOriginal, txImgResized, rxImgCommResized, rxImgCompResized, elapsedSec)
 methodIdx = 1;
 pointIdx = 1;
 
@@ -781,8 +782,8 @@ report.modulationType = string(cfg.modulationType);
 report.savedImages = savedImages;
 report.txImageOriginal = txImgOriginal;
 report.txImageResized = txImgResized;
-report.rxImageResized = rxImgResized;
-report.rxImageDisplay = rxImgDisplay;
+report.rxImageCommResized = rxImgCommResized;
+report.rxImageCompResized = rxImgCompResized;
 report.activeInterferences = local_active_interference_names(cfg);
 report.interferenceConfig = struct( ...
     "enableImpulse", logical(cfg.enableImpulse), ...
@@ -869,7 +870,7 @@ end
 
 function reportSaved = local_prune_demo_report_for_save(reportFull)
 reportSaved = reportFull;
-largeImageFields = ["txImageOriginal" "txImageResized" "rxImageResized" "rxImageDisplay"];
+largeImageFields = ["txImageOriginal" "txImageResized" "rxImageCommResized" "rxImageCompResized"];
 for idx = 1:numel(largeImageFields)
     fieldName = char(largeImageFields(idx));
     if isfield(reportSaved, fieldName)
@@ -1172,12 +1173,12 @@ imshow(report.txImageResized);
 title(ax2, sprintf('实际 TX (%dx%d)', size(report.txImageResized, 2), size(report.txImageResized, 1)));
 
 ax3 = nexttile(t);
-imshow(report.rxImageResized);
-title(ax3, sprintf('恢复 RX (%dx%d)', size(report.rxImageResized, 2), size(report.rxImageResized, 1)));
+imshow(report.rxImageCommResized);
+title(ax3, sprintf('RX 补偿前 Resized (%dx%d)', size(report.rxImageCommResized, 2), size(report.rxImageCommResized, 1)));
 
 ax4 = nexttile(t);
-imshow(report.rxImageDisplay);
-title(ax4, sprintf('显示 RX (%dx%d)', size(report.rxImageDisplay, 2), size(report.rxImageDisplay, 1)));
+imshow(report.rxImageCompResized);
+title(ax4, sprintf('RX 补偿后 Resized (%dx%d)', size(report.rxImageCompResized, 2), size(report.rxImageCompResized, 1)));
 
 exportgraphics(fig, char(report.savedImages.comparisonFigure), "Resolution", 160);
 end
