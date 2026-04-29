@@ -951,7 +951,8 @@ for pointIdx = 1:nPoints
     pointChannel = local_build_point_channel_local(runtimeCfg, budget, pointIdx, waveform);
     detCfg = wardenCfg;
     detCfg.referenceLink = string(wardenCfg.referenceLink);
-    detCfg.fhNarrowband.nFreqs = double(runtimeCfg.fh.nFreqs);
+    detCfg.fhNarrowband = local_build_warden_fh_narrowband_cfg_local( ...
+        wardenCfg.fhNarrowband, runtimeCfg, waveform);
     detCfg.cyclostationary.sps = double(waveform.sps);
     txBurst = double(wardenBudget.rxAmplitudeScale(pointIdx)) * txArtifacts.burstForChannel(:);
     delayMax = local_capture_guard_samples_local(runtimeCfg, waveform);
@@ -965,6 +966,74 @@ wardenResults = local_pack_warden_extension_results_local( ...
     double(budget.bob.jsrDb(:).'), string(wardenCfg.referenceLink), ...
     local_build_scan_struct_local(budget), string(wardenCfg.enabledLayers), ...
     string(wardenCfg.primaryLayer), string(profileName));
+end
+
+function fhNbCfg = local_build_warden_fh_narrowband_cfg_local(fhNbCfgIn, runtimeCfg, waveform)
+fhNbCfg = fhNbCfgIn;
+freqSet = local_collect_warden_monitor_freq_set_local(runtimeCfg);
+if isempty(freqSet)
+    if isfield(runtimeCfg, "fh") && isstruct(runtimeCfg.fh) && isfield(runtimeCfg.fh, "nFreqs")
+        fhNbCfg.nFreqs = double(runtimeCfg.fh.nFreqs);
+    end
+    return;
+end
+
+if ~(isfield(waveform, "sps") && isfinite(double(waveform.sps)) && double(waveform.sps) > 0)
+    error("Warden FH narrowband monitor requires a positive waveform.sps.");
+end
+
+normalizedFreqSet = double(freqSet(:).') / double(waveform.sps);
+valid = isfinite(normalizedFreqSet) & abs(normalizedFreqSet) < 0.5;
+normalizedFreqSet = normalizedFreqSet(valid);
+freqSet = double(freqSet(valid));
+if isempty(normalizedFreqSet)
+    error("Warden FH narrowband monitor has no valid frequencies inside Nyquist support.");
+end
+
+fhNbCfg.freqSet = double(freqSet(:).');
+fhNbCfg.normalizedFreqSet = double(normalizedFreqSet(:).');
+fhNbCfg.nFreqs = numel(normalizedFreqSet);
+if ~isfield(fhNbCfg, "bandwidth") || isempty(fhNbCfg.bandwidth)
+    fhNbCfg.bandwidth = local_default_warden_fh_bandwidth_local(normalizedFreqSet);
+end
+end
+
+function freqSet = local_collect_warden_monitor_freq_set_local(runtimeCfg)
+freqSet = zeros(1, 0);
+if isfield(runtimeCfg, "fh") && isstruct(runtimeCfg.fh) ...
+        && isfield(runtimeCfg.fh, "freqSet") && ~isempty(runtimeCfg.fh.freqSet)
+    freqSet = [freqSet double(runtimeCfg.fh.freqSet(:).')]; %#ok<AGROW>
+end
+if isfield(runtimeCfg, "frame") && isstruct(runtimeCfg.frame)
+    frameCfg = runtimeCfg.frame;
+    if isfield(frameCfg, "phyHeaderFhFreqSet") && ~isempty(frameCfg.phyHeaderFhFreqSet)
+        freqSet = [freqSet double(frameCfg.phyHeaderFhFreqSet(:).')]; %#ok<AGROW>
+    end
+    if isfield(frameCfg, "preambleDiversity") && isstruct(frameCfg.preambleDiversity) ...
+            && isfield(frameCfg.preambleDiversity, "freqSet") && ~isempty(frameCfg.preambleDiversity.freqSet)
+        freqSet = [freqSet double(frameCfg.preambleDiversity.freqSet(:).')]; %#ok<AGROW>
+    end
+    if isfield(frameCfg, "sessionHeaderBodyDiversity") && isstruct(frameCfg.sessionHeaderBodyDiversity) ...
+            && isfield(frameCfg.sessionHeaderBodyDiversity, "freqSet") && ~isempty(frameCfg.sessionHeaderBodyDiversity.freqSet)
+        freqSet = [freqSet double(frameCfg.sessionHeaderBodyDiversity.freqSet(:).')]; %#ok<AGROW>
+    end
+end
+freqSet = unique(freqSet(isfinite(freqSet)), "stable");
+freqSet = sort(freqSet);
+end
+
+function bandwidth = local_default_warden_fh_bandwidth_local(normalizedFreqSet)
+freqSet = sort(unique(double(normalizedFreqSet(:).')));
+if numel(freqSet) >= 2
+    spacing = diff(freqSet);
+    spacing = spacing(spacing > 0);
+    bandwidth = 0.90 * min(spacing);
+else
+    bandwidth = 0.10;
+end
+edgeMargin = 2 * (0.5 - max(abs(freqSet)));
+bandwidth = min(bandwidth, 0.95 * edgeMargin);
+bandwidth = max(min(bandwidth, 0.95), 1e-3);
 end
 
 function local_validate_warden_extension_cfg_local(wardenCfg)
@@ -1043,6 +1112,35 @@ for pointIdx = 1:nPoints
     for fieldName = template
         if isfield(src, fieldName)
             layer.(char(fieldName))(pointIdx) = double(src.(char(fieldName)));
+        end
+    end
+end
+if string(layerName) == "energyFhNarrow"
+    layer.fhNarrowband = local_collect_warden_fh_narrowband_meta_local(detCells, layerName);
+end
+end
+
+function meta = local_collect_warden_fh_narrowband_meta_local(detCells, layerName)
+meta = struct("nFreqs", NaN, "scanAllBins", false, "normalizedFreqSet", [], "bandwidth", NaN);
+for pointIdx = 1:numel(detCells)
+    det = detCells{pointIdx};
+    if isstruct(det) && isfield(det, "layers") && isfield(det.layers, char(layerName))
+        src = det.layers.(char(layerName));
+        if isfield(src, "fhNarrowband") && isstruct(src.fhNarrowband)
+            srcMeta = src.fhNarrowband;
+            if isfield(srcMeta, "nFreqs")
+                meta.nFreqs = double(srcMeta.nFreqs);
+            end
+            if isfield(srcMeta, "scanAllBins")
+                meta.scanAllBins = logical(srcMeta.scanAllBins);
+            end
+            if isfield(srcMeta, "normalizedFreqSet")
+                meta.normalizedFreqSet = double(srcMeta.normalizedFreqSet(:).');
+            end
+            if isfield(srcMeta, "bandwidth")
+                meta.bandwidth = double(srcMeta.bandwidth);
+            end
+            return;
         end
     end
 end

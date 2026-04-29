@@ -21,6 +21,8 @@ function m = warden_energy_detector(txBurst, N0, ch, maxDelaySymbols, det)
 %                     .fhNarrowband       - 跳频窄带Warden配置（可选）
 %                       .enable           - 是否启用窄带Warden层
 %                       .nFreqs           - 跳频频点数（用于确定单信道带宽）
+%                       .normalizedFreqSet- 实际监视频点（cycles/sample，可选）
+%                       .bandwidth        - 单个监视子带宽度（cycles/sample，可选）
 %                       .scanAllBins      - true=扫描所有频点取最大能量（最优Warden），
 %                                           false=随机选一个频点（实际Warden）
 %                     .cyclostationary    - 循环平稳检测器配置（可选）
@@ -58,6 +60,8 @@ if ~isfield(det, "referenceLink"); det.referenceLink = "unknown"; end
 if ~isfield(det, "fhNarrowband"); det.fhNarrowband = struct(); end
 if ~isfield(det.fhNarrowband, "enable"); det.fhNarrowband.enable = false; end
 if ~isfield(det.fhNarrowband, "nFreqs"); det.fhNarrowband.nFreqs = 8; end
+if ~isfield(det.fhNarrowband, "normalizedFreqSet"); det.fhNarrowband.normalizedFreqSet = []; end
+if ~isfield(det.fhNarrowband, "bandwidth"); det.fhNarrowband.bandwidth = []; end
 if ~isfield(det.fhNarrowband, "scanAllBins"); det.fhNarrowband.scanAllBins = true; end
 if ~isfield(det, "cyclostationary"); det.cyclostationary = struct(); end
 if ~isfield(det.cyclostationary, "enable"); det.cyclostationary.enable = false; end
@@ -75,6 +79,16 @@ primaryLayer = local_normalize_layer_name(det.primaryLayer);
 referenceLink = string(det.referenceLink);
 fhNarrowbandEnable = logical(det.fhNarrowband.enable);
 fhNFreqs = max(1, round(double(det.fhNarrowband.nFreqs)));
+fhNormalizedFreqSet = double(det.fhNarrowband.normalizedFreqSet(:).');
+fhNormalizedFreqSet = fhNormalizedFreqSet(isfinite(fhNormalizedFreqSet) & abs(fhNormalizedFreqSet) < 0.5);
+fhNormalizedFreqSet = unique(fhNormalizedFreqSet, "stable");
+if ~isempty(fhNormalizedFreqSet)
+    fhNFreqs = numel(fhNormalizedFreqSet);
+end
+fhBandwidth = NaN;
+if ~isempty(det.fhNarrowband.bandwidth)
+    fhBandwidth = double(det.fhNarrowband.bandwidth);
+end
 fhScanAllBins = logical(det.fhNarrowband.scanAllBins);
 cycloEnable = logical(det.cyclostationary.enable);
 cycloSps = max(1, round(double(det.cyclostationary.sps)));
@@ -120,11 +134,17 @@ layerOptUncertain = local_optimal_metrics(statsUncertain.T0, statsUncertain.T1);
 % 层4（可选）：跳频窄带Warden — 不知跳频序列，只能监听1/nFreqs带宽的单个信道
 if fhNarrowbandEnable
     statsFhNarrow = local_run_trials_fh_narrow( ...
-        txBurst, N0, ch, baseDelaySamples, nObs, nTrials, fhNFreqs, fhScanAllBins, useParallel);
+        txBurst, N0, ch, baseDelaySamples, nObs, nTrials, fhNFreqs, fhScanAllBins, ...
+        useParallel, fhNormalizedFreqSet, fhBandwidth);
     layerFhNarrow = local_optimal_metrics(statsFhNarrow.T0, statsFhNarrow.T1);
 else
     % 未启用时用全带能量层占位，xi相同（表示未评估）
     layerFhNarrow = layerOpt;
+    statsFhNarrow = struct("fhNarrowband", struct( ...
+        "nFreqs", fhNFreqs, ...
+        "scanAllBins", fhScanAllBins, ...
+        "normalizedFreqSet", fhNormalizedFreqSet, ...
+        "bandwidth", fhBandwidth));
 end
 
 % 层5（可选）：循环平稳检测器 — 利用符号率处的循环自相关特征
@@ -146,6 +166,7 @@ layerOptUncertain = local_attach_layer_meta( ...
 layerFhNarrow = local_attach_layer_meta( ...
     layerFhNarrow, "energyFhNarrow", "xi_opt", ...
     statsBase.L, statsBase.delayMaxSamples, 0.0, referenceLink);
+layerFhNarrow.fhNarrowband = statsFhNarrow.fhNarrowband;
 layerCyclo = local_attach_layer_meta( ...
     layerCyclo, "cyclostationaryOpt", "xi_opt", ...
     statsBase.L, statsBase.delayMaxSamples, 0.0, referenceLink);
@@ -164,6 +185,7 @@ m.layers = struct( ...
     "energyOptUncertain", layerOptUncertain, ...
     "energyFhNarrow", layerFhNarrow, ...
     "cyclostationaryOpt", layerCyclo);
+m.fhNarrowband = statsFhNarrow.fhNarrowband;
 
 % 兼容旧结果结构：顶层字段默认映射到第一层energyNp
 m.threshold = layerNp.threshold;
@@ -196,7 +218,6 @@ T0 = zeros(nTrials, 1);
 T1 = zeros(nTrials, 1);
 
 useParfor = logical(useParallel) && local_has_parallel_pool();
-seeds = [];
 if useParfor
     % Generate seeds on the client so results are deterministic w.r.t. scheduling.
     seeds = randi(2^31-1, nTrials, 1, "uint32");
@@ -346,7 +367,9 @@ switch lower(name)
 end
 end
 
-function stats = local_run_trials_fh_narrow(txBurst, N0, ch, maxDelaySamples, nObs, nTrials, nFreqs, scanAllBins, useParallel)
+function stats = local_run_trials_fh_narrow( ...
+        txBurst, N0, ch, maxDelaySamples, nObs, nTrials, nFreqs, scanAllBins, ...
+        useParallel, normalizedFreqSet, bandwidth)
 % 模拟不知道跳频序列的Warden：只能监听带宽为1/nFreqs的单个子带。
 % scanAllBins=true时扫描全部nFreqs个频点并取最大能量（最强非相干Warden）；
 % scanAllBins=false时随机选一个频点（平均意义下的实际Warden）。
@@ -355,10 +378,30 @@ delayMaxSamples = max(0, round(maxDelaySamples));
 T0 = zeros(nTrials, 1);
 T1 = zeros(nTrials, 1);
 
-% 构建nFreqs个等间距子带的带通滤波器（归一化频率，FIR，汉明窗）
-% 每个子带带宽 bw = 1/nFreqs（归一化到采样率）
-bw = 1 / nFreqs;
-binCenters = linspace(-0.5 + bw/2, 0.5 - bw/2, nFreqs);
+if nargin < 10 || isempty(normalizedFreqSet)
+    normalizedFreqSet = [];
+end
+if nargin < 11 || isempty(bandwidth)
+    bandwidth = NaN;
+end
+
+% 构建窄带监视频点。若上层提供实际FH/control频点，则按真实频点扫描；
+% 否则退回到nFreqs个等间距子带。
+binCenters = double(normalizedFreqSet(:).');
+binCenters = binCenters(isfinite(binCenters) & abs(binCenters) < 0.5);
+binCenters = unique(binCenters, "stable");
+if isempty(binCenters)
+    nFreqs = max(1, round(double(nFreqs)));
+    bw = 1 / nFreqs;
+    binCenters = linspace(-0.5 + bw/2, 0.5 - bw/2, nFreqs);
+else
+    nFreqs = numel(binCenters);
+    bw = double(bandwidth);
+    if ~(isscalar(bw) && isfinite(bw) && bw > 0)
+        bw = local_default_fh_monitor_bandwidth(binCenters);
+    end
+end
+bw = local_clip_fh_monitor_bandwidth(binCenters, bw);
 nTaps = 63; % 奇数阶FIR，群延迟=(nTaps-1)/2
 filters = cell(nFreqs, 1);
 for k = 1:nFreqs
@@ -450,6 +493,29 @@ stats.T0 = T0;
 stats.T1 = T1;
 stats.L = L;
 stats.delayMaxSamples = delayMaxSamples;
+stats.fhNarrowband = struct( ...
+    "nFreqs", nFreqs, ...
+    "scanAllBins", logical(scanAllBins), ...
+    "normalizedFreqSet", double(binCenters(:).'), ...
+    "bandwidth", double(bw));
+end
+
+function bw = local_default_fh_monitor_bandwidth(binCenters)
+centers = sort(unique(double(binCenters(:).')));
+if numel(centers) >= 2
+    spacing = diff(centers);
+    spacing = spacing(spacing > 0);
+    bw = 0.90 * min(spacing);
+else
+    bw = 0.10;
+end
+end
+
+function bw = local_clip_fh_monitor_bandwidth(binCenters, bw)
+centers = double(binCenters(:).');
+edgeMargin = 2 * (0.5 - max(abs(centers)));
+bw = min(double(bw), 0.95 * edgeMargin);
+bw = max(min(bw, 0.95), 1e-3);
 end
 
 function stats = local_run_trials_cyclo(txBurst, N0, ch, maxDelaySamples, nObs, nTrials, sps, useParallel)

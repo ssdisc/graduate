@@ -794,7 +794,7 @@ switch profileName
     case "rayleigh_multipath"
         layerNames = ["energyOptUncertain" "cyclostationaryOpt"];
     case "robust_unified"
-        layerNames = ["energyNp" "energyOptUncertain"];
+        layerNames = ["energyNp" "energyOptUncertain" "energyFhNarrow" "cyclostationaryOpt"];
     otherwise
         error("Unexpected profile name: %s", char(profileName));
 end
