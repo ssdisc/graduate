@@ -16,11 +16,11 @@ end
 ui = struct();
 ui.fig = uifigure( ...
     "Name", "Robust Unified 演示", ...
-    "Position", [100 60 1180 900], ...
+    "Position", [100 30 1180 1000], ...
     "Color", [0.98 0.98 0.98]);
 
-mainGrid = uigridlayout(ui.fig, [6 1]);
-mainGrid.RowHeight = {86, 86, 84, 112, 112, "1x"};
+mainGrid = uigridlayout(ui.fig, [7 1]);
+mainGrid.RowHeight = {86, 86, 120, 84, 112, 112, "1x"};
 mainGrid.ColumnWidth = {"1x"};
 mainGrid.Padding = [12 12 12 12];
 mainGrid.RowSpacing = 10;
@@ -85,6 +85,75 @@ ui.generalNote = uilabel(ui.generalGrid, ...
     "FontColor", [0.35 0.35 0.35]);
 ui.generalNote.Layout.Row = 2;
 ui.generalNote.Layout.Column = [1 8];
+
+ui.sidecarPanel = uipanel(mainGrid, "Title", "Eve / Warden 附属评估");
+ui.sidecarGrid = uigridlayout(ui.sidecarPanel, [3 10]);
+ui.sidecarGrid.RowHeight = {24, 24, 24};
+ui.sidecarGrid.ColumnWidth = {90, 92, 92, 92, 92, 82, 92, 82, 92, "1x"};
+ui.sidecarGrid.Padding = [8 8 8 8];
+ui.sidecarGrid.RowSpacing = 6;
+ui.sidecarGrid.ColumnSpacing = 8;
+ui.enableEve = uicheckbox(ui.sidecarGrid, "Text", "启用 Eve", "Value", false);
+ui.enableEve.Layout.Row = 1;
+ui.enableEve.Layout.Column = 1;
+ui.eveGainLabel = uilabel(ui.sidecarGrid, "Text", "Eve gain", "HorizontalAlignment", "right");
+ui.eveGainLabel.Layout.Row = 1;
+ui.eveGainLabel.Layout.Column = 2;
+ui.eveGain = uieditfield(ui.sidecarGrid, "numeric", "Value", 0);
+ui.eveGain.Layout.Row = 1;
+ui.eveGain.Layout.Column = 3;
+ui.eveChaosLabel = uilabel(ui.sidecarGrid, "Text", "chaos", "HorizontalAlignment", "right");
+ui.eveChaosLabel.Layout.Row = 1;
+ui.eveChaosLabel.Layout.Column = 4;
+ui.eveChaos = uidropdown(ui.sidecarGrid, ...
+    "Items", ["wrong_key" "known" "approximate"], ...
+    "Value", "wrong_key");
+ui.eveChaos.Layout.Row = 1;
+ui.eveChaos.Layout.Column = 5;
+ui.eveApproxDeltaLabel = uilabel(ui.sidecarGrid, "Text", "approx Δ", "HorizontalAlignment", "right");
+ui.eveApproxDeltaLabel.Layout.Row = 1;
+ui.eveApproxDeltaLabel.Layout.Column = 6;
+ui.eveApproxDelta = uieditfield(ui.sidecarGrid, "numeric", "Value", 1e-10, "Limits", [0, Inf]);
+ui.eveApproxDelta.Layout.Row = 1;
+ui.eveApproxDelta.Layout.Column = 7;
+ui.eveNote = uilabel(ui.sidecarGrid, ...
+    "Text", "Eve 固定 protocol-aware / FH known / scramble known，只改变 chaos 假设。", ...
+    "FontColor", [0.35 0.35 0.35]);
+ui.eveNote.Layout.Row = 1;
+ui.eveNote.Layout.Column = [8 10];
+
+ui.enableWarden = uicheckbox(ui.sidecarGrid, "Text", "启用 Warden", "Value", false);
+ui.enableWarden.Layout.Row = 2;
+ui.enableWarden.Layout.Column = 1;
+ui.wardenGainLabel = uilabel(ui.sidecarGrid, "Text", "Warden gain", "HorizontalAlignment", "right");
+ui.wardenGainLabel.Layout.Row = 2;
+ui.wardenGainLabel.Layout.Column = 2;
+ui.wardenGain = uieditfield(ui.sidecarGrid, "numeric", "Value", -10);
+ui.wardenGain.Layout.Row = 2;
+ui.wardenGain.Layout.Column = 3;
+ui.wardenTrialsLabel = uilabel(ui.sidecarGrid, "Text", "trials", "HorizontalAlignment", "right");
+ui.wardenTrialsLabel.Layout.Row = 2;
+ui.wardenTrialsLabel.Layout.Column = 4;
+ui.wardenTrials = uieditfield(ui.sidecarGrid, "numeric", "Value", 40, "Limits", [10, Inf]);
+ui.wardenTrials.Layout.Row = 2;
+ui.wardenTrials.Layout.Column = 5;
+ui.wardenObsLabel = uilabel(ui.sidecarGrid, "Text", "Nobs", "HorizontalAlignment", "right");
+ui.wardenObsLabel.Layout.Row = 2;
+ui.wardenObsLabel.Layout.Column = 6;
+ui.wardenObs = uieditfield(ui.sidecarGrid, "numeric", "Value", 2048, "Limits", [16, Inf]);
+ui.wardenObs.Layout.Row = 2;
+ui.wardenObs.Layout.Column = 7;
+ui.wardenPeLabel = uilabel(ui.sidecarGrid, "Text", "Pe 阈值", "HorizontalAlignment", "right");
+ui.wardenPeLabel.Layout.Row = 2;
+ui.wardenPeLabel.Layout.Column = 8;
+ui.wardenPeThreshold = uieditfield(ui.sidecarGrid, "numeric", "Value", 0.4, "Limits", [0, 0.5]);
+ui.wardenPeThreshold.Layout.Row = 2;
+ui.wardenPeThreshold.Layout.Column = 9;
+ui.wardenNote = uilabel(ui.sidecarGrid, ...
+    "Text", "Warden layers 固定为 energyNp / energyOptUncertain。", ...
+    "FontColor", [0.35 0.35 0.35]);
+ui.wardenNote.Layout.Row = 3;
+ui.wardenNote.Layout.Column = [1 10];
 
 ui.impulsePanel = uipanel(mainGrid, "Title", "脉冲干扰");
 ui.impulseGrid = uigridlayout(ui.impulsePanel, [2 4]);
@@ -206,6 +275,9 @@ ui.freqAxis.Layout.Column = [3 4];
 local_reset_signal_axes(ui, "等待运行");
 
 ui.browseButton.ButtonPushedFcn = @(~, ~) local_browse_image(ui);
+ui.enableEve.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
+ui.eveChaos.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
+ui.enableWarden.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
 ui.enableImpulse.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
 ui.enableNarrowband.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
 ui.enableMultipath.ValueChangedFcn = @(~, ~) local_refresh_enable_state(ui);
@@ -226,6 +298,13 @@ ui.imagePath.Value = fullfile(folderPath, fileName);
 end
 
 function local_refresh_enable_state(ui)
+local_set_enable(ui.eveGain, ui.enableEve.Value);
+local_set_enable(ui.eveChaos, ui.enableEve.Value);
+local_set_enable(ui.eveApproxDelta, ui.enableEve.Value && string(ui.eveChaos.Value) == "approximate");
+local_set_enable(ui.wardenGain, ui.enableWarden.Value);
+local_set_enable(ui.wardenTrials, ui.enableWarden.Value);
+local_set_enable(ui.wardenObs, ui.enableWarden.Value);
+local_set_enable(ui.wardenPeThreshold, ui.enableWarden.Value);
 local_set_enable(ui.impulseProb, ui.enableImpulse.Value);
 local_set_enable(ui.nbCenter, ui.enableNarrowband.Value);
 local_set_enable(ui.nbBandwidth, ui.enableNarrowband.Value);
@@ -274,6 +353,7 @@ try
         '运行完成。%s, BER=%.4g, rawPER=%.4g, PER=%.4g, PER_exact=%.4g, bitPerfect=%d, elapsed=%.3fs', ...
         char(report.modulationType), report.ber, report.rawPer, report.per, report.perExact, ...
         report.endToEndBitPerfect, report.elapsedSec));
+    local_append_sidecar_status(ui, report);
     local_update_signal_axes(ui, report);
     local_append_status(ui, "已保存 RX 图像: " + string(report.savedImages.rxDisplay));
     local_append_status(ui, "已保存信号监视图: " + string(report.savedImages.signalMonitorFigure));
@@ -324,6 +404,32 @@ function local_clear_status(ui)
 ui.status.Value = {''};
 end
 
+function local_append_sidecar_status(ui, report)
+if ~(isfield(report, "sidecars") && isstruct(report.sidecars))
+    return;
+end
+if isfield(report.sidecars, "eve") && isstruct(report.sidecars.eve) && logical(report.sidecars.eve.enable)
+    eve = report.sidecars.eve;
+    local_append_status(ui, sprintf( ...
+        "Eve: chaos=%s, gain=%.2f dB, BER=%.4g, PER_exact=%.4g, PSNR=%.3g dB, SSIM=%.4g", ...
+        char(eve.chaosAssumption), eve.linkGainOffsetDb, eve.ber, eve.perExact, eve.psnr, eve.ssim));
+end
+if isfield(report.sidecars, "warden") && isstruct(report.sidecars.warden) ...
+        && logical(report.sidecars.warden.enable)
+    warden = report.sidecars.warden;
+    peText = strings(1, numel(warden.enabledLayers));
+    for idx = 1:numel(warden.enabledLayers)
+        layerName = warden.enabledLayers(idx);
+        peText(idx) = sprintf("%s Pe=%.4g", layerName, warden.layers.(char(layerName)).pe);
+    end
+    local_append_status(ui, sprintf( ...
+        "Warden: layers=%s, primary=%s Pe=%.4g, minPe=%.4g, threshold=%.4g, pass=%d", ...
+        strjoin(cellstr(warden.enabledLayers), "/"), char(warden.primaryLayer), ...
+        warden.primaryPe, warden.minEnabledPe, warden.peThreshold, warden.pass));
+    local_append_status(ui, "Warden 分层结果: " + strjoin(peText, ", "));
+end
+end
+
 function cfg = local_collect_demo_cfg(ui)
 cfg = struct();
 cfg.imagePath = string(strtrim(ui.imagePath.Value));
@@ -331,6 +437,15 @@ cfg.resultsRoot = string(strtrim(ui.resultsRoot.Value));
 cfg.ebN0dB = double(ui.ebn0.Value);
 cfg.jsrDb = double(ui.jsr.Value);
 cfg.modulationType = upper(string(ui.modulation.Value));
+cfg.enableEve = logical(ui.enableEve.Value);
+cfg.eveLinkGainOffsetDb = double(ui.eveGain.Value);
+cfg.eveChaosAssumption = string(ui.eveChaos.Value);
+cfg.eveChaosApproxDelta = double(ui.eveApproxDelta.Value);
+cfg.enableWarden = logical(ui.enableWarden.Value);
+cfg.wardenLinkGainOffsetDb = double(ui.wardenGain.Value);
+cfg.wardenTrials = double(ui.wardenTrials.Value);
+cfg.wardenObs = double(ui.wardenObs.Value);
+cfg.wardenPeThreshold = double(ui.wardenPeThreshold.Value);
 cfg.enableImpulse = logical(ui.enableImpulse.Value);
 cfg.enableNarrowband = logical(ui.enableNarrowband.Value);
 cfg.enableMultipath = logical(ui.enableMultipath.Value);
@@ -363,6 +478,33 @@ if ~(isscalar(cfg.jsrDb) && isfinite(cfg.jsrDb))
 end
 if ~isscalar(cfg.modulationType) || ~any(cfg.modulationType == ["QPSK" "BPSK" "MSK"])
     error("不支持的调制方式: %s。", char(cfg.modulationType));
+end
+if cfg.enableEve
+    if ~(isscalar(cfg.eveLinkGainOffsetDb) && isfinite(cfg.eveLinkGainOffsetDb))
+        error("Eve gain 必须是有限标量。");
+    end
+    if ~isscalar(cfg.eveChaosAssumption) || ~any(cfg.eveChaosAssumption == ["wrong_key" "known" "approximate"])
+        error("不支持的 Eve chaos 假设: %s。", char(cfg.eveChaosAssumption));
+    end
+    if cfg.eveChaosAssumption == "approximate" ...
+            && ~(isscalar(cfg.eveChaosApproxDelta) && isfinite(cfg.eveChaosApproxDelta) && cfg.eveChaosApproxDelta > 0)
+        error("Eve chaos=approximate 时 approx Δ 必须是正数。");
+    end
+end
+if cfg.enableWarden
+    if ~(isscalar(cfg.wardenLinkGainOffsetDb) && isfinite(cfg.wardenLinkGainOffsetDb))
+        error("Warden gain 必须是有限标量。");
+    end
+    if ~(isscalar(cfg.wardenTrials) && isfinite(cfg.wardenTrials) && cfg.wardenTrials >= 10)
+        error("Warden trials 必须不小于 10。");
+    end
+    if ~(isscalar(cfg.wardenObs) && isfinite(cfg.wardenObs) && cfg.wardenObs >= 16)
+        error("Warden Nobs 必须不小于 16。");
+    end
+    if ~(isscalar(cfg.wardenPeThreshold) && isfinite(cfg.wardenPeThreshold) ...
+            && cfg.wardenPeThreshold >= 0 && cfg.wardenPeThreshold <= 0.5)
+        error("Warden Pe 阈值必须位于 [0, 0.5]。");
+    end
 end
 if cfg.enableImpulse
     if ~(isscalar(cfg.impulseProb) && isfinite(cfg.impulseProb) && cfg.impulseProb > 0 && cfg.impulseProb <= 1)
@@ -473,6 +615,7 @@ spec.profileRx.cfg.mitigation.robustMixed.enableFhSubbandExcision = false;
 spec.profileRx.cfg.mitigation.robustMixed.enableScFdeNbiCancel = false;
 spec.profileRx.cfg.mitigation.robustMixed.enableSampleNbiCancel = false;
 spec.profileRx.cfg.mitigation.robustMixed.enableFhReliabilityFloorWithMultipath = false;
+spec = local_apply_demo_sidecars(spec, cfg);
 
 spec.channel.impulseProb = 0.0;
 spec.channel.impulseWeight = 0.0;
@@ -511,6 +654,34 @@ end
 if cfg.enableMultipath && ~(cfg.enableImpulse || cfg.enableNarrowband) && abs(cfg.jsrDb) > 1e-12
     error("仅启用 multipath 时，JSR 必须为 0。");
 end
+end
+
+function spec = local_apply_demo_sidecars(spec, cfg)
+wardenLayers = ["energyNp" "energyOptUncertain"];
+
+spec.extensions.eve.enable = logical(cfg.enableEve);
+spec.extensions.eve.linkGainOffsetDb = double(cfg.eveLinkGainOffsetDb);
+spec.extensions.eve.assumptions.protocol = "protocol_aware";
+spec.extensions.eve.assumptions.fh = "known";
+spec.extensions.eve.assumptions.scramble = "known";
+spec.extensions.eve.assumptions.chaos = string(cfg.eveChaosAssumption);
+spec.extensions.eve.assumptions.chaosApproxDelta = double(cfg.eveChaosApproxDelta);
+spec.extensions.eve.rxDiversity = spec.profileRx.cfg.rxDiversity;
+
+spec.extensions.warden.enable = logical(cfg.enableWarden);
+spec.extensions.warden.warden.enable = logical(cfg.enableWarden);
+spec.extensions.warden.warden.referenceLink = "independent";
+spec.extensions.warden.warden.linkGainOffsetDb = double(cfg.wardenLinkGainOffsetDb);
+spec.extensions.warden.warden.enabledLayers = wardenLayers;
+spec.extensions.warden.warden.primaryLayer = "energyOptUncertain";
+spec.extensions.warden.warden.nTrials = round(double(cfg.wardenTrials));
+spec.extensions.warden.warden.nObs = round(double(cfg.wardenObs));
+spec.extensions.warden.warden.noiseUncertaintyDb = 1.0;
+spec.extensions.warden.warden.extraDelaySamples = 4096;
+spec.extensions.warden.warden.useParallel = false;
+spec.extensions.warden.warden.fhNarrowband.enable = false;
+spec.extensions.warden.warden.fhNarrowband.scanAllBins = false;
+spec.extensions.warden.warden.cyclostationary.enable = false;
 end
 
 function bw = local_resolve_demo_narrowband_bandwidth(spec, rawText)
@@ -592,6 +763,7 @@ report.headerSuccess = double(results.packetDiagnostics.bob.headerSuccessRateByM
 report.sessionTransportSuccess = double(results.packetDiagnostics.bob.sessionTransportSuccessRateByMethod(methodIdx, pointIdx));
 report.packetSessionSuccess = double(results.packetDiagnostics.bob.packetSessionSuccessRateByMethod(methodIdx, pointIdx));
 report.payloadSuccess = double(results.packetDiagnostics.bob.payloadSuccessRate(methodIdx, pointIdx));
+report.sidecars = local_build_demo_sidecar_report(results, cfg, methodIdx, pointIdx);
 report.spectrum = results.spectrum;
 report.signal = local_build_signal_monitor_report(results, runtimeCfg);
 report.runtime = struct( ...
@@ -600,6 +772,101 @@ report.runtime = struct( ...
     "sampleRateHz", double(runtimeCfg.waveform.sampleRateHz), ...
     "sps", double(runtimeCfg.waveform.sps), ...
     "rolloff", double(runtimeCfg.waveform.rolloff));
+end
+
+function sidecars = local_build_demo_sidecar_report(results, cfg, methodIdx, pointIdx)
+sidecars = struct();
+sidecars.eve = local_build_demo_eve_report(results, cfg, methodIdx, pointIdx);
+sidecars.warden = local_build_demo_warden_report(results, cfg, pointIdx);
+end
+
+function eve = local_build_demo_eve_report(results, cfg, methodIdx, pointIdx)
+eve = struct("enable", logical(cfg.enableEve));
+if ~logical(cfg.enableEve)
+    return;
+end
+if ~isfield(results, "eve")
+    error("Eve 已启用，但 results.eve 不存在。");
+end
+eve.linkGainOffsetDb = double(cfg.eveLinkGainOffsetDb);
+eve.chaosAssumption = string(results.eve.assumptions.chaos);
+eve.ber = double(results.eve.ber(methodIdx, pointIdx));
+eve.rawPer = double(results.eve.rawPer(methodIdx, pointIdx));
+eve.per = double(results.eve.per(methodIdx, pointIdx));
+eve.perExact = local_optional_matrix_value_local(results.eve, "perExact", methodIdx, pointIdx);
+eve.psnr = double(results.eve.imageMetrics.original.communication.psnr(methodIdx, pointIdx));
+eve.ssim = double(results.eve.imageMetrics.original.communication.ssim(methodIdx, pointIdx));
+end
+
+function warden = local_build_demo_warden_report(results, cfg, pointIdx)
+demoLayers = ["energyNp" "energyOptUncertain"];
+warden = struct( ...
+    "enable", logical(cfg.enableWarden), ...
+    "enabledLayers", demoLayers, ...
+    "primaryLayer", "energyOptUncertain", ...
+    "peThreshold", double(cfg.wardenPeThreshold));
+if ~logical(cfg.enableWarden)
+    return;
+end
+if ~(isfield(results, "covert") && isstruct(results.covert) ...
+        && isfield(results.covert, "warden") && isstruct(results.covert.warden))
+    error("Warden 已启用，但 results.covert.warden 不存在。");
+end
+resultWarden = results.covert.warden;
+enabledLayers = string(resultWarden.enabledLayers(:).');
+if ~isequal(enabledLayers, demoLayers)
+    error("run_robust_unified_demo 的 Warden layers 必须固定为 energyNp / energyOptUncertain。");
+end
+
+warden.linkGainOffsetDb = double(cfg.wardenLinkGainOffsetDb);
+warden.enabledLayers = enabledLayers;
+warden.primaryLayer = string(resultWarden.primaryLayer);
+warden.layers = struct();
+for idx = 1:numel(enabledLayers)
+    layerName = enabledLayers(idx);
+    warden.layers.(char(layerName)) = struct( ...
+        "pd", local_get_warden_metric_local(resultWarden, layerName, "pd", pointIdx), ...
+        "pfa", local_get_warden_metric_local(resultWarden, layerName, "pfa", pointIdx), ...
+        "pmd", local_get_warden_metric_local(resultWarden, layerName, "pmd", pointIdx), ...
+        "xi", local_get_warden_metric_local(resultWarden, layerName, "xi", pointIdx), ...
+        "pe", local_get_warden_metric_local(resultWarden, layerName, "pe", pointIdx));
+end
+warden.primaryPe = local_get_warden_metric_local(resultWarden, warden.primaryLayer, "pe", pointIdx);
+warden.minEnabledPe = local_min_enabled_warden_pe_local(resultWarden, enabledLayers, pointIdx);
+warden.pass = logical(warden.minEnabledPe >= double(cfg.wardenPeThreshold));
+end
+
+function value = local_optional_matrix_value_local(s, fieldName, rowIdx, colIdx)
+value = NaN;
+if isstruct(s) && isfield(s, fieldName) && ~isempty(s.(fieldName)) ...
+        && size(s.(fieldName), 1) >= rowIdx && size(s.(fieldName), 2) >= colIdx
+    value = double(s.(fieldName)(rowIdx, colIdx));
+end
+end
+
+function value = local_get_warden_metric_local(warden, layerName, metricName, pointIdx)
+layerName = string(layerName);
+metricName = string(metricName);
+if ~(isfield(warden, "layers") && isfield(warden.layers, char(layerName)))
+    error("Warden 结果缺少 layer %s。", char(layerName));
+end
+layer = warden.layers.(char(layerName));
+if ~isfield(layer, char(metricName))
+    error("Warden layer %s 缺少指标 %s。", char(layerName), char(metricName));
+end
+metric = layer.(char(metricName));
+if numel(metric) < pointIdx
+    error("Warden layer %s 指标 %s 缺少第 %d 个点。", char(layerName), char(metricName), pointIdx);
+end
+value = double(metric(pointIdx));
+end
+
+function minPe = local_min_enabled_warden_pe_local(warden, enabledLayers, pointIdx)
+vals = NaN(1, numel(enabledLayers));
+for idx = 1:numel(enabledLayers)
+    vals(idx) = local_get_warden_metric_local(warden, enabledLayers(idx), "pe", pointIdx);
+end
+minPe = min(vals);
 end
 
 function bandwidth = local_safe_channel_bandwidth_local(channelCfg)
