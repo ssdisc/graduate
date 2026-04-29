@@ -6,7 +6,8 @@ if all(known(:))
     return;
 end
 if ~any(known(:))
-    planeOut = plane;
+    % Degenerate case: no trusted samples. Return neutral gray instead of black.
+    planeOut = 128 * ones(size(plane));
     return;
 end
 

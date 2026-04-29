@@ -648,6 +648,7 @@ spec = default_link_spec( ...
 spec.commonTx.source.useBuiltinImage = false;
 spec.commonTx.source.imagePath = cfg.imagePath;
 spec.commonTx.modulation.type = cfg.modulationType;
+spec.commonTx.payload.tileJp2.decodeFailureFill = "gray";
 spec.sim.nFramesPerPoint = 1;
 spec.sim.saveFigures = false;
 spec.sim.useParallel = false;
@@ -661,6 +662,8 @@ spec.profileRx.cfg.mitigation.robustMixed.enableFhSubbandExcision = false;
 spec.profileRx.cfg.mitigation.robustMixed.enableScFdeNbiCancel = false;
 spec.profileRx.cfg.mitigation.robustMixed.enableSampleNbiCancel = false;
 spec.profileRx.cfg.mitigation.robustMixed.enableFhReliabilityFloorWithMultipath = false;
+spec.commonTx.packet.concealLostPackets = true;
+spec.commonTx.packet.concealMode = "blend";
 spec = local_apply_demo_sidecars(spec, cfg);
 
 spec.channel.impulseProb = 0.0;
@@ -815,6 +818,12 @@ report.mseOriginal = local_optional_image_metric_local(results, "original", "com
 report.psnrResized = local_optional_image_metric_local(results, "resized", "communication", "psnr", methodIdx, pointIdx);
 report.ssimResized = local_optional_image_metric_local(results, "resized", "communication", "ssim", methodIdx, pointIdx);
 report.mseResized = local_optional_image_metric_local(results, "resized", "communication", "mse", methodIdx, pointIdx);
+report.psnrOriginalComp = local_optional_image_metric_local(results, "original", "compensated", "psnr", methodIdx, pointIdx);
+report.ssimOriginalComp = local_optional_image_metric_local(results, "original", "compensated", "ssim", methodIdx, pointIdx);
+report.mseOriginalComp = local_optional_image_metric_local(results, "original", "compensated", "mse", methodIdx, pointIdx);
+report.psnrResizedComp = local_optional_image_metric_local(results, "resized", "compensated", "psnr", methodIdx, pointIdx);
+report.ssimResizedComp = local_optional_image_metric_local(results, "resized", "compensated", "ssim", methodIdx, pointIdx);
+report.mseResizedComp = local_optional_image_metric_local(results, "resized", "compensated", "mse", methodIdx, pointIdx);
 report.sidecars = local_build_demo_sidecar_report(results, cfg, methodIdx, pointIdx);
 report.spectrum = results.spectrum;
 report.signal = local_build_signal_monitor_report(results, runtimeCfg);
@@ -1143,9 +1152,9 @@ fig = figure("Name", "Robust Unified 演示对比", ...
     "NumberTitle", "off", ...
     "Position", [120 80 1220 920]);
 t = tiledlayout(fig, 2, 2, "Padding", "compact", "TileSpacing", "compact");
-t.Position = [0.03 0.04 0.94 0.80];
+t.Position = [0.03 0.04 0.94 0.74];
 headerText = strjoin(cellstr(local_build_comparison_header_lines(report)), newline);
-annotation(fig, "textbox", [0.03 0.855 0.94 0.13], ...
+annotation(fig, "textbox", [0.03 0.78 0.94 0.20], ...
     "String", headerText, ...
     "Interpreter", "none", ...
     "FitBoxToText", "off", ...
@@ -1179,11 +1188,15 @@ line1 = sprintf("robust_unified | %s | %s | Eb/N0 %.2f dB | JSR %.2f dB", ...
     char(report.modulationType), report.ebN0dB, report.jsrDb);
 line2 = sprintf("BER %.3g | rawPER %.3g | PER %.3g | PER_exact %.3g | bitPerfect %d", ...
     report.ber, report.rawPer, report.per, report.perExact, report.endToEndBitPerfect);
-line3 = sprintf("Image(Original): PSNR %.3g dB | SSIM %.4g | MSE %.3g", ...
+line3 = sprintf("Image(Original Comm): PSNR %.3g dB | SSIM %.4g | MSE %.3g", ...
     report.psnrOriginal, report.ssimOriginal, report.mseOriginal);
-line4 = sprintf("Image(Resized): PSNR %.3g dB | SSIM %.4g | MSE %.3g | burst %.3fs | elapsed %.3fs", ...
-    report.psnrResized, report.ssimResized, report.mseResized, report.burstSec, report.elapsedSec);
-headerLines = [string(line1); string(line2); string(line3); string(line4)];
+line4 = sprintf("Image(Original Comp): PSNR %.3g dB | SSIM %.4g | MSE %.3g", ...
+    report.psnrOriginalComp, report.ssimOriginalComp, report.mseOriginalComp);
+line5 = sprintf("Image(Resized Comm): PSNR %.3g dB | SSIM %.4g | MSE %.3g", ...
+    report.psnrResized, report.ssimResized, report.mseResized);
+line6 = sprintf("Image(Resized Comp): PSNR %.3g dB | SSIM %.4g | MSE %.3g | burst %.3fs | elapsed %.3fs", ...
+    report.psnrResizedComp, report.ssimResizedComp, report.mseResizedComp, report.burstSec, report.elapsedSec);
+headerLines = [string(line1); string(line2); string(line3); string(line4); string(line5); string(line6)];
 end
 
 function values = local_parse_numeric_vector(rawText, requireInteger, fieldName)

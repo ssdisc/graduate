@@ -39,6 +39,8 @@ exactFrameSuccess = nan(nMethods, nPoints);
 metricAcc = local_init_image_metric_acc_local(nMethods, nPoints);
 payloadLast = cell(nMethods, nPoints);
 sessionCtxLast = cell(nMethods, nPoints);
+dataPacketOkLast = cell(nMethods, nPoints);
+packetConcealCfg = local_packet_conceal_config_local(runtimeCfg, txPackets);
 
 for pointIdx = 1:nPoints
     frameBer = nan(nMethods, nFrames);
@@ -135,7 +137,7 @@ for pointIdx = 1:nPoints
         end
 
         for methodIdx = 1:nMethods
-            [payloadBitsOut, ~, rsInfo] = outer_rs_recover_payload( ...
+            [payloadBitsOut, dataPacketOkOut, rsInfo] = outer_rs_recover_payload( ...
                 rxPayloadByMethod{methodIdx}, ...
                 rawPacketOkByMethod{methodIdx}, ...
                 txPackets, ...
@@ -149,6 +151,7 @@ for pointIdx = 1:nPoints
                 payloadBitsOut, txArtifacts, runtimeCfg, "known", 0);
             payloadLast{methodIdx, pointIdx} = payloadBitsOut;
             sessionCtxLast{methodIdx, pointIdx} = sessionCtxByMethod{methodIdx};
+            dataPacketOkLast{methodIdx, pointIdx} = logical(dataPacketOkOut(:).');
             frameBer(methodIdx, frameIdx) = mean(double(payloadBitsOut ~= txArtifacts.payloadAssist.payloadBitsPlain));
             frameRawSuccess(methodIdx, frameIdx) = double(rsInfo.rawDataPacketSuccessRate);
             framePayloadSuccess(methodIdx, frameIdx) = double(rsInfo.effectiveDataPacketSuccessRate);
@@ -158,7 +161,8 @@ for pointIdx = 1:nPoints
             frameHeader(methodIdx, frameIdx) = mean(double(headerPacketOkByMethod{methodIdx}));
             framePacketSession(methodIdx, frameIdx) = local_mean_omit_nan_local(packetSessionOkByMethod{methodIdx}, 1);
             frameMetrics = local_store_frame_image_metrics_local(frameMetrics, methodIdx, frameIdx, ...
-                payloadBitsOut, txArtifacts, runtimeCfg, sessionCtxByMethod{methodIdx});
+                payloadBitsOut, txArtifacts, runtimeCfg, sessionCtxByMethod{methodIdx}, ...
+                dataPacketOkOut, packetConcealCfg);
         end
     end
 
@@ -195,7 +199,10 @@ results.txArtifacts = txArtifacts;
 results.linkBudget = budget;
 results.scan = local_build_scan_struct_local(budget);
 results.tx = local_build_tx_report_local(burstReport, budget);
-results.packetConceal = struct("active", false);
+results.packetConceal = struct( ...
+    "configured", logical(packetConcealCfg.configured), ...
+    "active", logical(packetConcealCfg.active), ...
+    "mode", string(packetConcealCfg.mode));
 results.packetDiagnostics = struct();
 results.packetDiagnostics.bob = struct( ...
     "frontEndSuccessRate", max(frontEndByMethod, [], 1), ...
@@ -219,7 +226,8 @@ results.sourceImages = struct( ...
     "resized", txArtifacts.commonMeta.sourceImage);
 results.kl = local_build_kl_report_local(budget, txArtifacts);
 results.spectrum = local_build_spectrum_report_local(runtimeCfg, txArtifacts);
-results.example = local_build_example_outputs_local(results, payloadLast, sessionCtxLast, txArtifacts, runtimeCfg);
+results.example = local_build_example_outputs_local( ...
+    results, payloadLast, sessionCtxLast, dataPacketOkLast, txArtifacts, runtimeCfg, packetConcealCfg);
 results.rxResults = struct();
 results.rxResults.bob = local_build_standardized_rx_results_local(results, payloadLast);
 results.commonDiagnostics = struct( ...
@@ -523,7 +531,9 @@ metricAcc.resizedCompPsnr = nan(nMethods, nPoints);
 metricAcc.resizedCompSsim = nan(nMethods, nPoints);
 end
 
-function metricAcc = local_store_frame_image_metrics_local(metricAcc, methodIdx, frameIdx, payloadBitsOut, txArtifacts, runtimeCfg, sessionCtx)
+function metricAcc = local_store_frame_image_metrics_local( ...
+        metricAcc, methodIdx, frameIdx, payloadBitsOut, txArtifacts, runtimeCfg, sessionCtx, ...
+        dataPacketOk, packetConcealCfg)
 [payloadMeta, payloadCfg] = resolve_payload_decode_inputs(sessionCtx, txArtifacts, runtimeCfg.payload);
 imgTx = txArtifacts.commonMeta.sourceImage;
 imgTxOriginal = txArtifacts.commonMeta.sourceImageOriginal;
@@ -532,21 +542,29 @@ imgRxOriginal = imgRxResized;
 if ~isequal(size(imgRxOriginal), size(imgTxOriginal))
     imgRxOriginal = imresize(imgRxResized, [size(imgTxOriginal, 1), size(imgTxOriginal, 2)]);
 end
+imgCompResized = local_apply_packet_conceal_local( ...
+    imgRxResized, dataPacketOk, packetConcealCfg, payloadMeta, payloadCfg);
+imgCompOriginal = imgCompResized;
+if ~isequal(size(imgCompOriginal), size(imgTxOriginal))
+    imgCompOriginal = imresize(imgCompResized, [size(imgTxOriginal, 1), size(imgTxOriginal, 2)]);
+end
 
 [psnrResizedComm, ssimResizedComm, mseResizedComm] = image_quality(imgTx, imgRxResized);
 [psnrOriginalComm, ssimOriginalComm, mseOriginalComm] = image_quality(imgTxOriginal, imgRxOriginal);
+[psnrResizedComp, ssimResizedComp, mseResizedComp] = image_quality(imgTx, imgCompResized);
+[psnrOriginalComp, ssimOriginalComp, mseOriginalComp] = image_quality(imgTxOriginal, imgCompOriginal);
 metricAcc.resizedCommMse(methodIdx, frameIdx) = mseResizedComm;
 metricAcc.resizedCommPsnr(methodIdx, frameIdx) = psnrResizedComm;
 metricAcc.resizedCommSsim(methodIdx, frameIdx) = ssimResizedComm;
 metricAcc.originalCommMse(methodIdx, frameIdx) = mseOriginalComm;
 metricAcc.originalCommPsnr(methodIdx, frameIdx) = psnrOriginalComm;
 metricAcc.originalCommSsim(methodIdx, frameIdx) = ssimOriginalComm;
-metricAcc.resizedCompMse(methodIdx, frameIdx) = mseResizedComm;
-metricAcc.resizedCompPsnr(methodIdx, frameIdx) = psnrResizedComm;
-metricAcc.resizedCompSsim(methodIdx, frameIdx) = ssimResizedComm;
-metricAcc.originalCompMse(methodIdx, frameIdx) = mseOriginalComm;
-metricAcc.originalCompPsnr(methodIdx, frameIdx) = psnrOriginalComm;
-metricAcc.originalCompSsim(methodIdx, frameIdx) = ssimOriginalComm;
+metricAcc.resizedCompMse(methodIdx, frameIdx) = mseResizedComp;
+metricAcc.resizedCompPsnr(methodIdx, frameIdx) = psnrResizedComp;
+metricAcc.resizedCompSsim(methodIdx, frameIdx) = ssimResizedComp;
+metricAcc.originalCompMse(methodIdx, frameIdx) = mseOriginalComp;
+metricAcc.originalCompPsnr(methodIdx, frameIdx) = psnrOriginalComp;
+metricAcc.originalCompSsim(methodIdx, frameIdx) = ssimOriginalComp;
 end
 
 function metricAccOut = local_merge_point_image_metrics_local(metricAccOut, frameMetrics, pointIdx)
@@ -577,6 +595,43 @@ imageMetrics.original = struct( ...
         "mse", metricAcc.originalCompMse, ...
         "psnr", metricAcc.originalCompPsnr, ...
         "ssim", metricAcc.originalCompSsim));
+end
+
+function cfg = local_packet_conceal_config_local(runtimeCfg, txPackets)
+cfg = struct( ...
+    "configured", false, ...
+    "active", false, ...
+    "mode", "blend", ...
+    "txPackets", txPackets(:));
+if ~(isfield(runtimeCfg, "packet") && isstruct(runtimeCfg.packet))
+    return;
+end
+if ~(isfield(runtimeCfg.packet, "concealLostPackets") && logical(runtimeCfg.packet.concealLostPackets))
+    return;
+end
+cfg.configured = true;
+if ~isfield(runtimeCfg.packet, "concealMode")
+    error("runtimeCfg.packet.concealMode is required when concealLostPackets is enabled.");
+end
+cfg.mode = lower(string(runtimeCfg.packet.concealMode));
+if ~any(cfg.mode == ["nearest" "blend"])
+    error("runtimeCfg.packet.concealMode must be 'nearest' or 'blend'.");
+end
+
+nDataPackets = sum(arrayfun(@(pkt) logical(pkt.isDataPacket), txPackets));
+cfg.active = logical(nDataPackets > 1);
+end
+
+function imgComp = local_apply_packet_conceal_local(imgComm, dataPacketOk, packetConcealCfg, payloadMeta, payloadCfg)
+imgComp = uint8(imgComm);
+if ~(isstruct(packetConcealCfg) && isfield(packetConcealCfg, "active") && logical(packetConcealCfg.active))
+    return;
+end
+if isempty(dataPacketOk)
+    error("Packet concealment is active but dataPacketOk is empty.");
+end
+imgComp = conceal_image_from_packets( ...
+    imgComp, logical(dataPacketOk(:).'), packetConcealCfg.txPackets, payloadMeta, payloadCfg, packetConcealCfg.mode);
 end
 
 function out = local_mean_omit_nan_local(x, dim)
@@ -700,8 +755,9 @@ eveCfg = runtimeCfg.eve;
 local_validate_eve_extension_cfg_local(eveCfg);
 eveBudget = local_offset_budget_from_bob_local(budget.bob, double(eveCfg.linkGainOffsetDb));
 rxDiversityCfg = eveCfg.rxDiversity;
+packetConcealCfg = local_packet_conceal_config_local(runtimeCfg, txArtifacts.packetAssist.txPackets);
 
-[roleMetrics, payloadLast, sessionCtxLast] = local_decode_role_metrics_local( ...
+[roleMetrics, payloadLast, sessionCtxLast, dataPacketOkLast] = local_decode_role_metrics_local( ...
     "eve", linkSpec, runtimeCfg, txArtifacts, budget, eveBudget, waveform, profileName, methods, rxDiversityCfg, eveCfg.assumptions, 200000);
 
 eveResults = struct();
@@ -736,7 +792,8 @@ eveResults.receiver = struct( ...
     "methods", methods, ...
     "profileName", profileName);
 eveResults.example = local_build_example_outputs_local( ...
-    local_make_role_result_for_examples_local(eveResults, linkSpec), payloadLast, sessionCtxLast, txArtifacts, runtimeCfg);
+    local_make_role_result_for_examples_local(eveResults, linkSpec), payloadLast, sessionCtxLast, ...
+    dataPacketOkLast, txArtifacts, runtimeCfg, packetConcealCfg);
 eveResults.rxResults = local_build_role_standardized_rx_results_local(eveResults, payloadLast, linkSpec, "eve");
 end
 
@@ -776,9 +833,10 @@ end
 rx_validate_diversity_cfg(eveCfg.rxDiversity, "extensions.eve.rxDiversity");
 end
 
-function [roleMetrics, payloadLast, sessionCtxLast] = local_decode_role_metrics_local( ...
+function [roleMetrics, payloadLast, sessionCtxLast, dataPacketOkLast] = local_decode_role_metrics_local( ...
     roleName, ~, runtimeCfg, txArtifacts, budget, roleBudget, waveform, profileName, methods, rxDiversityCfg, roleAssumptions, seedOffset)
 txPackets = txArtifacts.packetAssist.txPackets;
+packetConcealCfg = local_packet_conceal_config_local(runtimeCfg, txPackets);
 nMethods = numel(methods);
 nPoints = budget.nPoints;
 nFrames = max(1, round(double(runtimeCfg.sim.nFramesPerPoint)));
@@ -799,6 +857,7 @@ roleMetrics.exactFrameSuccess = nan(nMethods, nPoints);
 roleMetrics.imageMetricAcc = local_init_image_metric_acc_local(nMethods, nPoints);
 payloadLast = cell(nMethods, nPoints);
 sessionCtxLast = cell(nMethods, nPoints);
+dataPacketOkLast = cell(nMethods, nPoints);
 
 for pointIdx = 1:nPoints
     frameBer = nan(nMethods, nFrames);
@@ -897,7 +956,7 @@ for pointIdx = 1:nPoints
         end
 
         for methodIdx = 1:nMethods
-            [payloadBitsOut, ~, rsInfo] = outer_rs_recover_payload( ...
+            [payloadBitsOut, dataPacketOkOut, rsInfo] = outer_rs_recover_payload( ...
                 rxPayloadByMethod{methodIdx}, ...
                 rawPacketOkByMethod{methodIdx}, ...
                 txPackets, ...
@@ -911,6 +970,7 @@ for pointIdx = 1:nPoints
                 string(roleAssumptions.chaos), double(roleAssumptions.chaosApproxDelta));
             payloadLast{methodIdx, pointIdx} = payloadBitsOut;
             sessionCtxLast{methodIdx, pointIdx} = sessionCtxByMethod{methodIdx};
+            dataPacketOkLast{methodIdx, pointIdx} = logical(dataPacketOkOut(:).');
             frameBer(methodIdx, frameIdx) = mean(double(payloadBitsOut ~= txArtifacts.payloadAssist.payloadBitsPlain));
             frameRawSuccess(methodIdx, frameIdx) = double(rsInfo.rawDataPacketSuccessRate);
             framePayloadSuccess(methodIdx, frameIdx) = double(rsInfo.effectiveDataPacketSuccessRate);
@@ -920,7 +980,8 @@ for pointIdx = 1:nPoints
             frameHeader(methodIdx, frameIdx) = mean(double(headerPacketOkByMethod{methodIdx}));
             framePacketSession(methodIdx, frameIdx) = local_mean_omit_nan_local(packetSessionOkByMethod{methodIdx}, 1);
             frameMetrics = local_store_frame_image_metrics_local(frameMetrics, methodIdx, frameIdx, ...
-                payloadBitsOut, txArtifacts, runtimeCfg, sessionCtxByMethod{methodIdx});
+                payloadBitsOut, txArtifacts, runtimeCfg, sessionCtxByMethod{methodIdx}, ...
+                dataPacketOkOut, packetConcealCfg);
         end
     end
 
@@ -1243,7 +1304,8 @@ function delta = local_wrong_key_delta_local(pktIdx)
 delta = 7e-10 * (double(pktIdx) + 1);
 end
 
-function example = local_build_example_outputs_local(results, payloadLast, sessionCtxLast, txArtifacts, runtimeCfg)
+function example = local_build_example_outputs_local( ...
+        results, payloadLast, sessionCtxLast, dataPacketOkLast, txArtifacts, runtimeCfg, packetConcealCfg)
 nPoints = numel(results.ebN0dB);
 nMethods = numel(results.methods);
 imgTxOriginal = txArtifacts.commonMeta.sourceImageOriginal;
@@ -1259,17 +1321,32 @@ for pointIdx = 1:nPoints
         else
             imgRxResized = payload_bits_to_image(payloadBits, payloadMeta, payloadCfg);
         end
-        imgRx = imgRxResized;
-        if ~isequal(size(imgRx), size(imgTxOriginal))
-            imgRx = imresize(imgRxResized, [size(imgTxOriginal, 1), size(imgTxOriginal, 2)]);
+        imgRxCompResized = imgRxResized;
+        if ~isempty(dataPacketOkLast{methodIdx, pointIdx})
+            imgRxCompResized = local_apply_packet_conceal_local( ...
+                imgRxResized, dataPacketOkLast{methodIdx, pointIdx}, packetConcealCfg, payloadMeta, payloadCfg);
+        end
+        imgRxComm = imgRxResized;
+        if ~isequal(size(imgRxComm), size(imgTxOriginal))
+            imgRxComm = imresize(imgRxResized, [size(imgTxOriginal, 1), size(imgTxOriginal, 2)]);
+        end
+        imgRxComp = imgRxCompResized;
+        if ~isequal(size(imgRxComp), size(imgTxOriginal))
+            imgRxComp = imresize(imgRxCompResized, [size(imgTxOriginal, 1), size(imgTxOriginal, 2)]);
+        end
+        imgPrimaryResized = imgRxResized;
+        imgPrimary = imgRxComm;
+        if isstruct(packetConcealCfg) && isfield(packetConcealCfg, "active") && logical(packetConcealCfg.active)
+            imgPrimaryResized = imgRxCompResized;
+            imgPrimary = imgRxComp;
         end
         methodsStruct.(char(results.methods(methodIdx))) = struct( ...
-            "imgRxResized", imgRxResized, ...
-            "imgRx", imgRx, ...
+            "imgRxResized", imgPrimaryResized, ...
+            "imgRx", imgPrimary, ...
             "imgRxCommResized", imgRxResized, ...
-            "imgRxCompensatedResized", imgRxResized, ...
-            "imgRxComm", imgRx, ...
-            "imgRxCompensated", imgRx, ...
+            "imgRxCompensatedResized", imgRxCompResized, ...
+            "imgRxComm", imgRxComm, ...
+            "imgRxCompensated", imgRxComp, ...
             "packetSuccessRate", double(1 - results.per(methodIdx, pointIdx)), ...
             "rawPacketSuccessRate", double(1 - results.rawPer(methodIdx, pointIdx)), ...
             "headerOk", logical(results.packetDiagnostics.bob.headerSuccessRateByMethod(methodIdx, pointIdx) >= 1 - 1e-12));
