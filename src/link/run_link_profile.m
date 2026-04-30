@@ -22,6 +22,10 @@ budget = resolve_link_budget( ...
 nMethods = numel(methods);
 nPoints = budget.nPoints;
 nFrames = max(1, round(double(runtimeCfg.sim.nFramesPerPoint)));
+useParallelFrames = local_use_parallel_frames_local(runtimeCfg);
+if useParallelFrames
+    ensure_parpool(local_sim_worker_count_local(runtimeCfg));
+end
 
 ber = nan(nMethods, nPoints);
 rawPer = nan(nMethods, nPoints);
@@ -53,116 +57,52 @@ for pointIdx = 1:nPoints
     framePacketSession = nan(nMethods, nFrames);
     frameExactOk = nan(nMethods, nFrames);
     frameMetrics = local_init_image_metric_acc_local(nMethods, nFrames);
+    frameOutputs = cell(nFrames, 1);
 
     pointChannel = local_build_point_channel_local(runtimeCfg, budget, pointIdx, waveform);
     txScale = double(budget.txAmplitudeScaleList(pointIdx));
     noisePsdLin = double(budget.bob.noisePsdLin(pointIdx));
+    pointCtx = struct( ...
+        "runtimeCfg", runtimeCfg, ...
+        "profileName", profileName, ...
+        "methods", methods, ...
+        "txArtifacts", txArtifacts, ...
+        "txPackets", txPackets, ...
+        "waveform", waveform, ...
+        "packetConcealCfg", packetConcealCfg, ...
+        "pointChannel", pointChannel, ...
+        "txScale", txScale, ...
+        "noisePsdLin", noisePsdLin, ...
+        "ebN0dB", double(budget.bob.ebN0dB(pointIdx)), ...
+        "jsrDb", double(budget.bob.jsrDb(pointIdx)), ...
+        "pointIdx", pointIdx);
+
+    if useParallelFrames
+        parfor frameIdx = 1:nFrames
+            frameOutputs{frameIdx} = local_run_point_frame_local(frameIdx, pointCtx);
+        end
+    else
+        for frameIdx = 1:nFrames
+            frameOutputs{frameIdx} = local_run_point_frame_local(frameIdx, pointCtx);
+        end
+    end
 
     for frameIdx = 1:nFrames
-        rng(double(runtimeCfg.rngSeed) + pointIdx * 1000 + frameIdx, "twister");
-        rxPayloadByMethod = cell(nMethods, 1);
-        rawPacketOkByMethod = cell(nMethods, 1);
-        frontPacketOkByMethod = cell(nMethods, 1);
-        phyHeaderPacketOkByMethod = cell(nMethods, 1);
-        headerPacketOkByMethod = cell(nMethods, 1);
-        packetSessionOkByMethod = cell(nMethods, 1);
-        packetReliabilityByMethod = cell(nMethods, 1);
-        sessionCtxByMethod = cell(nMethods, 1);
-        rxCursorByMethod = repmat(local_initial_packet_cursor_local(txArtifacts), nMethods, 1);
+        frameOut = frameOutputs{frameIdx};
+        frameBer(:, frameIdx) = frameOut.ber;
+        frameRawSuccess(:, frameIdx) = frameOut.rawSuccess;
+        framePayloadSuccess(:, frameIdx) = frameOut.payloadSuccess;
+        frameFrontEnd(:, frameIdx) = frameOut.frontEnd;
+        framePhyHeader(:, frameIdx) = frameOut.phyHeader;
+        frameHeader(:, frameIdx) = frameOut.header;
+        frameSessionTransport(:, frameIdx) = frameOut.sessionTransport;
+        framePacketSession(:, frameIdx) = frameOut.packetSession;
+        frameExactOk(:, frameIdx) = frameOut.exactOk;
+        frameMetrics = local_store_frame_output_metrics_local(frameMetrics, frameIdx, frameOut.metrics);
         for methodIdx = 1:nMethods
-            rxPayloadByMethod{methodIdx} = repmat({uint8([])}, numel(txPackets), 1);
-            rawPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
-            frontPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
-            phyHeaderPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
-            headerPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
-            packetSessionOkByMethod{methodIdx} = nan(numel(txPackets), 1);
-            packetReliabilityByMethod{methodIdx} = zeros(numel(txPackets), 1);
-            sessionCtxByMethod{methodIdx} = rx_build_session_context(struct(), session_transport_mode(runtimeCfg.frame), "none");
-        end
-
-        txBurst = txScale * txArtifacts.burstForChannel(:);
-        [rxBurst, chState] = local_capture_frame_waveform_local(txBurst, noisePsdLin, pointChannel, runtimeCfg.rxDiversity);
-        captureGuardSamples = local_capture_guard_samples_local(runtimeCfg, waveform);
-        totalRxSamples = rx_capture_total_samples(rxBurst);
-
-        for methodIdx = 1:nMethods
-            sessionCfg = struct( ...
-                "runtimeCfg", runtimeCfg, ...
-                "method", methods(methodIdx), ...
-                "ebN0dB", double(budget.bob.ebN0dB(pointIdx)), ...
-                "jsrDb", double(budget.bob.jsrDb(pointIdx)), ...
-                "noisePsdLin", noisePsdLin, ...
-                "channelState", chState);
-            sessionResult = rx_decode_session_control(profileName, rxBurst, txArtifacts, sessionCfg);
-            sessionCtxByMethod{methodIdx} = sessionResult.sessionCtx;
-            frameSessionTransport(methodIdx, frameIdx) = double(~sessionResult.required || sessionResult.ok);
-            rxCursorByMethod(methodIdx) = max(double(rxCursorByMethod(methodIdx)), double(sessionResult.nextPacketCursor));
-        end
-
-        for pktIdx = 1:numel(txPackets)
-            txPacket = txPackets(pktIdx);
-            pktLenSamples = numel(txPacket.txSymForChannel);
-            for methodIdx = 1:nMethods
-                rxCursor = max(1, round(double(rxCursorByMethod(methodIdx))));
-                rxStop = min(totalRxSamples, rxCursor + pktLenSamples + captureGuardSamples - 1);
-                rxWindow = rx_slice_capture_window(rxBurst, rxCursor, rxStop);
-                rxCfg = struct( ...
-                    "packetIndex", pktIdx, ...
-                    "runtimeCfg", runtimeCfg, ...
-                    "method", methods(methodIdx), ...
-                    "ebN0dB", double(budget.bob.ebN0dB(pointIdx)), ...
-                    "jsrDb", double(budget.bob.jsrDb(pointIdx)), ...
-                    "noisePsdLin", noisePsdLin, ...
-                    "channelState", chState, ...
-                    "sessionCtx", sessionCtxByMethod{methodIdx}, ...
-                    "windowStartSample", double(rxCursor));
-                rxPacket = local_run_profile_packet_rx_local(profileName, rxWindow, txArtifacts, rxCfg);
-                rxPayloadByMethod{methodIdx}{pktIdx} = local_prepare_plain_packet_payload_local( ...
-                    rxPacket.payloadBits, txPacket, txArtifacts, runtimeCfg, "known", 0);
-                rawPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.rawPacketOk);
-                frontPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.frontEndOk);
-                phyHeaderPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.phyHeaderOk);
-                headerPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.headerOk);
-                packetReliabilityByMethod{methodIdx}(pktIdx) = local_packet_reliability_local(rxPacket);
-                if logical(rxPacket.packetSessionRequired)
-                    packetSessionOkByMethod{methodIdx}(pktIdx) = double(rxPacket.packetSessionOk);
-                end
-                if isfield(rxPacket, "sessionCtx") && isstruct(rxPacket.sessionCtx) ...
-                        && isfield(rxPacket.sessionCtx, "known") && logical(rxPacket.sessionCtx.known)
-                    sessionCtxByMethod{methodIdx} = rxPacket.sessionCtx;
-                end
-                rxCursorByMethod(methodIdx) = local_advance_packet_cursor_local( ...
-                    rxCursor, pktLenSamples, rxPacket, totalRxSamples);
-            end
-        end
-
-        for methodIdx = 1:nMethods
-            [payloadBitsOut, dataPacketOkOut, rsInfo] = outer_rs_recover_payload( ...
-                rxPayloadByMethod{methodIdx}, ...
-                rawPacketOkByMethod{methodIdx}, ...
-                txPackets, ...
-                numel(txArtifacts.payloadAssist.payloadBitsPlain), ...
-                double(runtimeCfg.packet.payloadBitsPerPacket), ...
-                runtimeCfg.outerRs, ...
-                packetReliabilityByMethod{methodIdx});
-
-            payloadBitsOut = fit_bits_length(payloadBitsOut, numel(txArtifacts.payloadAssist.payloadBitsPlain));
-            payloadBitsOut = local_apply_payload_security_postprocess_local( ...
-                payloadBitsOut, txArtifacts, runtimeCfg, "known", 0);
-            payloadLast{methodIdx, pointIdx} = payloadBitsOut;
-            sessionCtxLast{methodIdx, pointIdx} = sessionCtxByMethod{methodIdx};
-            dataPacketOkLast{methodIdx, pointIdx} = logical(dataPacketOkOut(:).');
-            frameBer(methodIdx, frameIdx) = mean(double(payloadBitsOut ~= txArtifacts.payloadAssist.payloadBitsPlain));
-            frameRawSuccess(methodIdx, frameIdx) = double(rsInfo.rawDataPacketSuccessRate);
-            framePayloadSuccess(methodIdx, frameIdx) = double(rsInfo.effectiveDataPacketSuccessRate);
-            frameExactOk(methodIdx, frameIdx) = double(all(payloadBitsOut == txArtifacts.payloadAssist.payloadBitsPlain));
-            frameFrontEnd(methodIdx, frameIdx) = mean(double(frontPacketOkByMethod{methodIdx}));
-            framePhyHeader(methodIdx, frameIdx) = mean(double(phyHeaderPacketOkByMethod{methodIdx}));
-            frameHeader(methodIdx, frameIdx) = mean(double(headerPacketOkByMethod{methodIdx}));
-            framePacketSession(methodIdx, frameIdx) = local_mean_omit_nan_local(packetSessionOkByMethod{methodIdx}, 1);
-            frameMetrics = local_store_frame_image_metrics_local(frameMetrics, methodIdx, frameIdx, ...
-                payloadBitsOut, txArtifacts, runtimeCfg, sessionCtxByMethod{methodIdx}, ...
-                dataPacketOkOut, packetConcealCfg);
+            payloadLast{methodIdx, pointIdx} = frameOut.payloadLast{methodIdx};
+            sessionCtxLast{methodIdx, pointIdx} = frameOut.sessionCtxLast{methodIdx};
+            dataPacketOkLast{methodIdx, pointIdx} = frameOut.dataPacketOkLast{methodIdx};
         end
     end
 
@@ -324,6 +264,168 @@ if double(jsrShare.multipathAttenuationDb) > 0 ...
     pathGainsDb = double(pointChannel.multipath.pathGainsDb(:)).';
     pathGainsDb(2:end) = pathGainsDb(2:end) - double(jsrShare.multipathAttenuationDb);
     pointChannel.multipath.pathGainsDb = pathGainsDb;
+end
+end
+
+function tf = local_use_parallel_frames_local(runtimeCfg)
+tf = false;
+if ~(isfield(runtimeCfg, "sim") && isstruct(runtimeCfg.sim))
+    return;
+end
+if ~(isfield(runtimeCfg.sim, "useParallel") && logical(runtimeCfg.sim.useParallel))
+    return;
+end
+if ~(isfield(runtimeCfg.sim, "parallelMode") && strlength(string(runtimeCfg.sim.parallelMode)) > 0)
+    return;
+end
+tf = lower(string(runtimeCfg.sim.parallelMode)) == "frames";
+end
+
+function nWorkers = local_sim_worker_count_local(runtimeCfg)
+nWorkers = 0;
+if isfield(runtimeCfg, "sim") && isstruct(runtimeCfg.sim) ...
+        && isfield(runtimeCfg.sim, "nWorkers") && isfinite(double(runtimeCfg.sim.nWorkers))
+    nWorkers = max(0, round(double(runtimeCfg.sim.nWorkers)));
+end
+end
+
+function frameOut = local_run_point_frame_local(frameIdx, pointCtx)
+nMethods = numel(pointCtx.methods);
+txPackets = pointCtx.txPackets;
+runtimeCfg = pointCtx.runtimeCfg;
+txArtifacts = pointCtx.txArtifacts;
+waveform = pointCtx.waveform;
+packetConcealCfg = pointCtx.packetConcealCfg;
+
+rng(double(runtimeCfg.rngSeed) + double(pointCtx.pointIdx) * 1000 + double(frameIdx), "twister");
+rxPayloadByMethod = cell(nMethods, 1);
+rawPacketOkByMethod = cell(nMethods, 1);
+frontPacketOkByMethod = cell(nMethods, 1);
+phyHeaderPacketOkByMethod = cell(nMethods, 1);
+headerPacketOkByMethod = cell(nMethods, 1);
+packetSessionOkByMethod = cell(nMethods, 1);
+packetReliabilityByMethod = cell(nMethods, 1);
+sessionCtxByMethod = cell(nMethods, 1);
+sessionTransportByMethod = nan(nMethods, 1);
+rxCursorByMethod = repmat(local_initial_packet_cursor_local(txArtifacts), nMethods, 1);
+for methodIdx = 1:nMethods
+    rxPayloadByMethod{methodIdx} = repmat({uint8([])}, numel(txPackets), 1);
+    rawPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
+    frontPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
+    phyHeaderPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
+    headerPacketOkByMethod{methodIdx} = false(numel(txPackets), 1);
+    packetSessionOkByMethod{methodIdx} = nan(numel(txPackets), 1);
+    packetReliabilityByMethod{methodIdx} = zeros(numel(txPackets), 1);
+    sessionCtxByMethod{methodIdx} = rx_build_session_context(struct(), session_transport_mode(runtimeCfg.frame), "none");
+end
+
+txBurst = double(pointCtx.txScale) * txArtifacts.burstForChannel(:);
+[rxBurst, chState] = local_capture_frame_waveform_local(txBurst, double(pointCtx.noisePsdLin), pointCtx.pointChannel, runtimeCfg.rxDiversity);
+captureGuardSamples = local_capture_guard_samples_local(runtimeCfg, waveform);
+totalRxSamples = rx_capture_total_samples(rxBurst);
+
+for methodIdx = 1:nMethods
+    sessionCfg = struct( ...
+        "runtimeCfg", runtimeCfg, ...
+        "method", pointCtx.methods(methodIdx), ...
+        "ebN0dB", double(pointCtx.ebN0dB), ...
+        "jsrDb", double(pointCtx.jsrDb), ...
+        "noisePsdLin", double(pointCtx.noisePsdLin), ...
+        "channelState", chState);
+    sessionResult = rx_decode_session_control(pointCtx.profileName, rxBurst, txArtifacts, sessionCfg);
+    sessionCtxByMethod{methodIdx} = sessionResult.sessionCtx;
+    sessionTransportByMethod(methodIdx) = double(~sessionResult.required || sessionResult.ok);
+    rxCursorByMethod(methodIdx) = max(double(rxCursorByMethod(methodIdx)), double(sessionResult.nextPacketCursor));
+end
+
+for pktIdx = 1:numel(txPackets)
+    txPacket = txPackets(pktIdx);
+    pktLenSamples = numel(txPacket.txSymForChannel);
+    for methodIdx = 1:nMethods
+        rxCursor = max(1, round(double(rxCursorByMethod(methodIdx))));
+        rxStop = min(totalRxSamples, rxCursor + pktLenSamples + captureGuardSamples - 1);
+        rxWindow = rx_slice_capture_window(rxBurst, rxCursor, rxStop);
+        rxCfg = struct( ...
+            "packetIndex", pktIdx, ...
+            "runtimeCfg", runtimeCfg, ...
+            "method", pointCtx.methods(methodIdx), ...
+            "ebN0dB", double(pointCtx.ebN0dB), ...
+            "jsrDb", double(pointCtx.jsrDb), ...
+            "noisePsdLin", double(pointCtx.noisePsdLin), ...
+            "channelState", chState, ...
+            "sessionCtx", sessionCtxByMethod{methodIdx}, ...
+            "windowStartSample", double(rxCursor));
+        rxPacket = local_run_profile_packet_rx_local(pointCtx.profileName, rxWindow, txArtifacts, rxCfg);
+        rxPayloadByMethod{methodIdx}{pktIdx} = local_prepare_plain_packet_payload_local( ...
+            rxPacket.payloadBits, txPacket, txArtifacts, runtimeCfg, "known", 0);
+        rawPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.rawPacketOk);
+        frontPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.frontEndOk);
+        phyHeaderPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.phyHeaderOk);
+        headerPacketOkByMethod{methodIdx}(pktIdx) = logical(rxPacket.headerOk);
+        packetReliabilityByMethod{methodIdx}(pktIdx) = local_packet_reliability_local(rxPacket);
+        if logical(rxPacket.packetSessionRequired)
+            packetSessionOkByMethod{methodIdx}(pktIdx) = double(rxPacket.packetSessionOk);
+        end
+        if isfield(rxPacket, "sessionCtx") && isstruct(rxPacket.sessionCtx) ...
+                && isfield(rxPacket.sessionCtx, "known") && logical(rxPacket.sessionCtx.known)
+            sessionCtxByMethod{methodIdx} = rxPacket.sessionCtx;
+        end
+        rxCursorByMethod(methodIdx) = local_advance_packet_cursor_local( ...
+            rxCursor, pktLenSamples, rxPacket, totalRxSamples);
+    end
+end
+
+frameOut = struct();
+frameOut.ber = nan(nMethods, 1);
+frameOut.rawSuccess = nan(nMethods, 1);
+frameOut.payloadSuccess = nan(nMethods, 1);
+frameOut.frontEnd = nan(nMethods, 1);
+frameOut.phyHeader = nan(nMethods, 1);
+frameOut.header = nan(nMethods, 1);
+frameOut.sessionTransport = nan(nMethods, 1);
+frameOut.packetSession = nan(nMethods, 1);
+frameOut.exactOk = nan(nMethods, 1);
+frameOut.metrics = local_init_image_metric_acc_local(nMethods, 1);
+frameOut.payloadLast = cell(nMethods, 1);
+frameOut.sessionCtxLast = cell(nMethods, 1);
+frameOut.dataPacketOkLast = cell(nMethods, 1);
+
+for methodIdx = 1:nMethods
+    [payloadBitsOut, dataPacketOkOut, rsInfo] = outer_rs_recover_payload( ...
+        rxPayloadByMethod{methodIdx}, ...
+        rawPacketOkByMethod{methodIdx}, ...
+        txPackets, ...
+        numel(txArtifacts.payloadAssist.payloadBitsPlain), ...
+        double(runtimeCfg.packet.payloadBitsPerPacket), ...
+        runtimeCfg.outerRs, ...
+        packetReliabilityByMethod{methodIdx});
+
+    payloadBitsOut = fit_bits_length(payloadBitsOut, numel(txArtifacts.payloadAssist.payloadBitsPlain));
+    payloadBitsOut = local_apply_payload_security_postprocess_local( ...
+        payloadBitsOut, txArtifacts, runtimeCfg, "known", 0);
+    frameOut.payloadLast{methodIdx} = payloadBitsOut;
+    frameOut.sessionCtxLast{methodIdx} = sessionCtxByMethod{methodIdx};
+    frameOut.dataPacketOkLast{methodIdx} = logical(dataPacketOkOut(:).');
+    frameOut.ber(methodIdx) = mean(double(payloadBitsOut ~= txArtifacts.payloadAssist.payloadBitsPlain));
+    frameOut.rawSuccess(methodIdx) = double(rsInfo.rawDataPacketSuccessRate);
+    frameOut.payloadSuccess(methodIdx) = double(rsInfo.effectiveDataPacketSuccessRate);
+    frameOut.exactOk(methodIdx) = double(all(payloadBitsOut == txArtifacts.payloadAssist.payloadBitsPlain));
+    frameOut.frontEnd(methodIdx) = mean(double(frontPacketOkByMethod{methodIdx}));
+    frameOut.phyHeader(methodIdx) = mean(double(phyHeaderPacketOkByMethod{methodIdx}));
+    frameOut.header(methodIdx) = mean(double(headerPacketOkByMethod{methodIdx}));
+    frameOut.sessionTransport(methodIdx) = sessionTransportByMethod(methodIdx);
+    frameOut.packetSession(methodIdx) = local_mean_omit_nan_local(packetSessionOkByMethod{methodIdx}, 1);
+    frameOut.metrics = local_store_frame_image_metrics_local(frameOut.metrics, methodIdx, 1, ...
+        payloadBitsOut, txArtifacts, runtimeCfg, sessionCtxByMethod{methodIdx}, ...
+        dataPacketOkOut, packetConcealCfg);
+end
+end
+
+function metricAcc = local_store_frame_output_metrics_local(metricAcc, frameIdx, frameMetrics)
+fieldNames = string(fieldnames(metricAcc));
+for idx = 1:numel(fieldNames)
+    fieldName = fieldNames(idx);
+    metricAcc.(fieldName)(:, frameIdx) = frameMetrics.(fieldName)(:, 1);
 end
 end
 

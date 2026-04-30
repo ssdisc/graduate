@@ -25,21 +25,18 @@ fprintf("[RU-EBN0] Total tasks: %d, JSR=%.3g dB, frames/point=%d\n", ...
     numel(tasks), double(opts.JsrDb), round(double(opts.NFramesPerPoint)));
 
 pool = [];
-if logical(opts.UseParallel) && numel(tasks) > 1
+if logical(opts.UseParallel) && double(opts.NFramesPerPoint) > 1
     pool = ensure_parpool(double(opts.NWorkers));
 end
 
 rows = repmat(local_empty_row(), numel(tasks), 1);
-if logical(opts.UseParallel) && ~isempty(pool) && numel(tasks) > 1
-    fprintf("[RU-EBN0] Running with parallel pool: %d workers\n", pool.NumWorkers);
-    parfor taskIdx = 1:numel(tasks)
-        rows(taskIdx) = local_run_task(tasks(taskIdx), opts);
-    end
+if logical(opts.UseParallel) && ~isempty(pool)
+    fprintf("[RU-EBN0] Running serial tasks with frame-parallel pool: %d workers\n", pool.NumWorkers);
 else
-    fprintf("[RU-EBN0] Running serially\n");
-    for taskIdx = 1:numel(tasks)
-        rows(taskIdx) = local_run_task(tasks(taskIdx), opts);
-    end
+    fprintf("[RU-EBN0] Running serial tasks\n");
+end
+for taskIdx = 1:numel(tasks)
+    rows(taskIdx) = local_run_task(tasks(taskIdx), opts);
 end
 
 summaryTable = struct2table(rows);
@@ -220,7 +217,9 @@ spec.commonTx.security.chaosEncrypt.enable = true;
 spec.commonTx.security.chaosEncrypt.packetIndependent = true;
 spec.sim.nFramesPerPoint = double(opts.NFramesPerPoint);
 spec.sim.saveFigures = false;
-spec.sim.useParallel = false;
+spec.sim.useParallel = logical(opts.UseParallel);
+spec.sim.nWorkers = double(opts.NWorkers);
+spec.sim.parallelMode = "frames";
 spec.sim.resultsDir = string(task.runDir);
 spec.linkBudget.ebN0dBList = double(task.ebN0dB);
 spec.linkBudget.jsrDbList = double(opts.JsrDb);
@@ -352,6 +351,7 @@ local_plot_metric(summaryTable, outRoot, "per", "PER", "per_ebn0_curve", false, 
 local_plot_metric(summaryTable, outRoot, "rawPer", "rawPER", "rawper_ebn0_curve", false, opts);
 local_plot_metric(summaryTable, outRoot, "ber", "BER", "ber_ebn0_curve", true, opts);
 local_plot_metric(summaryTable, outRoot, "psnrOriginal", "PSNR (dB)", "psnr_ebn0_curve", false, opts);
+local_plot_metric(summaryTable, outRoot, "ssimOriginal", "SSIM", "ssim_ebn0_curve", false, opts);
 end
 
 function local_plot_metric(summaryTable, outRoot, metricName, yLabelText, fileBase, useLogY, opts)
